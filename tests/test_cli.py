@@ -903,6 +903,27 @@ def test_cli_data_build_skyrl_and_cache_dry_run(tmp_path):
     assert (data_root / "grpo" / "train.parquet").exists()
     assert (data_root / "sft" / "train.jsonl").exists()
 
+    slime_root = tmp_path / "slime-cpp"
+    slime_result = CliRunner().invoke(
+        app,
+        [
+            "data",
+            "slime",
+            "build-cpp",
+            "--tasks-dir",
+            str(task_dir),
+            "--out",
+            str(slime_root),
+            "--limit-train",
+            "1",
+            "--limit-validation",
+            "1",
+        ],
+    )
+    assert slime_result.exit_code == 0, slime_result.output
+    assert (slime_root / "grpo" / "train.jsonl").exists()
+    assert (slime_root / "tasks" / "train" / "pie_cpp_000001.json").exists()
+
     credentials = tmp_path / "sa.json"
     write_credentials(credentials)
     upload_result = CliRunner().invoke(

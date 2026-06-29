@@ -28,6 +28,7 @@ from .constants import (
     DEFAULT_DATA_ROOT,
     DEFAULT_RENDER_DIR,
     DEFAULT_SKYRL_DATA_DIR,
+    DEFAULT_SLIME_CPP_DATA_DIR,
     SUPERCODER_DATASET,
 )
 from .cpp_perf.data import (
@@ -59,6 +60,7 @@ from .cpp_perf.sandbox import (
 )
 from .cpp_perf.schema import CppTask, TestCase
 from .cpp_perf.skyrl_dataset import build_skyrl_datasets
+from .cpp_perf.slime_dataset import build_slime_cpp_datasets
 from .gcp_auth import GcpAuthError, check_project_permissions, service_account_env
 from .grpo_readiness import build_grpo_readiness, readiness_blocks_launch
 from .mlflow_metrics import DEFAULT_METRIC_KEYS, read_mlflow_api, read_mlflow_metrics
@@ -83,6 +85,7 @@ data_app = typer.Typer(help="Download, convert, validate, and cache training dat
 data_pie_app = typer.Typer(help="Prepare PIE C++ data.")
 data_supercoder_app = typer.Typer(help="Download and inspect SuperCoder reference data.")
 data_skyrl_app = typer.Typer(help="Build SkyRL/rLLM dataset files from validated tasks.")
+data_slime_app = typer.Typer(help="Build SLIME dataset files from validated C++ tasks.")
 data_cache_app = typer.Typer(help="Upload and restore versioned dataset bundles from GCS.")
 cpp_app = typer.Typer(help="Build, run, and score C++ performance-RL tasks.")
 task_app = typer.Typer(help="Build PIE-derived C++ task JSON.")
@@ -100,6 +103,7 @@ app.add_typer(data_app, name="data")
 data_app.add_typer(data_pie_app, name="pie")
 data_app.add_typer(data_supercoder_app, name="supercoder")
 data_app.add_typer(data_skyrl_app, name="skyrl")
+data_app.add_typer(data_slime_app, name="slime")
 data_app.add_typer(data_cache_app, name="cache")
 app.add_typer(cpp_app, name="cpp")
 cpp_app.add_typer(task_app, name="task")
@@ -851,6 +855,35 @@ def data_skyrl_build(
         run_id=run_id,
         min_train_tasks=min_train_tasks,
         min_validation_tasks=min_validation_tasks,
+    )
+    for key, path in written.items():
+        console.print(f"{key}: {path}")
+
+
+@data_slime_app.command("build-cpp")
+def data_slime_build_cpp(
+    tasks_dir: str = typer.Option(..., "--tasks-dir", help="Directory containing validated task JSON."),
+    out: str = typer.Option(DEFAULT_SLIME_CPP_DATA_DIR, "--out", help="Output SLIME C++ dataset bundle directory."),
+    profile: str = typer.Option("smoke", help="Dataset profile recorded in the manifest."),
+    run_id: Optional[str] = typer.Option(None, help="Run id recorded in the manifest."),
+    min_train_tasks: int = typer.Option(1, help="Minimum train tasks required after limiting."),
+    min_validation_tasks: int = typer.Option(1, help="Minimum validation/test tasks required after limiting."),
+    limit_train: Optional[int] = typer.Option(None, help="Optional maximum train rows to emit."),
+    limit_validation: Optional[int] = typer.Option(None, help="Optional maximum validation rows to emit."),
+    force: bool = typer.Option(False, help="Delete the output directory before writing."),
+) -> None:
+    """Build SLIME C++ GRPO JSONL and copied task JSON from validated tasks."""
+
+    written = build_slime_cpp_datasets(
+        tasks_dir,
+        out,
+        profile=profile,
+        run_id=run_id,
+        min_train_tasks=min_train_tasks,
+        min_validation_tasks=min_validation_tasks,
+        limit_train=limit_train,
+        limit_validation=limit_validation,
+        force=force,
     )
     for key, path in written.items():
         console.print(f"{key}: {path}")

@@ -64,15 +64,36 @@ def _launcher_contents(plan: SlimeSetupPlan) -> str:
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
-docker pull {image}
+SLIME_IMAGE={image}
+SLIME_CONTAINER_NAME={container_name}
+REPO_ROOT={repo_root}
+REPO_MOUNT={repo_mount}
+BOOTSTRAP_TARGET={bootstrap_target}
+HOST_MODELS_DIR="${{HOST_MODELS_DIR:-$HOME/models}}"
+HOST_HF_HOME="${{HOST_HF_HOME:-$HOME/.cache/huggingface}}"
+mkdir -p "$HOST_MODELS_DIR" "$HOST_HF_HOME"
 
-exec docker run --rm --gpus all --ipc=host --shm-size=16g \\
-  --ulimit memlock=-1 --ulimit stack=67108864 \\
-  --name {container_name} \\
-  -v {repo_root}:{repo_mount} \\
-  -v /var/run/docker.sock:/var/run/docker.sock \\
-  -e HOST_REPO_ROOT={repo_mount} \\
-  -it {image} /bin/bash -lc "echo repo_mount={repo_mount}; echo bootstrap={bootstrap_target}; bash {bootstrap_target}; exec /bin/bash"
+docker pull "$SLIME_IMAGE"
+
+docker_args=(
+  --rm
+  --gpus all
+  --ipc=host
+  --shm-size=16g
+  --ulimit memlock=-1
+  --ulimit stack=67108864
+  --name "$SLIME_CONTAINER_NAME"
+  -v "$REPO_ROOT:$REPO_MOUNT"
+  -v "$HOST_MODELS_DIR":/root/models
+  -v "$HOST_HF_HOME":/root/.cache/huggingface
+  -v /var/run/docker.sock:/var/run/docker.sock
+  -v /tmp:/tmp
+  -e HOST_REPO_ROOT="$REPO_MOUNT"
+  -e HF_HOME=/root/.cache/huggingface
+  -it
+)
+
+exec docker run "${{docker_args[@]}}" "$SLIME_IMAGE" /bin/bash -lc "echo repo_mount=$REPO_MOUNT; echo bootstrap=$BOOTSTRAP_TARGET; bash $BOOTSTRAP_TARGET; exec /bin/bash"
 """
 
 

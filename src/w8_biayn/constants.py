@@ -32,6 +32,7 @@ DEFAULT_CPP_SANDBOX_IMAGE = "w8-biayn-cpp-perf:latest"
 CPP_DATA_SCHEMA_VERSION = "cpp-perf-v1"
 DEFAULT_DATA_ROOT = ".w8-biayn/data"
 DEFAULT_SKYRL_DATA_DIR = ".w8-biayn/data/skyrl"
+DEFAULT_SLIME_CPP_DATA_DIR = ".w8-biayn/data/slime-cpp"
 
 PIE_TRAJECTORIES_URL = "https://drive.google.com/file/d/19IL3VETwVI9rdibB979Xm4gEWYwn0CkV/view?usp=sharing"
 PIE_CXX_SPLITS_URL = "https://drive.google.com/file/d/1NqMT7kqCwk99hj4BjpUcsxLIzPFv_DtT/view?usp=sharing"

@@ -17,6 +17,7 @@ from w8_biayn.cpp_perf.data import (
 from w8_biayn.cpp_perf.pie import PiePair, build_tasks_with_report
 from w8_biayn.cpp_perf.schema import CppTask, ReferencePerformance, TestCase, TestCoverage
 from w8_biayn.cpp_perf.skyrl_dataset import build_skyrl_datasets, build_prompt, load_tasks
+from w8_biayn.cpp_perf.slime_dataset import build_slime_cpp_datasets
 
 
 def sample_task(task_id: str, split: str) -> CppTask:
@@ -77,6 +78,42 @@ def test_build_skyrl_datasets_writes_grpo_sft_and_manifest(tmp_path):
     assert sft_line["instruction"].startswith("Optimize the following C++20 program")
     assert "<reasoning>" in sft_line["output"]
     assert "```cpp" in sft_line["output"]
+
+
+def test_build_slime_cpp_datasets_writes_jsonl_tasks_and_manifest(tmp_path):
+    tasks = tmp_path / "tasks"
+    sample_task("train_1", "train").write_json(tasks / "train_1.json")
+    sample_task("train_2", "train").write_json(tasks / "train_2.json")
+    sample_task("val_1", "validation").write_json(tasks / "val_1.json")
+
+    out = tmp_path / "slime-cpp"
+    written = build_slime_cpp_datasets(
+        tasks,
+        out,
+        limit_train=1,
+        limit_validation=1,
+        profile="smoke",
+        run_id="rtest",
+    )
+
+    assert written["grpo_train"].exists()
+    assert written["grpo_validation"].exists()
+    assert verify_data_manifest(out) == []
+    assert (out / "tasks" / "train_1.json").exists()
+    assert not (out / "tasks" / "train_2.json").exists()
+
+    row = json.loads(written["grpo_train"].read_text(encoding="utf-8").splitlines()[0])
+    assert row["prompt"].startswith("Optimize the following C++20 program")
+    assert row["label"] == "train_1"
+    assert row["metadata"]["task_path"] == "tasks/train_1.json"
+    assert row["metadata"]["hidden_test_count"] == 1
+    assert "oracle_solution" not in json.dumps(row)
+
+    manifest = json.loads(written["manifest"].read_text(encoding="utf-8"))
+    assert manifest["kind"] == "slime-cpp-grpo-dataset"
+    assert manifest["options"]["prompt_key"] == "prompt"
+    assert manifest["options"]["label_key"] == "label"
+    assert manifest["options"]["counts"] == {"train": 1, "validation_effective": 1}
 
 
 def test_load_tasks_skips_w8_metadata(tmp_path):
