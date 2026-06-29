@@ -38,3 +38,20 @@ working directory.
 Do not enable `--group-rm` until the per-sample C++ reward smoke passes. In
 group mode, SLIME calls the same custom reward path with `list[Sample]` and
 expects `list[float]`.
+
+## Real Reward Smoke
+
+After building a tiny SLIME C++ bundle and running the C++ harness preflight,
+run the opt-in integration smoke:
+
+```bash
+uv run w8-biayn cpp harness preflight
+SLIME_CPP_RUN_REAL_REWARD_SMOKE=1 \
+SLIME_CPP_BUNDLE_ROOT=.w8-biayn/data/slime-cpp-smoke \
+PYTHONPATH="$PWD:$PYTHONPATH" \
+uv run --extra dev pytest tests/test_slime_cpp_rollout_integration.py
+```
+
+The smoke loads the first `grpo/train.jsonl` row, wraps the referenced task oracle C++
+as a valid model response, and scores it through `cpp_rollout.reward_func(...)`
+using the real Docker-backed reward bridge.
