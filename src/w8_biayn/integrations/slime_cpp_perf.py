@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import shutil
@@ -21,6 +22,8 @@ DEFAULT_DATA_ROOT_ENV = "W8_BIAYN_DATA_DIR"
 SANDBOX_IMAGE_ENV = "W8_CPP_SANDBOX_IMAGE"
 SANDBOX_CPU_ENV = "W8_CPP_SANDBOX_CPU"
 INCLUDE_LOGS_ENV = "W8_SLIME_CPP_INCLUDE_LOGS"
+REWARD_WORKERS_ENV = "W8_CPP_REWARD_WORKERS"
+DEFAULT_REWARD_WORKERS = 8
 
 
 def build_slime_cpp_perf_datasets(
@@ -189,8 +192,29 @@ async def reward_func(args: Any, sample: Any, **_kwargs: Any) -> dict[str, Any] 
     """SLIME custom reward hook for one sample or a batch of samples."""
 
     if isinstance(sample, list):
-        return [await reward_func(args, item) for item in sample]
-    return _score_sample(sample)
+        return await _score_sample_batch(sample)
+    return await asyncio.to_thread(_score_sample, sample)
+
+
+async def _score_sample_batch(samples: list[Any]) -> list[dict[str, Any]]:
+    workers = max(1, min(len(samples), _reward_workers()))
+    semaphore = asyncio.Semaphore(workers)
+
+    async def score(item: Any) -> dict[str, Any]:
+        async with semaphore:
+            return await asyncio.to_thread(_score_sample, item)
+
+    return list(await asyncio.gather(*(score(item) for item in samples)))
+
+
+def _reward_workers() -> int:
+    raw = os.environ.get(REWARD_WORKERS_ENV)
+    if not raw:
+        return DEFAULT_REWARD_WORKERS
+    try:
+        return int(raw)
+    except ValueError:
+        return DEFAULT_REWARD_WORKERS
 
 
 def _score_sample(sample: Any) -> dict[str, Any]:
