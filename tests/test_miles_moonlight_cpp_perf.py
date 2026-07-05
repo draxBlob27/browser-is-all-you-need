@@ -52,6 +52,9 @@ def test_miles_moonlight_runners_accept_model_args_overrides() -> None:
         assert 'SGLANG_LORA_TARGET_MODULES="${MILES_SGLANG_LORA_TARGET_MODULES:-${LORA_TARGET_MODULES}}"' in text
         assert 'read -r -a SGLANG_LORA_TARGET_MODULE_ARGS <<< "${SGLANG_LORA_TARGET_MODULES//,/ }"' in text
         assert '--sglang-lora-target-modules "${SGLANG_LORA_TARGET_MODULE_ARGS[@]}"' in text
+    grpo_text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert 'APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-}"' in grpo_text
+    assert 'ROLLOUT_ARGS+=(--apply-chat-template-kwargs "${APPLY_CHAT_TEMPLATE_KWARGS}")' in grpo_text
 
 
 def test_miles_glm47_wrappers_select_glm_defaults() -> None:
@@ -61,3 +64,8 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
         assert 'MILES_HF_CHECKPOINT="${MILES_HF_CHECKPOINT:-/root/models/GLM-4.7-Flash}"' in text
         assert "q_a_proj,q_b_proj,kv_a_proj_with_mqa,kv_b_proj,o_proj" in text
         assert 'MILES_WANDB_PROJECT="${MILES_WANDB_PROJECT:-glm47-pie-cpp-posttraining}"' in text
+    grpo_text = GLM47_GRPO_RUNNER.read_text(encoding="utf-8")
+    assert (
+        'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
+        in grpo_text
+    )
