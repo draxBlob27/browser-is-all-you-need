@@ -27,12 +27,22 @@ def register_glm47_bridge() -> None:
         _REGISTERED = True
         return
 
+    from functools import partial
+
     from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
     from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
     from megatron.bridge.models.gpt_provider import GPTModelProvider
     from megatron.bridge.models.hf_pretrained.causal_lm import PreTrainedCausalLM
     from megatron.bridge.models.mla_provider import MLAModelProvider
+    from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
     from megatron.core.models.gpt.gpt_model import GPTModel
+
+    try:
+        import transformer_engine  # noqa: F401
+
+        have_te = True
+    except (ImportError, ModuleNotFoundError):
+        have_te = False
 
     @MegatronModelBridge.register_bridge(
         source="Glm4MoeLiteForCausalLM",
@@ -46,6 +56,11 @@ def register_glm47_bridge() -> None:
         def provider_bridge(self, hf_pretrained: PreTrainedCausalLM) -> GPTModelProvider:
             provider = super().provider_bridge(hf_pretrained)
             hf_config = hf_pretrained.config
+
+            # The provider's default_layer_spec builds fused-QKV attention and
+            # uniform MoE, silently ignoring multi_latent_attention and
+            # moe_layer_freq. The heterogeneous block spec honors both.
+            provider.transformer_layer_spec = partial(get_gpt_decoder_block_spec, use_transformer_engine=have_te)
 
             provider.normalization = "RMSNorm"
             provider.gated_linear_unit = True
@@ -149,10 +164,7 @@ def _patch_shared_outer_expert_adapter_replication() -> None:
 
     def sharded_state_dict(self, prefix="", sharded_offsets=(), metadata=None):
         sharded = original_sharded_state_dict(self, prefix, sharded_offsets, metadata)
-        shared_key = f"{prefix}linear_in.weight" if getattr(self, "_is_fc1", True) else f"{prefix}linear_out.weight"
-        entry = sharded.get(shared_key)
-        if entry is None or not hasattr(entry, "replica_id"):
-            return sharded
+        shared_prefix = f"{prefix}linear_in." if getattr(self, "_is_fc1", True) else f"{prefix}linear_out."
         try:
             from megatron.core import parallel_state
 
@@ -162,15 +174,21 @@ def _patch_shared_outer_expert_adapter_replication() -> None:
             return sharded
         if ep_world <= 1:
             return sharded
-        replica = entry.replica_id
-        if isinstance(replica, int):
-            entry.replica_id = replica * ep_world + ep_rank
-        else:
-            replica = tuple(replica)
-            if not replica:
-                entry.replica_id = (ep_rank,)
+        # Every entry of the shared side is replicated across EP ranks: the
+        # weight tensor and TE _extra_state objects alike must carry the EP
+        # rank in replica_id or validation sees duplicate main replicas.
+        for key, entry in sharded.items():
+            if not key.startswith(shared_prefix) or not hasattr(entry, "replica_id"):
+                continue
+            replica = entry.replica_id
+            if isinstance(replica, int):
+                entry.replica_id = replica * ep_world + ep_rank
             else:
-                entry.replica_id = (*replica[:-1], replica[-1] * ep_world + ep_rank)
+                replica = tuple(replica)
+                if not replica:
+                    entry.replica_id = (ep_rank,)
+                else:
+                    entry.replica_id = (*replica[:-1], replica[-1] * ep_world + ep_rank)
         return sharded
 
     adapter_cls.sharded_state_dict = sharded_state_dict

@@ -152,6 +152,7 @@ def test_glm47_bridge_marks_shared_outer_lora_as_ep_replicated(monkeypatch) -> N
             per_expert_side = "linear_out" if self._is_fc1 else "linear_in"
             return {
                 f"{prefix}{shared_side}.weight": FakeShardedTensor(self._replica_id),
+                f"{prefix}{shared_side}._extra_state": FakeShardedTensor(self._replica_id),
                 f"{prefix}{per_expert_side}.weight": FakeShardedTensor((0, 0, 0)),
             }
 
@@ -178,10 +179,12 @@ def test_glm47_bridge_marks_shared_outer_lora_as_ep_replicated(monkeypatch) -> N
 
     fc1 = FakeSharedOuterAdapter(is_fc1=True, replica_id=(0, 0, 0)).sharded_state_dict(prefix="a.")
     assert fc1["a.linear_in.weight"].replica_id == (0, 0, 3)
+    assert fc1["a.linear_in._extra_state"].replica_id == (0, 0, 3)
     assert fc1["a.linear_out.weight"].replica_id == (0, 0, 0)
 
     fc2 = FakeSharedOuterAdapter(is_fc1=False, replica_id=(0, 0, 1)).sharded_state_dict(prefix="b.")
     assert fc2["b.linear_out.weight"].replica_id == (0, 0, 7)
+    assert fc2["b.linear_out._extra_state"].replica_id == (0, 0, 7)
     assert fc2["b.linear_in.weight"].replica_id == (0, 0, 0)
 
     int_replica = FakeSharedOuterAdapter(is_fc1=True, replica_id=2).sharded_state_dict(prefix="c.")
