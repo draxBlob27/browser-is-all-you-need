@@ -373,6 +373,9 @@ for key in (
     "WANDB_ENTITY",
     "WANDB_BASE_URL",
     "W8_REGISTER_GLM47_BRIDGE",
+    "W8_GLM47_SURFACE_PROBE",
+    "W8_GLM47_PROBE_OUT",
+    "W8_GLM47_NO_SHARED_LORA_CKPT_PATCH",
 ):
     if key in os.environ:
         env[key] = os.environ[key]

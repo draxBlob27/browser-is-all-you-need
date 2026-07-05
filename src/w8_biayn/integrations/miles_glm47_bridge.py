@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
 _REGISTERED = False
 _MBRIDGE_PATCHED = False
+_SHARED_OUTER_CKPT_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
     """Register GLM-4.7-Flash Lite with Megatron Bridge inside Miles."""
 
     _patch_mbridge_glm47_lite()
+    _patch_shared_outer_expert_adapter_replication()
 
     global _REGISTERED
     if _REGISTERED:
@@ -113,6 +116,66 @@ def _patch_mbridge_glm47_lite() -> None:
     )
     glm_bridge._ATTENTION_MAPPING = attention_mapping
     _MBRIDGE_PATCHED = True
+
+
+def _patch_shared_outer_expert_adapter_replication() -> None:
+    """Mark shared-outer expert LoRA tensors as EP-replicated in checkpoint metadata.
+
+    ``SharedOuterGroupedExpertAdapter`` keeps its shared LoRA side bit-identical
+    across expert-parallel ranks at runtime (``_make_cross_ep_replicated``), but its
+    ``sharded_state_dict`` delegates the shared side to the generic parallel-linear
+    path, which stamps the same ``replica_id`` on every EP rank. Megatron's
+    sharding-integrity validation then counts EP-world main-replica claims for one
+    shard and rejects the whole checkpoint access pattern before any load or save.
+    Folding the EP rank into ``replica_id`` leaves exactly one main replica.
+    """
+
+    global _SHARED_OUTER_CKPT_PATCHED
+    if _SHARED_OUTER_CKPT_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_SHARED_LORA_CKPT_PATCH", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+
+    try:
+        from megatron.bridge.peft import utils as peft_utils
+    except (ImportError, ModuleNotFoundError):
+        return
+
+    adapter_cls = getattr(peft_utils, "SharedOuterGroupedExpertAdapter", None)
+    if adapter_cls is None or getattr(adapter_cls, "_w8_ep_replica_patched", False):
+        return
+
+    original_sharded_state_dict = adapter_cls.sharded_state_dict
+
+    def sharded_state_dict(self, prefix="", sharded_offsets=(), metadata=None):
+        sharded = original_sharded_state_dict(self, prefix, sharded_offsets, metadata)
+        shared_key = f"{prefix}linear_in.weight" if getattr(self, "_is_fc1", True) else f"{prefix}linear_out.weight"
+        entry = sharded.get(shared_key)
+        if entry is None or not hasattr(entry, "replica_id"):
+            return sharded
+        try:
+            from megatron.core import parallel_state
+
+            ep_rank = parallel_state.get_expert_model_parallel_rank()
+            ep_world = parallel_state.get_expert_model_parallel_world_size()
+        except Exception:
+            return sharded
+        if ep_world <= 1:
+            return sharded
+        replica = entry.replica_id
+        if isinstance(replica, int):
+            entry.replica_id = replica * ep_world + ep_rank
+        else:
+            replica = tuple(replica)
+            if not replica:
+                entry.replica_id = (ep_rank,)
+            else:
+                entry.replica_id = (*replica[:-1], replica[-1] * ep_world + ep_rank)
+        return sharded
+
+    adapter_cls.sharded_state_dict = sharded_state_dict
+    adapter_cls._w8_ep_replica_patched = True
+    _SHARED_OUTER_CKPT_PATCHED = True
 
 
 def _glm47_base_mappings() -> list[Any]:

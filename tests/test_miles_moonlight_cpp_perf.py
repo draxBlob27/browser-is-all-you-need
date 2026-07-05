@@ -93,11 +93,14 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
         )
         assert 'W8_REGISTER_GLM47_BRIDGE="${W8_REGISTER_GLM47_BRIDGE:-1}"' in text
     sft_text = GLM47_SFT_RUNNER.read_text(encoding="utf-8")
-    assert '"W8_REGISTER_GLM47_BRIDGE",' in SFT_RUNNER.read_text(encoding="utf-8")
+    sft_runner_text = SFT_RUNNER.read_text(encoding="utf-8")
+    grpo_runner_text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert '"W8_REGISTER_GLM47_BRIDGE",' in sft_runner_text
     assert "W8_REGISTER_GLM47_BRIDGE" in sft_text
-    assert '\\"W8_REGISTER_GLM47_BRIDGE\\": \\"${W8_REGISTER_GLM47_BRIDGE:-}\\"' in GRPO_RUNNER.read_text(
-        encoding="utf-8"
-    )
+    assert '\\"W8_REGISTER_GLM47_BRIDGE\\": \\"${W8_REGISTER_GLM47_BRIDGE:-}\\"' in grpo_runner_text
+    for probe_key in ("W8_GLM47_SURFACE_PROBE", "W8_GLM47_PROBE_OUT", "W8_GLM47_NO_SHARED_LORA_CKPT_PATCH"):
+        assert f'"{probe_key}",' in sft_runner_text
+        assert f'\\"{probe_key}\\": \\"${{{probe_key}:-}}\\"' in grpo_runner_text
     grpo_text = GLM47_GRPO_RUNNER.read_text(encoding="utf-8")
     assert (
         'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
@@ -130,3 +133,62 @@ def test_glm47_bridge_patches_mbridge_qk_layernorm_mapping(monkeypatch) -> None:
     assert FakeGLMBridge._ATTENTION_MAPPING["self_attention.linear_qkv.layer_norm_weight"] == [
         "model.layers.{layer_number}.input_layernorm.weight"
     ]
+
+
+def test_glm47_bridge_marks_shared_outer_lora_as_ep_replicated(monkeypatch) -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    class FakeShardedTensor:
+        def __init__(self, replica_id):
+            self.replica_id = replica_id
+
+    class FakeSharedOuterAdapter:
+        def __init__(self, is_fc1, replica_id):
+            self._is_fc1 = is_fc1
+            self._replica_id = replica_id
+
+        def sharded_state_dict(self, prefix="", sharded_offsets=(), metadata=None):
+            shared_side = "linear_in" if self._is_fc1 else "linear_out"
+            per_expert_side = "linear_out" if self._is_fc1 else "linear_in"
+            return {
+                f"{prefix}{shared_side}.weight": FakeShardedTensor(self._replica_id),
+                f"{prefix}{per_expert_side}.weight": FakeShardedTensor((0, 0, 0)),
+            }
+
+    fake_peft_utils = types.ModuleType("megatron.bridge.peft.utils")
+    fake_peft_utils.SharedOuterGroupedExpertAdapter = FakeSharedOuterAdapter
+
+    fake_parallel_state = types.ModuleType("megatron.core.parallel_state")
+    fake_parallel_state.get_expert_model_parallel_rank = lambda: 3
+    fake_parallel_state.get_expert_model_parallel_world_size = lambda: 4
+
+    fake_core = types.ModuleType("megatron.core")
+    fake_core.parallel_state = fake_parallel_state
+
+    monkeypatch.setattr(miles_glm47_bridge, "_SHARED_OUTER_CKPT_PATCHED", False)
+    monkeypatch.setitem(sys.modules, "megatron", types.ModuleType("megatron"))
+    monkeypatch.setitem(sys.modules, "megatron.bridge", types.ModuleType("megatron.bridge"))
+    monkeypatch.setitem(sys.modules, "megatron.bridge.peft", types.ModuleType("megatron.bridge.peft"))
+    monkeypatch.setitem(sys.modules, "megatron.bridge.peft.utils", fake_peft_utils)
+    monkeypatch.setitem(sys.modules, "megatron.core", fake_core)
+    monkeypatch.setitem(sys.modules, "megatron.core.parallel_state", fake_parallel_state)
+
+    miles_glm47_bridge._patch_shared_outer_expert_adapter_replication()
+    assert FakeSharedOuterAdapter._w8_ep_replica_patched is True
+
+    fc1 = FakeSharedOuterAdapter(is_fc1=True, replica_id=(0, 0, 0)).sharded_state_dict(prefix="a.")
+    assert fc1["a.linear_in.weight"].replica_id == (0, 0, 3)
+    assert fc1["a.linear_out.weight"].replica_id == (0, 0, 0)
+
+    fc2 = FakeSharedOuterAdapter(is_fc1=False, replica_id=(0, 0, 1)).sharded_state_dict(prefix="b.")
+    assert fc2["b.linear_out.weight"].replica_id == (0, 0, 7)
+    assert fc2["b.linear_in.weight"].replica_id == (0, 0, 0)
+
+    int_replica = FakeSharedOuterAdapter(is_fc1=True, replica_id=2).sharded_state_dict(prefix="c.")
+    assert int_replica["c.linear_in.weight"].replica_id == 11
+
+    # Re-running the patch must not double-wrap.
+    monkeypatch.setattr(miles_glm47_bridge, "_SHARED_OUTER_CKPT_PATCHED", False)
+    miles_glm47_bridge._patch_shared_outer_expert_adapter_replication()
+    rewrapped = FakeSharedOuterAdapter(is_fc1=True, replica_id=(0, 0, 0)).sharded_state_dict(prefix="d.")
+    assert rewrapped["d.linear_in.weight"].replica_id == (0, 0, 3)
