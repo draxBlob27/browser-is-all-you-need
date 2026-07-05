@@ -68,7 +68,10 @@ def _wrap_load_checkpoint(model_module) -> None:
         return
 
     def probing_load_checkpoint(model, optimizer, opt_param_scheduler, *args, **kwargs):
-        _run_probe(model)
+        try:
+            _run_probe(model)
+        except Exception as exc:  # noqa: BLE001 - a probe bug must never wedge the job
+            print(f"W8_GLM47_SURFACE_PROBE probe_error={type(exc).__name__}:{exc}", flush=True)
         raise SystemExit(0)
 
     model_module.load_checkpoint = probing_load_checkpoint
@@ -82,7 +85,7 @@ def _run_probe(model) -> None:
     import torch.distributed as dist
     from megatron.core import parallel_state
     from megatron.core.dist_checkpointing.dict_utils import nested_values
-    from megatron.core.dist_checkpointing.serialization import apply_factories
+    from megatron.core.dist_checkpointing.mapping import apply_factories
     from megatron.core.dist_checkpointing.validation import (
         determine_global_metadata,
         validate_sharding_integrity,
@@ -140,4 +143,3 @@ def _run_probe(model) -> None:
     with open(report_path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2, default=str)
     print(f"W8_GLM47_SURFACE_PROBE rank={rank} validation={report['validation']} report={report_path}", flush=True)
-    dist.barrier()
