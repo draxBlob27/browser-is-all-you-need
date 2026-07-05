@@ -13,9 +13,16 @@ def register_glm47_bridge() -> None:
     if _REGISTERED:
         return
 
+    try:
+        import megatron.bridge.models.glm.glm47_flash_bridge  # noqa: F401
+    except (ImportError, ModuleNotFoundError):
+        pass
+    else:
+        _REGISTERED = True
+        return
+
     from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
     from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
-    from megatron.bridge.models.conversion.param_mapping import AutoMapping, GatedMLPMapping, QKVMapping
     from megatron.bridge.models.gpt_provider import GPTModelProvider
     from megatron.bridge.models.hf_pretrained.causal_lm import PreTrainedCausalLM
     from megatron.bridge.models.mla_provider import MLAModelProvider
@@ -80,6 +87,8 @@ def register_glm47_bridge() -> None:
 
 
 def _glm47_base_mappings() -> list[Any]:
+    from megatron.bridge.models.conversion.param_mapping import AutoMapping, GatedMLPMapping, QKVMapping
+
     param_mappings = {
         "embedding.word_embeddings.weight": "model.embed_tokens.weight",
         "decoder.final_layernorm.weight": "model.norm.weight",
@@ -148,6 +157,8 @@ def _glm47_base_mappings() -> list[Any]:
 
 
 def _glm47_mtp_mappings(hf_config: Any) -> list[Any]:
+    from megatron.bridge.models.conversion.param_mapping import AutoMapping, GatedMLPMapping
+
     num_mtp_layers = getattr(hf_config, "num_nextn_predict_layers", 0) or 0
     num_transformer_layers = hf_config.num_hidden_layers
     mappings: list[Any] = []
