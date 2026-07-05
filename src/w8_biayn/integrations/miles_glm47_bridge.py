@@ -4,10 +4,13 @@ from typing import Any
 
 
 _REGISTERED = False
+_MBRIDGE_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
     """Register GLM-4.7-Flash Lite with Megatron Bridge inside Miles."""
+
+    _patch_mbridge_glm47_lite()
 
     global _REGISTERED
     if _REGISTERED:
@@ -84,6 +87,32 @@ def register_glm47_bridge() -> None:
             return MegatronMappingRegistry(*mappings)
 
     _REGISTERED = True
+
+
+def _patch_mbridge_glm47_lite() -> None:
+    """Patch Miles' mbridge GLM converter with GLM-specific QK layernorm names."""
+
+    global _MBRIDGE_PATCHED
+    if _MBRIDGE_PATCHED:
+        return
+
+    try:
+        import miles_plugins.mbridge  # noqa: F401
+        from mbridge.core.bridge import _MODEL_REGISTRY
+    except (ImportError, ModuleNotFoundError):
+        return
+
+    glm_bridge = _MODEL_REGISTRY.get("glm4_moe_lite")
+    if glm_bridge is None:
+        return
+
+    attention_mapping = dict(getattr(glm_bridge, "_ATTENTION_MAPPING", {}))
+    attention_mapping.setdefault(
+        "self_attention.linear_qkv.layer_norm_weight",
+        ["model.layers.{layer_number}.input_layernorm.weight"],
+    )
+    glm_bridge._ATTENTION_MAPPING = attention_mapping
+    _MBRIDGE_PATCHED = True
 
 
 def _glm47_base_mappings() -> list[Any]:

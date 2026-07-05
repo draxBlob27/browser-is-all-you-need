@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 
@@ -98,3 +100,30 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
         'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
         in grpo_text
     )
+
+
+def test_glm47_bridge_patches_mbridge_qk_layernorm_mapping(monkeypatch) -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    class FakeGLMBridge:
+        _ATTENTION_MAPPING = {
+            "self_attention.linear_proj.weight": [
+                "model.layers.{layer_number}.self_attn.o_proj.weight"
+            ],
+        }
+
+    fake_bridge_module = types.ModuleType("mbridge.core.bridge")
+    fake_bridge_module._MODEL_REGISTRY = {"glm4_moe_lite": FakeGLMBridge}
+
+    monkeypatch.setattr(miles_glm47_bridge, "_MBRIDGE_PATCHED", False)
+    monkeypatch.setitem(sys.modules, "miles_plugins", types.ModuleType("miles_plugins"))
+    monkeypatch.setitem(sys.modules, "miles_plugins.mbridge", types.ModuleType("miles_plugins.mbridge"))
+    monkeypatch.setitem(sys.modules, "mbridge", types.ModuleType("mbridge"))
+    monkeypatch.setitem(sys.modules, "mbridge.core", types.ModuleType("mbridge.core"))
+    monkeypatch.setitem(sys.modules, "mbridge.core.bridge", fake_bridge_module)
+
+    miles_glm47_bridge._patch_mbridge_glm47_lite()
+
+    assert FakeGLMBridge._ATTENTION_MAPPING["self_attention.linear_qkv.layer_norm_weight"] == [
+        "model.layers.{layer_number}.input_layernorm.weight"
+    ]
