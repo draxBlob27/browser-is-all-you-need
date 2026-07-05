@@ -47,6 +47,7 @@ START_ROLLOUT_ID="${MILES_START_ROLLOUT_ID:-0}"
 ROLLOUT_BATCH_SIZE="${MILES_ROLLOUT_BATCH_SIZE:-2}"
 GLOBAL_BATCH_SIZE="${MILES_GLOBAL_BATCH_SIZE:-2}"
 SFT_ROLLOUT_SHUFFLE="${MILES_SFT_ROLLOUT_SHUFFLE:-1}"
+SFT_ROLLOUT_FUNCTION_PATH="${MILES_SFT_ROLLOUT_FUNCTION_PATH:-miles.rollout.sft_rollout.generate_rollout}"
 
 LORA_RANK="${MILES_LORA_RANK:-16}"
 LORA_ALPHA="${MILES_LORA_ALPHA:-32}"
@@ -188,6 +189,7 @@ rollout_batch_size=${ROLLOUT_BATCH_SIZE}
 global_batch_size=${GLOBAL_BATCH_SIZE}
 lora_rank=${LORA_RANK}
 lora_alpha=${LORA_ALPHA}
+sft_rollout_function_path=${SFT_ROLLOUT_FUNCTION_PATH}
 wandb_project=${WANDB_PROJECT}
 wandb_group=${WANDB_GROUP}
 wandb_run_id=${WANDB_RUN_ID}
@@ -248,7 +250,7 @@ LORA_ARGS=(
 )
 
 SFT_ARGS=(
-  --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+  --rollout-function-path "${SFT_ROLLOUT_FUNCTION_PATH}"
 	  --prompt-data "${DATA_DIR}/sft/train.jsonl"
 	  --input-key messages
 	  --metadata-key metadata

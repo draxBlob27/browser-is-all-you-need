@@ -39,7 +39,13 @@ def test_miles_sft_defaults_share_the_2048_sequence_profile() -> None:
     text = SFT_RUNNER.read_text(encoding="utf-8")
 
     assert 'SEQ_LENGTH="${MILES_SEQ_LENGTH:-2048}"' in text
+    assert (
+        'SFT_ROLLOUT_FUNCTION_PATH="${MILES_SFT_ROLLOUT_FUNCTION_PATH:-miles.rollout.sft_rollout.generate_rollout}"'
+        in text
+    )
+    assert "--rollout-function-path \"${SFT_ROLLOUT_FUNCTION_PATH}\"" in text
     assert "seq_length=${SEQ_LENGTH}" in text
+    assert "sft_rollout_function_path=${SFT_ROLLOUT_FUNCTION_PATH}" in text
     assert "run_receipt.txt" in text
 
 
