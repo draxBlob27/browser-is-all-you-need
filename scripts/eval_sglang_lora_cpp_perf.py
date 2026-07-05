@@ -72,7 +72,6 @@ def main() -> None:
     receipt_path = output_dir / f"{args.label}.receipt.json"
 
     started_at = time.time()
-    wandb_run = init_wandb(args)
     print(
         f"PIE eval generation start: backend={args.backend} label={args.label} tasks={len(rows)} "
         f"samples_per_task={args.samples_per_task}",
@@ -126,6 +125,7 @@ def main() -> None:
             "generated_path": str(generated_path),
         },
     )
+    wandb_run = init_wandb(args)
     log_wandb(
         wandb_run,
         args,
@@ -505,6 +505,7 @@ def init_wandb(args: argparse.Namespace):
             "cuda_graph_max_bs": args.cuda_graph_max_bs,
             "apply_chat_template": args.apply_chat_template,
             "chat_template_kwargs": parse_chat_template_kwargs(args.chat_template_kwargs),
+            "system_prompt": args.system_prompt,
         },
     )
 
