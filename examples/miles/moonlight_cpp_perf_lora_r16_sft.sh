@@ -48,6 +48,7 @@ ROLLOUT_BATCH_SIZE="${MILES_ROLLOUT_BATCH_SIZE:-2}"
 GLOBAL_BATCH_SIZE="${MILES_GLOBAL_BATCH_SIZE:-2}"
 SFT_ROLLOUT_SHUFFLE="${MILES_SFT_ROLLOUT_SHUFFLE:-1}"
 SFT_ROLLOUT_FUNCTION_PATH="${MILES_SFT_ROLLOUT_FUNCTION_PATH:-miles.rollout.sft_rollout.generate_rollout}"
+TRAIN_MODULE="${MILES_TRAIN_MODULE:-}"
 
 LORA_RANK="${MILES_LORA_RANK:-16}"
 LORA_ALPHA="${MILES_LORA_ALPHA:-32}"
@@ -190,6 +191,7 @@ global_batch_size=${GLOBAL_BATCH_SIZE}
 lora_rank=${LORA_RANK}
 lora_alpha=${LORA_ALPHA}
 sft_rollout_function_path=${SFT_ROLLOUT_FUNCTION_PATH}
+train_module=${TRAIN_MODULE}
 wandb_project=${WANDB_PROJECT}
 wandb_group=${WANDB_GROUP}
 wandb_run_id=${WANDB_RUN_ID}
@@ -346,9 +348,13 @@ PY
 )"
 
 set +e
+TRAIN_ENTRYPOINT=(python3 train.py)
+if [ -n "${TRAIN_MODULE}" ]; then
+  TRAIN_ENTRYPOINT=(python3 -m "${TRAIN_MODULE}")
+fi
 ray job submit --address="http://${RAY_DASHBOARD_HOST}:${RAY_DASHBOARD_PORT}" \
   --runtime-env-json="${RUNTIME_ENV_JSON}" \
-  -- python3 train.py \
+  -- "${TRAIN_ENTRYPOINT[@]}" \
   --actor-num-nodes 1 \
   --actor-num-gpus-per-node "${GPUS_PER_NODE}" \
   --colocate \

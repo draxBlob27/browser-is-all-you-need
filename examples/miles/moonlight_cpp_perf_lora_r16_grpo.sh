@@ -48,6 +48,7 @@ GRPO_ROLLOUT_SHUFFLE="${MILES_GRPO_ROLLOUT_SHUFFLE:-1}"
 ROLLOUT_MAX_RESPONSE_LEN="${MILES_ROLLOUT_MAX_RESPONSE_LEN:-1024}"
 ROLLOUT_TEMPERATURE="${MILES_ROLLOUT_TEMPERATURE:-1.0}"
 APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-}"
+TRAIN_MODULE="${MILES_TRAIN_MODULE:-}"
 EVAL_INTERVAL="${MILES_EVAL_INTERVAL:-1}"
 EVAL_N_SAMPLES_PER_PROMPT="${MILES_EVAL_N_SAMPLES_PER_PROMPT:-1}"
 EVAL_MAX_RESPONSE_LEN="${MILES_EVAL_MAX_RESPONSE_LEN:-1536}"
@@ -184,6 +185,7 @@ num_rollout=${NUM_ROLLOUT}
 rollout_batch_size=${ROLLOUT_BATCH_SIZE}
 n_samples_per_prompt=${N_SAMPLES_PER_PROMPT}
 global_batch_size=${GLOBAL_BATCH_SIZE}
+train_module=${TRAIN_MODULE}
 lora_rank=${LORA_RANK}
 lora_alpha=${LORA_ALPHA}
 wandb_project=${WANDB_PROJECT}
@@ -350,9 +352,13 @@ RUNTIME_ENV_JSON="{
 }"
 
 set +e
+TRAIN_ENTRYPOINT=(python3 train.py)
+if [ -n "${TRAIN_MODULE}" ]; then
+  TRAIN_ENTRYPOINT=(python3 -m "${TRAIN_MODULE}")
+fi
 ray job submit --address="http://${RAY_DASHBOARD_HOST}:${RAY_DASHBOARD_PORT}" \
   --runtime-env-json="${RUNTIME_ENV_JSON}" \
-  -- python3 train.py \
+  -- "${TRAIN_ENTRYPOINT[@]}" \
   --actor-num-nodes 1 \
   --actor-num-gpus-per-node "${GPUS_PER_NODE}" \
   --colocate \

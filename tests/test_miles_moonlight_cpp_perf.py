@@ -46,6 +46,8 @@ def test_miles_sft_defaults_share_the_2048_sequence_profile() -> None:
     assert "--rollout-function-path \"${SFT_ROLLOUT_FUNCTION_PATH}\"" in text
     assert "seq_length=${SEQ_LENGTH}" in text
     assert "sft_rollout_function_path=${SFT_ROLLOUT_FUNCTION_PATH}" in text
+    assert 'TRAIN_ENTRYPOINT=(python3 train.py)' in text
+    assert 'TRAIN_ENTRYPOINT=(python3 -m "${TRAIN_MODULE}")' in text
     assert "run_receipt.txt" in text
 
 
@@ -61,6 +63,8 @@ def test_miles_moonlight_runners_accept_model_args_overrides() -> None:
     grpo_text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-}"' in grpo_text
     assert 'ROLLOUT_ARGS+=(--apply-chat-template-kwargs "${APPLY_CHAT_TEMPLATE_KWARGS}")' in grpo_text
+    assert 'TRAIN_ENTRYPOINT=(python3 train.py)' in grpo_text
+    assert 'TRAIN_ENTRYPOINT=(python3 -m "${TRAIN_MODULE}")' in grpo_text
 
 
 def test_miles_glm47_wrappers_select_glm_defaults() -> None:
@@ -70,6 +74,10 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
         assert 'MILES_HF_CHECKPOINT="${MILES_HF_CHECKPOINT:-/root/models/GLM-4.7-Flash}"' in text
         assert "q_a_proj,q_b_proj,kv_a_proj_with_mqa,kv_b_proj,o_proj" in text
         assert 'MILES_WANDB_PROJECT="${MILES_WANDB_PROJECT:-glm47-pie-cpp-posttraining}"' in text
+        assert (
+            'MILES_TRAIN_MODULE="${MILES_TRAIN_MODULE:-w8_biayn.integrations.miles_train_with_glm47_bridge}"'
+            in text
+        )
     grpo_text = GLM47_GRPO_RUNNER.read_text(encoding="utf-8")
     assert (
         'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
