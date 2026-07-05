@@ -7,6 +7,10 @@ import asyncio
 import json
 import os
 import shutil
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -23,7 +27,27 @@ SANDBOX_IMAGE_ENV = "W8_CPP_SANDBOX_IMAGE"
 SANDBOX_CPU_ENV = "W8_CPP_SANDBOX_CPU"
 INCLUDE_LOGS_ENV = "W8_SLIME_CPP_INCLUDE_LOGS"
 REWARD_WORKERS_ENV = "W8_CPP_REWARD_WORKERS"
+ORACLE_FILTER_PROGRESS_EVERY_ENV = "W8_CPP_ORACLE_FILTER_PROGRESS_EVERY"
 DEFAULT_REWARD_WORKERS = 8
+DEFAULT_ORACLE_FILTER_PROGRESS_EVERY = 50
+
+
+@dataclass(frozen=True)
+class OracleFilterResult:
+    task_path: Path
+    task: CppTask
+    reward: float
+    reason: str
+    format_valid: bool
+    all_tests_pass: bool
+    tests_passed: int
+    tests_total: int
+    runtime_cpu_ns: int | None
+    reference_runtime_cpu_ns: int | None
+
+    @property
+    def keep(self) -> bool:
+        return self.format_valid and self.reason == "correct" and self.all_tests_pass
 
 
 def build_slime_cpp_perf_datasets(
@@ -36,6 +60,8 @@ def build_slime_cpp_perf_datasets(
     profile: str = "smoke",
     run_id: str | None = None,
     sort_by_size: bool = False,
+    filter_train_oracle_full_marks: bool = False,
+    oracle_filter_workers: int = DEFAULT_REWARD_WORKERS,
     force: bool = False,
 ) -> dict[str, Path]:
     """Write SLIME SFT, GRPO, and eval JSONL files from validated C++ task JSON."""
@@ -58,6 +84,10 @@ def build_slime_cpp_perf_datasets(
         train.sort(key=lambda row: _sft_size_key(row[1]))
     if train_limit is not None:
         train = train[:train_limit]
+    oracle_filter_results: list[OracleFilterResult] = []
+    if filter_train_oracle_full_marks:
+        oracle_filter_results = _score_oracle_full_marks(train, workers=oracle_filter_workers)
+        train = [(result.task_path, result.task) for result in oracle_filter_results if result.keep]
     if eval_limit is not None:
         eval_rows = eval_rows[:eval_limit]
     if not train:
@@ -80,9 +110,13 @@ def build_slime_cpp_perf_datasets(
         "eval": output / "eval" / "validation.jsonl",
         "manifest": output / "manifest.json",
     }
+    if filter_train_oracle_full_marks:
+        paths["oracle_filter"] = output / "oracle_filter" / "train.jsonl"
     _write_jsonl(paths["sft_train"], sft_rows)
     _write_jsonl(paths["grpo_train"], grpo_rows)
     _write_jsonl(paths["eval"], eval_prompt_rows)
+    if filter_train_oracle_full_marks:
+        _write_jsonl(paths["oracle_filter"], [_oracle_filter_row(result) for result in oracle_filter_results])
     write_json(
         paths["manifest"],
         {
@@ -95,6 +129,10 @@ def build_slime_cpp_perf_datasets(
             "output_dir": str(output),
             "eval_splits": list(eval_splits),
             "sort_by_size": sort_by_size,
+            "filter_train_oracle_full_marks": filter_train_oracle_full_marks,
+            "oracle_filter": _oracle_filter_manifest(oracle_filter_results)
+            if filter_train_oracle_full_marks
+            else None,
             "counts": {
                 "train": len(train),
                 "eval": len(eval_rows),
@@ -104,6 +142,119 @@ def build_slime_cpp_perf_datasets(
         },
     )
     return paths
+
+
+def _score_oracle_full_marks(
+    train: Sequence[tuple[Path, CppTask]],
+    *,
+    workers: int = DEFAULT_REWARD_WORKERS,
+) -> list[OracleFilterResult]:
+    if not train:
+        return []
+    progress_every = _oracle_filter_progress_every()
+    started = time.monotonic()
+    max_workers = max(1, min(workers, len(train)))
+    if max_workers == 1:
+        results = []
+        for index, (path, task) in enumerate(train, start=1):
+            results.append(_score_oracle_full_mark(path, task))
+            _log_oracle_filter_progress(index, len(train), results, started, progress_every)
+        return results
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_score_oracle_full_mark, task_path, task): index
+            for index, (task_path, task) in enumerate(train)
+        }
+        ordered_results: list[OracleFilterResult | None] = [None] * len(train)
+        completed_results: list[OracleFilterResult] = []
+        for completed, future in enumerate(as_completed(futures), start=1):
+            result = future.result()
+            ordered_results[futures[future]] = result
+            completed_results.append(result)
+            _log_oracle_filter_progress(completed, len(train), completed_results, started, progress_every)
+    return [result for result in ordered_results if result is not None]
+
+
+def _oracle_filter_progress_every() -> int:
+    raw_value = os.environ.get(ORACLE_FILTER_PROGRESS_EVERY_ENV, str(DEFAULT_ORACLE_FILTER_PROGRESS_EVERY))
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        return DEFAULT_ORACLE_FILTER_PROGRESS_EVERY
+
+
+def _log_oracle_filter_progress(
+    completed: int,
+    total: int,
+    results: Sequence[OracleFilterResult],
+    started: float,
+    progress_every: int,
+) -> None:
+    if progress_every == 0:
+        return
+    if completed != total and completed % progress_every != 0:
+        return
+    elapsed = max(time.monotonic() - started, 1e-9)
+    rate = completed / elapsed
+    kept = sum(1 for result in results if result.keep)
+    dropped = completed - kept
+    eta_seconds = (total - completed) / rate if rate > 0 else 0.0
+    print(
+        "oracle_filter_progress "
+        f"completed={completed}/{total} kept={kept} dropped={dropped} "
+        f"rate_per_min={rate * 60:.2f} eta_min={eta_seconds / 60:.1f}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _score_oracle_full_mark(task_path: Path, task: CppTask) -> OracleFilterResult:
+    breakdown = compute_reward(task, sft_output(task), runner=_sandbox_runner)
+    harness = breakdown.harness
+    return OracleFilterResult(
+        task_path=task_path,
+        task=task,
+        reward=breakdown.reward,
+        reason=breakdown.reason,
+        format_valid=breakdown.format_valid,
+        all_tests_pass=bool(harness.all_tests_pass) if harness else False,
+        tests_passed=harness.tests_passed if harness else 0,
+        tests_total=harness.tests_total if harness else 0,
+        runtime_cpu_ns=harness.runtime_cpu_ns if harness else None,
+        reference_runtime_cpu_ns=harness.reference_runtime_cpu_ns if harness else None,
+    )
+
+
+def _oracle_filter_row(result: OracleFilterResult) -> dict[str, Any]:
+    return {
+        "task_id": result.task.task_id,
+        "problem_id": result.task.problem_id,
+        "split": result.task.split,
+        "source_task_path": str(result.task_path),
+        "keep": result.keep,
+        "reward": result.reward,
+        "reason": result.reason,
+        "format_valid": result.format_valid,
+        "all_tests_pass": result.all_tests_pass,
+        "tests_passed": result.tests_passed,
+        "tests_total": result.tests_total,
+        "runtime_cpu_ns": result.runtime_cpu_ns,
+        "reference_runtime_cpu_ns": result.reference_runtime_cpu_ns,
+    }
+
+
+def _oracle_filter_manifest(results: Sequence[OracleFilterResult]) -> dict[str, Any]:
+    kept = [result for result in results if result.keep]
+    reason_counts: dict[str, int] = {}
+    for result in results:
+        reason_counts[result.reason] = reason_counts.get(result.reason, 0) + 1
+    return {
+        "scored": len(results),
+        "kept": len(kept),
+        "dropped": len(results) - len(kept),
+        "keep_rule": "strict format, reward reason == correct, and all tests pass",
+        "reason_counts": dict(sorted(reason_counts.items())),
+    }
 
 
 def _dedupe_task_paths(paths: Iterable[Path]) -> list[Path]:
@@ -450,6 +601,8 @@ def _build_data_command(args: argparse.Namespace) -> None:
         profile=args.profile,
         run_id=args.run_id,
         sort_by_size=args.sort_by_size,
+        filter_train_oracle_full_marks=args.filter_train_oracle_full_marks,
+        oracle_filter_workers=args.oracle_filter_workers,
         force=args.force,
     )
     print(json.dumps({key: str(path) for key, path in paths.items()}, indent=2, sort_keys=True))
@@ -478,6 +631,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     build_data.add_argument("--profile", default="smoke")
     build_data.add_argument("--run-id", default=None)
     build_data.add_argument("--sort-by-size", action="store_true")
+    build_data.add_argument(
+        "--filter-train-oracle-full-marks",
+        action="store_true",
+        help="Keep only train tasks whose SFT oracle target passes strict reward grading.",
+    )
+    build_data.add_argument("--oracle-filter-workers", type=int, default=DEFAULT_REWARD_WORKERS)
     build_data.add_argument("--force", action="store_true")
     build_data.set_defaults(func=_build_data_command)
 

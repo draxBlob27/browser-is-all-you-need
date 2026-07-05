@@ -30,6 +30,8 @@ TRAIN_LIMIT="${SLIME_CPP_TRAIN_LIMIT:-2}"
 EVAL_LIMIT="${SLIME_CPP_EVAL_LIMIT:-4}"
 EVAL_SPLITS="${SLIME_CPP_EVAL_SPLITS:-validation,test}"
 SORT_BY_SIZE="${SLIME_CPP_SORT_BY_SIZE:-1}"
+FILTER_TRAIN_ORACLE_FULL_MARKS="${SLIME_CPP_FILTER_TRAIN_ORACLE_FULL_MARKS:-0}"
+ORACLE_FILTER_WORKERS="${SLIME_CPP_ORACLE_FILTER_WORKERS:-8}"
 
 HF_CHECKPOINT="${SLIME_HF_CHECKPOINT:-/root/models/Moonlight-16B-A3B-Instruct}"
 HF_MODEL_ID="${SLIME_HF_MODEL_ID:-moonshotai/Moonlight-16B-A3B-Instruct}"
@@ -83,9 +85,10 @@ GRPO_SKIP_FINAL_TRAIN_SLEEP="${SLIME_GRPO_SKIP_FINAL_TRAIN_SLEEP:-1}"
 FINAL_TRAIN_SLEEP_SKIP="${SLIME_FINAL_TRAIN_SLEEP_SKIP:-0}"
 
 SFT_NUM_EPOCH="${SLIME_SFT_NUM_EPOCH:-1}"
-SFT_ROLLOUT_BATCH_SIZE="${SLIME_SFT_ROLLOUT_BATCH_SIZE:-2}"
-SFT_GLOBAL_BATCH_SIZE="${SLIME_SFT_GLOBAL_BATCH_SIZE:-2}"
+SFT_ROLLOUT_BATCH_SIZE="${SLIME_SFT_ROLLOUT_BATCH_SIZE:-1}"
+SFT_GLOBAL_BATCH_SIZE="${SLIME_SFT_GLOBAL_BATCH_SIZE:-1}"
 SFT_LR="${SLIME_SFT_LR:-1e-5}"
+SFT_ROLLOUT_SHUFFLE="${SLIME_SFT_ROLLOUT_SHUFFLE:-1}"
 SFT_SKIP_FINAL_TRAIN_SLEEP="${SLIME_SFT_SKIP_FINAL_TRAIN_SLEEP:-1}"
 SFT_START_ROLLOUT_ID="${SLIME_SFT_START_ROLLOUT_ID:-0}"
 GRPO_START_ROLLOUT_ID="${SLIME_GRPO_START_ROLLOUT_ID:-0}"
@@ -103,6 +106,12 @@ USE_EXTERNAL_RAY="${SLIME_USE_EXTERNAL_RAY:-0}"
 SKIP_CLEANUP="${SLIME_SKIP_CLEANUP:-0}"
 RAY_MEMORY_USAGE_THRESHOLD="${SLIME_RAY_MEMORY_USAGE_THRESHOLD-0.999}"
 RAY_MEMORY_MONITOR_REFRESH_MS="${SLIME_RAY_MEMORY_MONITOR_REFRESH_MS:-}"
+RAY_OBJECT_STORE_MEMORY="${SLIME_RAY_OBJECT_STORE_MEMORY:-}"
+DEFAULT_RAY_OBJECT_STORE_MEMORY_FOR_OFFLOAD="${SLIME_DEFAULT_RAY_OBJECT_STORE_MEMORY_FOR_OFFLOAD:-17179869184}"
+RAY_OBJECT_STORE_MEMORY_ACTUAL=""
+RAY_NODE_IP_ADDRESS="${SLIME_RAY_NODE_IP_ADDRESS:-127.0.0.1}"
+RAY_DASHBOARD_HOST="${SLIME_RAY_DASHBOARD_HOST:-127.0.0.1}"
+RAY_DASHBOARD_PORT="${SLIME_RAY_DASHBOARD_PORT:-8265}"
 COLOCATE="${SLIME_COLOCATE:-1}"
 SFT_COLOCATE="${SLIME_SFT_COLOCATE:-0}"
 if [ -n "${SLIME_OPTIMIZER_CPU_OFFLOAD:-}" ]; then
@@ -201,6 +210,9 @@ prepare_data() {
   )
   if [ "${SORT_BY_SIZE}" = "1" ]; then
     BUILD_DATA_ARGS+=(--sort-by-size)
+  fi
+  if [ "${FILTER_TRAIN_ORACLE_FULL_MARKS}" = "1" ]; then
+    BUILD_DATA_ARGS+=(--filter-train-oracle-full-marks --oracle-filter-workers "${ORACLE_FILTER_WORKERS}")
   fi
   run_repo_python "${BUILD_DATA_ARGS[@]}"
 }
@@ -302,17 +314,28 @@ ensure_base_checkpoint() {
     exit 2
   fi
   echo "Converting ${HF_CHECKPOINT} to ${REF_LOAD_DIR}"
+  CONVERT_EXTRA_ARGS=()
+  if [ -n "${ATTENTION_BACKEND}" ]; then
+    CONVERT_EXTRA_ARGS+=(--attention-backend "${ATTENTION_BACKEND}")
+  fi
+  if [ "${ATTENTION_BACKEND}" = "local" ] && [ "${SLIME_USE_LOCAL_LAYER_SPEC:-1}" = "1" ]; then
+    CONVERT_EXTRA_ARGS+=(--no-persist-layer-norm --spec "${LOCAL_LAYER_SPEC_MODULE}" "${LOCAL_LAYER_SPEC_NAME}")
+  fi
   if [ "${CONVERT_NPROC}" = "1" ]; then
-    PYTHONPATH="${MEGATRON_DIR}:${PYTHONPATH:-}" \
-      "${PYTHON_BIN}" "${SLIME_ROOT}/tools/convert_hf_to_torch_dist.py" \
+    PYTHONPATH="${MEGATRON_DIR}:${SLIME_ROOT}:${REPO_ROOT}/src:${PYTHONPATH:-}" \
+      "${PYTHON_BIN}" -m w8_biayn.integrations.slime_moonlight_hf_import \
+      --slime-root "${SLIME_ROOT}" -- \
       "${CONVERT_MODEL_ARGS[@]}" \
+      "${CONVERT_EXTRA_ARGS[@]}" \
       --hf-checkpoint "${HF_CHECKPOINT}" \
       --save "${REF_LOAD_DIR}"
   else
-    PYTHONPATH="${MEGATRON_DIR}:${PYTHONPATH:-}" \
+    PYTHONPATH="${MEGATRON_DIR}:${SLIME_ROOT}:${REPO_ROOT}/src:${PYTHONPATH:-}" \
       torchrun --nproc-per-node "${CONVERT_NPROC}" \
-      "${SLIME_ROOT}/tools/convert_hf_to_torch_dist.py" \
+      -m w8_biayn.integrations.slime_moonlight_hf_import \
+      --slime-root "${SLIME_ROOT}" -- \
       "${CONVERT_MODEL_ARGS[@]}" \
+      "${CONVERT_EXTRA_ARGS[@]}" \
       --hf-checkpoint "${HF_CHECKPOINT}" \
       --save "${REF_LOAD_DIR}"
   fi
@@ -626,7 +649,6 @@ stage_args() {
         --prompt-data "${DATA_DIR}/sft/train.jsonl"
         --input-key messages
         --metadata-key metadata
-        --rollout-shuffle
         --num-epoch "${SFT_NUM_EPOCH}"
         --start-rollout-id "${SFT_START_ROLLOUT_ID}"
         --rollout-batch-size "${SFT_ROLLOUT_BATCH_SIZE}"
@@ -636,6 +658,9 @@ stage_args() {
         --disable-compute-advantages-and-returns
         --debug-train-only
       )
+      if [ "${SFT_ROLLOUT_SHUFFLE}" = "1" ]; then
+        TASK_ARGS+=(--rollout-shuffle)
+      fi
       OPTIMIZER_ARGS=(
         --optimizer adam
         --lr "${SFT_LR}"
@@ -761,22 +786,68 @@ stage_args() {
 
 append_optimizer_offload_args() {
   if [ "${OPTIMIZER_CPU_OFFLOAD}" = "1" ]; then
+    if [ -z "${RAY_OBJECT_STORE_MEMORY}" ]; then
+      RAY_OBJECT_STORE_MEMORY="${DEFAULT_RAY_OBJECT_STORE_MEMORY_FOR_OFFLOAD}"
+    fi
     OPTIMIZER_ARGS+=(--optimizer-cpu-offload --overlap-cpu-optimizer-d2h-h2d --use-precision-aware-optimizer)
+  fi
+}
+
+actual_ray_object_store_memory() {
+  ps -eo args= \
+    | sed -n 's/.*--object_store_memory=\([0-9][0-9]*\).*/\1/p' \
+    | tail -n 1
+}
+
+verify_ray_object_store_memory() {
+  if [ "${USE_EXTERNAL_RAY}" != "0" ] || [ -z "${RAY_OBJECT_STORE_MEMORY}" ]; then
+    return
+  fi
+  local actual=""
+  for _ in $(seq 1 20); do
+    actual="$(actual_ray_object_store_memory)"
+    if [ -n "${actual}" ]; then
+      break
+    fi
+    sleep 1
+  done
+  RAY_OBJECT_STORE_MEMORY_ACTUAL="${actual}"
+  if [ -z "${actual}" ]; then
+    echo "Unable to verify Ray object-store memory after ray start." >&2
+    cleanup_ray
+    exit 2
+  fi
+  if [ "${actual}" != "${RAY_OBJECT_STORE_MEMORY}" ]; then
+    echo "Ray object-store memory mismatch: requested ${RAY_OBJECT_STORE_MEMORY}, actual ${actual}." >&2
+    echo "Stopping Ray so the next run starts with the requested memory cap." >&2
+    cleanup_ray
+    exit 2
   fi
 }
 
 start_ray_if_needed() {
   if [ "${USE_EXTERNAL_RAY}" = "0" ]; then
-    export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
-    export no_proxy="127.0.0.1,${MASTER_ADDR}"
+    export MASTER_ADDR="${SLIME_MASTER_ADDR:-${MASTER_ADDR:-127.0.0.1}}"
+    export no_proxy="127.0.0.1,${MASTER_ADDR},${RAY_NODE_IP_ADDRESS},${RAY_DASHBOARD_HOST}"
     if [ -n "${RAY_MEMORY_USAGE_THRESHOLD}" ]; then
       export RAY_memory_usage_threshold="${RAY_MEMORY_USAGE_THRESHOLD}"
     fi
     if [ -n "${RAY_MEMORY_MONITOR_REFRESH_MS}" ]; then
       export RAY_memory_monitor_refresh_ms="${RAY_MEMORY_MONITOR_REFRESH_MS}"
     fi
-    ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${NUM_GPUS}" \
-      --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+    RAY_START_ARGS=(
+      --head
+      --node-ip-address "${RAY_NODE_IP_ADDRESS}"
+      --num-gpus "${NUM_GPUS}"
+      --disable-usage-stats
+      --dashboard-host="${RAY_DASHBOARD_HOST}"
+      --dashboard-port="${RAY_DASHBOARD_PORT}"
+    )
+    if [ -n "${RAY_OBJECT_STORE_MEMORY}" ]; then
+      RAY_START_ARGS+=(--object-store-memory "${RAY_OBJECT_STORE_MEMORY}")
+    fi
+    ray start "${RAY_START_ARGS[@]}"
+    verify_ray_object_store_memory
   fi
 }
 
@@ -820,6 +891,8 @@ for key in (
     "HF_HOME",
     "WANDB_API_KEY",
     "WANDB_KEY",
+    "WANDB_ENTITY",
+    "WANDB_BASE_URL",
     "DOCKER_HOST",
 ):
     if key in os.environ:
@@ -845,6 +918,8 @@ ray_submit_status=${ray_submit_status}
 ray_job_id=${ray_job_id}
 ray_job_terminal_status=${ray_job_terminal_status}
 ray_memory_usage_threshold=${RAY_MEMORY_USAGE_THRESHOLD:-}
+ray_object_store_memory_requested=${RAY_OBJECT_STORE_MEMORY:-}
+ray_object_store_memory_actual=${RAY_OBJECT_STORE_MEMORY_ACTUAL:-}
 run_id=${RUN_ID}
 run_root=${RUN_ROOT}
 stage_root=${STAGE_ROOT}
@@ -961,7 +1036,7 @@ submit_slime_job() {
   RUNTIME_ENV_JSON="$(runtime_env_json)"
   cd "${SLIME_ROOT}"
 
-  RAY_ADDRESS="${SLIME_RAY_ADDRESS:-http://127.0.0.1:8265}"
+  RAY_ADDRESS="${SLIME_RAY_ADDRESS:-http://${RAY_DASHBOARD_HOST}:${RAY_DASHBOARD_PORT}}"
   RAY_JOB_ID="${SLIME_RAY_JOB_ID:-${RUN_ID}-${STAGE}}"
   RAY_JOB_ID="$(printf "%s" "${RAY_JOB_ID}" | tr -c "A-Za-z0-9_-" "-")"
   RAY_JOB_TERMINAL_STATUS="unknown"

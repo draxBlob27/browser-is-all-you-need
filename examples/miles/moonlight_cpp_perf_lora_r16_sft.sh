@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Miles GRPO LoRA rank-16 runner for Moonlight-16B-A3B on the PIE C++ task.
+# Miles SFT LoRA rank-16 runner for Moonlight-16B-A3B on the PIE C++ task.
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ else
 fi
 PYTHON_BIN="${MILES_PYTHON:-python3}"
 
-RUN_ID="${MILES_RUN_ID:-moonlight_pie_cpp_lora_r16_$(date +%Y%m%d_%H%M%S)}"
+RUN_ID="${MILES_RUN_ID:-moonlight_pie_cpp_lora_r16_sft_$(date +%Y%m%d_%H%M%S)}"
 RUN_ROOT="${MILES_RUN_ROOT:-${REPO_ROOT}/.w8-biayn/miles/moonlight-cpp-perf/runs/${RUN_ID}}"
 DATA_DIR="${MILES_CPP_DATA_DIR:-${RUN_ROOT}/data}"
 TASKS_DIR="${MILES_CPP_TASKS_DIR:-${REPO_ROOT}/.w8-biayn/data/tasks-small}"
@@ -21,12 +21,14 @@ TRAIN_LIMIT="${MILES_CPP_TRAIN_LIMIT:-2}"
 EVAL_LIMIT="${MILES_CPP_EVAL_LIMIT:-2}"
 EVAL_SPLITS="${MILES_CPP_EVAL_SPLITS:-validation,test}"
 SORT_BY_SIZE="${MILES_CPP_SORT_BY_SIZE:-1}"
+AUTO_PREPARE_DATA="${MILES_CPP_AUTO_PREPARE_DATA:-1}"
 FILTER_TRAIN_ORACLE_FULL_MARKS="${MILES_CPP_FILTER_TRAIN_ORACLE_FULL_MARKS:-0}"
 ORACLE_FILTER_WORKERS="${MILES_CPP_ORACLE_FILTER_WORKERS:-8}"
 
 HF_CHECKPOINT="${MILES_HF_CHECKPOINT:-/root/models/Moonlight-16B-A3B-Instruct}"
 REF_LOAD_DIR="${MILES_REF_LOAD_DIR:-${HF_CHECKPOINT}_torch_dist}"
-SAVE_DIR="${MILES_SAVE_DIR:-${RUN_ROOT}/checkpoints/grpo_lora_r16}"
+SAVE_DIR="${MILES_SAVE_DIR:-${RUN_ROOT}/checkpoints/sft_lora_r16}"
+SAVE_INTERVAL="${MILES_SAVE_INTERVAL:-1000}"
 
 GPUS_PER_NODE="${MILES_GPUS_PER_NODE:-4}"
 TP_SIZE="${MILES_TENSOR_MODEL_PARALLEL_SIZE:-2}"
@@ -38,33 +40,28 @@ SEQ_LENGTH="${MILES_SEQ_LENGTH:-2048}"
 MAX_TOKENS_PER_GPU="${MILES_MAX_TOKENS_PER_GPU:-4096}"
 MICRO_BATCH_SIZE="${MILES_MICRO_BATCH_SIZE:-1}"
 
-NUM_ROLLOUT="${MILES_NUM_ROLLOUT:-1}"
+SFT_NUM_EPOCH="${MILES_SFT_NUM_EPOCH:-1}"
+START_ROLLOUT_ID="${MILES_START_ROLLOUT_ID:-0}"
 ROLLOUT_BATCH_SIZE="${MILES_ROLLOUT_BATCH_SIZE:-2}"
-N_SAMPLES_PER_PROMPT="${MILES_N_SAMPLES_PER_PROMPT:-2}"
-GLOBAL_BATCH_SIZE="${MILES_GLOBAL_BATCH_SIZE:-4}"
-GRPO_ROLLOUT_SHUFFLE="${MILES_GRPO_ROLLOUT_SHUFFLE:-1}"
-ROLLOUT_MAX_RESPONSE_LEN="${MILES_ROLLOUT_MAX_RESPONSE_LEN:-1024}"
-ROLLOUT_TEMPERATURE="${MILES_ROLLOUT_TEMPERATURE:-1.0}"
-EVAL_INTERVAL="${MILES_EVAL_INTERVAL:-1}"
-EVAL_N_SAMPLES_PER_PROMPT="${MILES_EVAL_N_SAMPLES_PER_PROMPT:-1}"
-EVAL_MAX_RESPONSE_LEN="${MILES_EVAL_MAX_RESPONSE_LEN:-1536}"
+GLOBAL_BATCH_SIZE="${MILES_GLOBAL_BATCH_SIZE:-2}"
+SFT_ROLLOUT_SHUFFLE="${MILES_SFT_ROLLOUT_SHUFFLE:-1}"
 
 LORA_RANK="${MILES_LORA_RANK:-16}"
 LORA_ALPHA="${MILES_LORA_ALPHA:-32}"
 LORA_TARGET_MODULES="${MILES_LORA_TARGET_MODULES:-gate_proj,up_proj,down_proj}"
-SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.25}"
+SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.20}"
 SGLANG_CUDA_GRAPH_MAX_BS="${MILES_SGLANG_CUDA_GRAPH_MAX_BS:-4}"
 
-WANDB_PROJECT="${MILES_WANDB_PROJECT:-miles-moonlight-cpp-perf}"
-WANDB_GROUP="${MILES_WANDB_GROUP:-moonlight-pie-cpp-lora-r16}"
+WANDB_PROJECT="${MILES_WANDB_PROJECT:-miles-moonlight-cpp-sft}"
+WANDB_GROUP="${MILES_WANDB_GROUP:-moonlight-pie-cpp-lora-r16-sft}"
 WANDB_RUN_ID="${MILES_WANDB_RUN_ID:-${RUN_ID}}"
 
-STAGE_ROOT="${RUN_ROOT}/grpo_lora_r16"
+STAGE_ROOT="${RUN_ROOT}/sft_lora_r16"
 LOG_FILE="${STAGE_ROOT}/run.log"
 VRAM_LOG="${STAGE_ROOT}/vram_usage.csv"
 VRAM_PEAK_FILE="${STAGE_ROOT}/vram_peak.txt"
 RUN_RECEIPT="${STAGE_ROOT}/run_receipt.txt"
-ROLLOUT_DUMP_TEMPLATE="${RUN_ROOT}/rollout_dumps/grpo_{rollout_id}.pt"
+ROLLOUT_DUMP_TEMPLATE="${RUN_ROOT}/rollout_dumps/sft_{rollout_id}.pt"
 
 mkdir -p "${STAGE_ROOT}" "${RUN_ROOT}/rollout_dumps" "${SAVE_DIR}"
 exec > >(tee -a "${LOG_FILE}") 2>&1
@@ -72,12 +69,15 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 echo "run_id=${RUN_ID}"
 echo "run_root=${RUN_ROOT}"
 echo "tasks_dir=${TASKS_DIR}"
+echo "data_dir=${DATA_DIR}"
 echo "hf_checkpoint=${HF_CHECKPOINT}"
 echo "ref_load=${REF_LOAD_DIR}"
 echo "save_dir=${SAVE_DIR}"
-echo "seq_length=${SEQ_LENGTH}"
-echo "rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}"
-echo "eval_max_response_len=${EVAL_MAX_RESPONSE_LEN}"
+echo "sft_num_epoch=${SFT_NUM_EPOCH}"
+echo "global_batch_size=${GLOBAL_BATCH_SIZE}"
+echo "rollout_batch_size=${ROLLOUT_BATCH_SIZE}"
+echo "sft_rollout_shuffle=${SFT_ROLLOUT_SHUFFLE}"
+echo "lora_rank=${LORA_RANK}"
 
 if [ ! -d "${MILES_ROOT}" ]; then
   echo "Missing Miles root: ${MILES_ROOT}" >&2
@@ -91,34 +91,53 @@ if [ ! -f "${REF_LOAD_DIR}/latest_checkpointed_iteration.txt" ]; then
   echo "Missing Megatron checkpoint: ${REF_LOAD_DIR}" >&2
   exit 2
 fi
+if ! command -v ray >/dev/null 2>&1; then
+  echo "Missing ray CLI. Run inside the Miles runtime container." >&2
+  exit 2
+fi
 if ! command -v docker >/dev/null 2>&1; then
   echo "Missing docker CLI inside container. Mount it with -v /usr/bin/docker:/usr/bin/docker:ro." >&2
   exit 2
 fi
-if ! docker image inspect "${W8_CPP_SANDBOX_IMAGE:-w8-biayn-cpp-perf:latest}" >/dev/null 2>&1; then
-  echo "Missing PIE C++ sandbox image: ${W8_CPP_SANDBOX_IMAGE:-w8-biayn-cpp-perf:latest}" >&2
+
+prepare_data() {
+  if [ ! -d "${TASKS_DIR}" ]; then
+    echo "Missing task JSON directory: ${TASKS_DIR}" >&2
+    exit 2
+  fi
+
+  BUILD_DATA_ARGS=(
+    -m w8_biayn.integrations.slime_cpp_perf build-data
+    --tasks-dir "${TASKS_DIR}"
+    --out "${DATA_DIR}"
+    --train-limit "${TRAIN_LIMIT}"
+    --eval-limit "${EVAL_LIMIT}"
+    --eval-splits "${EVAL_SPLITS}"
+    --profile "miles-moonlight-cpp-perf-lora-r16-sft"
+    --run-id "${RUN_ID}"
+    --force
+  )
+  if [ "${SORT_BY_SIZE}" = "1" ]; then
+    BUILD_DATA_ARGS+=(--sort-by-size)
+  fi
+  if [ "${FILTER_TRAIN_ORACLE_FULL_MARKS}" = "1" ]; then
+    BUILD_DATA_ARGS+=(--filter-train-oracle-full-marks --oracle-filter-workers "${ORACLE_FILTER_WORKERS}")
+  fi
+
+  PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" "${BUILD_DATA_ARGS[@]}"
+}
+
+if [ ! -f "${DATA_DIR}/manifest.json" ]; then
+  if [ "${AUTO_PREPARE_DATA}" != "1" ]; then
+    echo "Missing Miles C++ data manifest: ${DATA_DIR}/manifest.json" >&2
+    exit 2
+  fi
+  prepare_data
+fi
+if [ ! -f "${DATA_DIR}/sft/train.jsonl" ]; then
+  echo "Missing SFT train data: ${DATA_DIR}/sft/train.jsonl" >&2
   exit 2
 fi
-
-BUILD_DATA_ARGS=(
-  -m w8_biayn.integrations.slime_cpp_perf build-data
-  --tasks-dir "${TASKS_DIR}"
-  --out "${DATA_DIR}"
-  --train-limit "${TRAIN_LIMIT}"
-  --eval-limit "${EVAL_LIMIT}"
-  --eval-splits "${EVAL_SPLITS}"
-  --profile "miles-moonlight-cpp-perf-lora-r16"
-  --run-id "${RUN_ID}"
-  --force
-)
-if [ "${SORT_BY_SIZE}" = "1" ]; then
-  BUILD_DATA_ARGS+=(--sort-by-size)
-fi
-if [ "${FILTER_TRAIN_ORACLE_FULL_MARKS}" = "1" ]; then
-  BUILD_DATA_ARGS+=(--filter-train-oracle-full-marks --oracle-filter-workers "${ORACLE_FILTER_WORKERS}")
-fi
-
-PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" "${BUILD_DATA_ARGS[@]}"
 
 monitor_vram() {
   echo "timestamp,index,memory.used,memory.total,utilization.gpu" > "${VRAM_LOG}"
@@ -128,25 +147,12 @@ monitor_vram() {
   done
 }
 
-monitor_vram &
-VRAM_MONITOR_PID=$!
-cleanup() {
-  kill "${VRAM_MONITOR_PID}" >/dev/null 2>&1 || true
-  if [ -s "${VRAM_LOG}" ]; then
-    awk -F, 'NR>1 {gsub(/^[ \t]+|[ \t]+$/, "", $3); if ($3+0 > max) max=$3+0} END {print "max_memory_used_mib=" max}' "${VRAM_LOG}" > "${VRAM_PEAK_FILE}" || true
-    cat "${VRAM_PEAK_FILE}" || true
-  fi
-}
-trap cleanup EXIT
-
 write_receipt() {
   local status="$1"
   local ray_status="$2"
   local max_memory_used_mib=""
   if [ -s "${VRAM_LOG}" ]; then
     awk -F, 'NR>1 {gsub(/^[ \t]+|[ \t]+$/, "", $3); if ($3+0 > max) max=$3+0} END {print "max_memory_used_mib=" max}' "${VRAM_LOG}" > "${VRAM_PEAK_FILE}" || true
-  fi
-  if [ -s "${VRAM_PEAK_FILE}" ]; then
     max_memory_used_mib="$(awk -F= '/max_memory_used_mib/ {print $2}' "${VRAM_PEAK_FILE}" | tail -n 1)"
   fi
   cat >"${RUN_RECEIPT}" <<EOF
@@ -165,13 +171,10 @@ hf_checkpoint=${HF_CHECKPOINT}
 ref_load=${REF_LOAD_DIR}
 save_dir=${SAVE_DIR}
 seq_length=${SEQ_LENGTH}
-rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}
-eval_max_response_len=${EVAL_MAX_RESPONSE_LEN}
 max_tokens_per_gpu=${MAX_TOKENS_PER_GPU}
 micro_batch_size=${MICRO_BATCH_SIZE}
-num_rollout=${NUM_ROLLOUT}
+sft_num_epoch=${SFT_NUM_EPOCH}
 rollout_batch_size=${ROLLOUT_BATCH_SIZE}
-n_samples_per_prompt=${N_SAMPLES_PER_PROMPT}
 global_batch_size=${GLOBAL_BATCH_SIZE}
 lora_rank=${LORA_RANK}
 lora_alpha=${LORA_ALPHA}
@@ -182,10 +185,16 @@ EOF
   cat "${RUN_RECEIPT}"
 }
 
+monitor_vram &
+VRAM_MONITOR_PID=$!
+cleanup() {
+  kill "${VRAM_MONITOR_PID}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 pkill -9 sglang >/dev/null 2>&1 || true
 ray stop --force >/dev/null 2>&1 || true
 pkill -9 ray >/dev/null 2>&1 || true
-pkill -9 python >/dev/null 2>&1 || true
 pkill -9 redis >/dev/null 2>&1 || true
 
 export PYTHONBUFFERED=16
@@ -213,7 +222,7 @@ CKPT_ARGS=(
   --ref-load "${REF_LOAD_DIR}"
   --load "${REF_LOAD_DIR}"
   --save "${SAVE_DIR}"
-  --save-interval 1
+  --save-interval "${SAVE_INTERVAL}"
   --megatron-to-hf-mode bridge
 )
 
@@ -228,34 +237,23 @@ LORA_ARGS=(
   --sglang-lora-target-modules gate_proj up_proj down_proj
 )
 
-ROLLOUT_ARGS=(
-  --prompt-data "${DATA_DIR}/grpo/train.jsonl"
-  --input-key prompt
-  --label-key label
-  --metadata-key metadata
-  --apply-chat-template
-  --custom-rm-path w8_biayn.integrations.slime_cpp_perf.reward_func
-  --reward-key score
-  --num-rollout "${NUM_ROLLOUT}"
-  --rollout-batch-size "${ROLLOUT_BATCH_SIZE}"
-  --n-samples-per-prompt "${N_SAMPLES_PER_PROMPT}"
-  --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN}"
-  --rollout-temperature "${ROLLOUT_TEMPERATURE}"
+SFT_ARGS=(
+  --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+	  --prompt-data "${DATA_DIR}/sft/train.jsonl"
+	  --input-key messages
+	  --metadata-key metadata
+	  --num-epoch "${SFT_NUM_EPOCH}"
+	  --start-rollout-id "${START_ROLLOUT_ID}"
+	  --rollout-batch-size "${ROLLOUT_BATCH_SIZE}"
   --global-batch-size "${GLOBAL_BATCH_SIZE}"
-)
-if [ "${GRPO_ROLLOUT_SHUFFLE}" = "1" ]; then
-  ROLLOUT_ARGS+=(--rollout-shuffle)
+  --loss-type sft_loss
+  --calculate-per-token-loss
+  --disable-compute-advantages-and-returns
+	  --debug-train-only
+	)
+if [ "${SFT_ROLLOUT_SHUFFLE}" = "1" ]; then
+  SFT_ARGS+=(--rollout-shuffle)
 fi
-
-EVAL_ARGS=(
-  --eval-interval "${EVAL_INTERVAL}"
-  --eval-prompt-data pie_cpp "${DATA_DIR}/eval/validation.jsonl"
-  --eval-input-key prompt
-  --eval-label-key label
-  --n-samples-per-eval-prompt "${EVAL_N_SAMPLES_PER_PROMPT}"
-  --eval-max-response-len "${EVAL_MAX_RESPONSE_LEN}"
-  --eval-top-p 1
-)
 
 PERF_ARGS=(
   --tensor-model-parallel-size "${TP_SIZE}"
@@ -272,22 +270,15 @@ PERF_ARGS=(
   --recompute-num-layers 1
 )
 
-GRPO_ARGS=(
-  --advantage-estimator grpo
-  --kl-loss-coef 0.00
-  --kl-loss-type low_var_kl
-  --entropy-coef 0.00
-  --eps-clip 0.2
-  --eps-clip-high 0.28
-)
-
 OPTIMIZER_ARGS=(
   --optimizer adam
   --lr "${MILES_LR:-1e-5}"
-  --lr-decay-style constant
+  --lr-decay-style cosine
+  --min-lr "${MILES_MIN_LR:-1e-6}"
+  --lr-warmup-fraction "${MILES_LR_WARMUP_FRACTION:-0.1}"
   --weight-decay 0.1
   --adam-beta1 0.9
-  --adam-beta2 0.98
+  --adam-beta2 0.95
 )
 
 WANDB_ARGS=(
@@ -296,8 +287,6 @@ WANDB_ARGS=(
   --wandb-project "${WANDB_PROJECT}"
   --wandb-group "${WANDB_GROUP}"
   --wandb-run-id "${WANDB_RUN_ID}"
-  --log-passrate
-  --log-correct-samples
 )
 
 SGLANG_ARGS=(
@@ -323,17 +312,26 @@ ray start --head \
   --dashboard-host="${RAY_DASHBOARD_HOST}" \
   --dashboard-port="${RAY_DASHBOARD_PORT}"
 
-RUNTIME_ENV_JSON="{
-  \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/:${REPO_ROOT}/src:${MILES_ROOT}\",
-    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
-    \"W8_BIAYN_DATA_DIR\": \"${DATA_DIR}\",
-    \"W8_CPP_SANDBOX_IMAGE\": \"${W8_CPP_SANDBOX_IMAGE}\",
-    \"W8_CPP_SANDBOX_CPU\": \"${W8_CPP_SANDBOX_CPU:-1}\",
-    \"W8_CPP_REWARD_WORKERS\": \"${W8_CPP_REWARD_WORKERS:-8}\"
-  }
-}"
+RUNTIME_ENV_JSON="$("${PYTHON_BIN}" - <<PY
+import json
+import os
+
+paths = ["/root/Megatron-LM", "${REPO_ROOT}/src", "${MILES_ROOT}", os.environ.get("PYTHONPATH", "")]
+env = {
+    "PYTHONPATH": ":".join(path for path in paths if path),
+    "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+    "NCCL_NVLS_ENABLE": "${HAS_NVLINK}",
+    "W8_BIAYN_DATA_DIR": "${DATA_DIR}",
+    "W8_CPP_SANDBOX_IMAGE": os.environ.get("W8_CPP_SANDBOX_IMAGE", "w8-biayn-cpp-perf:latest"),
+    "W8_CPP_SANDBOX_CPU": os.environ.get("W8_CPP_SANDBOX_CPU", "1"),
+    "W8_CPP_REWARD_WORKERS": os.environ.get("W8_CPP_REWARD_WORKERS", "8"),
+}
+for key in ("CUDA_HOME", "PATH", "LD_LIBRARY_PATH", "HF_HOME", "WANDB_API_KEY", "WANDB_ENTITY", "WANDB_BASE_URL"):
+    if key in os.environ:
+        env[key] = os.environ[key]
+print(json.dumps({"env_vars": env}))
+PY
+)"
 
 set +e
 ray job submit --address="http://${RAY_DASHBOARD_HOST}:${RAY_DASHBOARD_PORT}" \
@@ -344,12 +342,10 @@ ray job submit --address="http://${RAY_DASHBOARD_HOST}:${RAY_DASHBOARD_PORT}" \
   --colocate \
   "${MODEL_ARGS[@]}" \
   "${CKPT_ARGS[@]}" \
-  "${ROLLOUT_ARGS[@]}" \
+  "${SFT_ARGS[@]}" \
   "${OPTIMIZER_ARGS[@]}" \
-  "${GRPO_ARGS[@]}" \
   "${WANDB_ARGS[@]}" \
   "${PERF_ARGS[@]}" \
-  "${EVAL_ARGS[@]}" \
   "${SGLANG_ARGS[@]}" \
   "${MISC_ARGS[@]}" \
   "${LORA_ARGS[@]}"

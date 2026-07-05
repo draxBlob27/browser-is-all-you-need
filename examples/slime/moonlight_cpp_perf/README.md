@@ -110,7 +110,7 @@ The default run is intentionally small but task-real:
 - eval samples per prompt: `1`
 - SFT epochs: `1`
 - GRPO rollouts: `1`
-- SFT batch/global batch: `2`
+- SFT batch/global batch: `1`
 - GRPO batch/global batch: `2`
 - Moonlight parallelism: TP `2`, EP `4`
 - Megatron sequence length: `1024`

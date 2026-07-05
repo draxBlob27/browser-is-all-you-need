@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from w8_biayn.cpp_perf.schema import CppTask, HarnessResult, ReferencePerformance, TestCase, TestCoverage
+from w8_biayn.cpp_perf.reward import RewardBreakdown
+import w8_biayn.integrations.slime_cpp_perf as slime_cpp_perf_module
 from w8_biayn.integrations.slime_cpp_perf import (
     build_slime_cpp_perf_datasets,
     record_from_debug_sample,
@@ -15,6 +17,10 @@ from w8_biayn.integrations.slime_cpp_perf import (
     write_eval_artifacts,
 )
 from w8_biayn.integrations.slime_moonlight_hf_export import moonlight_deepseekv3_alias
+from w8_biayn.integrations.slime_moonlight_hf_import import (
+    MOONLIGHT_LOCAL_SPEC_ATTENTION_ALIASES,
+    moonlight_local_expert_alias,
+)
 
 
 def sample_task(task_id: str, split: str) -> CppTask:
@@ -61,6 +67,26 @@ def test_moonlight_hf_export_aliases_moonlight_kv_layernorm() -> None:
     assert moonlight_deepseekv3_alias("module.module.decoder.layers.12.input_layernorm.weight") is None
 
 
+def test_moonlight_hf_import_aliases_local_spec_qkv_layernorms() -> None:
+    assert MOONLIGHT_LOCAL_SPEC_ATTENTION_ALIASES["self_attention.q_layernorm.weight"] == [
+        "model.layers.{layer_number}.self_attn.q_a_layernorm.weight"
+    ]
+    assert MOONLIGHT_LOCAL_SPEC_ATTENTION_ALIASES["self_attention.kv_layernorm.weight"] == [
+        "model.layers.{layer_number}.self_attn.kv_a_layernorm.weight"
+    ]
+
+
+def test_moonlight_hf_import_aliases_local_spec_experts() -> None:
+    assert moonlight_local_expert_alias("decoder.layers.7.mlp.experts.local_experts.3.linear_fc1.weight") == [
+        "model.layers.7.mlp.experts.3.gate_proj.weight",
+        "model.layers.7.mlp.experts.3.up_proj.weight",
+    ]
+    assert moonlight_local_expert_alias("decoder.layers.7.mlp.experts.local_experts.3.linear_fc2.weight") == [
+        "model.layers.7.mlp.experts.3.down_proj.weight"
+    ]
+    assert moonlight_local_expert_alias("decoder.layers.7.mlp.router.weight") is None
+
+
 def test_build_slime_cpp_perf_datasets_can_sort_train_rows_by_size(tmp_path: Path) -> None:
     tasks = tmp_path / "tasks"
     long_task = sample_task("train-long", "train")
@@ -82,6 +108,56 @@ def test_build_slime_cpp_perf_datasets_can_sort_train_rows_by_size(tmp_path: Pat
 
     assert sft_rows[0]["task_id"] == "train-short"
     assert manifest["sort_by_size"] is True
+
+
+def test_build_slime_cpp_perf_datasets_can_keep_only_full_mark_oracles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tasks = tmp_path / "tasks"
+    sample_task("train-good", "train").write_json(tasks / "train" / "train-good.json")
+    sample_task("train-bad", "train").write_json(tasks / "train" / "train-bad.json")
+    sample_task("validation-1", "validation").write_json(tasks / "validation" / "validation-1.json")
+
+    def fake_compute_reward(task, model_output, *, runner=None):
+        assert "<reasoning>" in model_output
+        if task.task_id == "train-good":
+            return RewardBreakdown(
+                reward=1.5,
+                reason="correct",
+                harness=HarnessResult(tests_passed=2, tests_total=2, runtime_cpu_ns=8, reference_runtime_cpu_ns=10),
+                format_valid=True,
+            )
+        return RewardBreakdown(
+            reward=-0.1,
+            reason="tests_failed",
+            harness=HarnessResult(tests_passed=1, tests_total=2, runtime_cpu_ns=12, reference_runtime_cpu_ns=10),
+            format_valid=True,
+        )
+
+    monkeypatch.setattr(slime_cpp_perf_module, "compute_reward", fake_compute_reward)
+
+    paths = build_slime_cpp_perf_datasets(
+        tasks,
+        tmp_path / "slime",
+        profile="unit",
+        filter_train_oracle_full_marks=True,
+        oracle_filter_workers=1,
+    )
+
+    sft_rows = _read_jsonl(paths["sft_train"])
+    grpo_rows = _read_jsonl(paths["grpo_train"])
+    oracle_filter_rows = _read_jsonl(paths["oracle_filter"])
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+
+    assert [row["task_id"] for row in sft_rows] == ["train-good"]
+    assert [row["task_id"] for row in grpo_rows] == ["train-good"]
+    assert {row["task_id"]: row["keep"] for row in oracle_filter_rows} == {"train-good": True, "train-bad": False}
+    assert manifest["counts"] == {"copied_tasks": 2, "eval": 1, "train": 1}
+    assert manifest["filter_train_oracle_full_marks"] is True
+    assert manifest["oracle_filter"]["scored"] == 2
+    assert manifest["oracle_filter"]["kept"] == 1
+    assert manifest["oracle_filter"]["reason_counts"] == {"correct": 1, "tests_failed": 1}
 
 
 def test_reward_func_invalid_format_returns_score_dict_without_running_sandbox(tmp_path: Path, monkeypatch) -> None:

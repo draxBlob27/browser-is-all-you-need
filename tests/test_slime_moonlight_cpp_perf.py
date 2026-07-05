@@ -43,10 +43,14 @@ def test_moonlight_cpp_perf_runner_pins_stage_sequence_and_artifacts() -> None:
     assert 'TASKS_DIR="${SLIME_CPP_TASKS_DIR:-${REPO_ROOT}/.w8-biayn/data/tasks-full}"' in text
     assert 'TRAIN_LIMIT="${SLIME_CPP_TRAIN_LIMIT:-2}"' in text
     assert 'SORT_BY_SIZE="${SLIME_CPP_SORT_BY_SIZE:-1}"' in text
+    assert 'FILTER_TRAIN_ORACLE_FULL_MARKS="${SLIME_CPP_FILTER_TRAIN_ORACLE_FULL_MARKS:-0}"' in text
+    assert 'ORACLE_FILTER_WORKERS="${SLIME_CPP_ORACLE_FILTER_WORKERS:-8}"' in text
     assert "w8_biayn.integrations.slime_cpp_perf build-data" in text
     assert "--train-limit" in text
     assert "--eval-limit" in text
     assert "--sort-by-size" in text
+    assert "--filter-train-oracle-full-marks" in text
+    assert "--oracle-filter-workers" in text
     assert 'EVAL_LIMIT="${SLIME_CPP_EVAL_LIMIT:-4}"' in text
     assert "base.records.jsonl" not in text
     assert "--save-debug-rollout-data" in text
@@ -57,6 +61,15 @@ def test_moonlight_cpp_perf_runner_pins_stage_sequence_and_artifacts() -> None:
     assert 'DISTRIBUTED_TIMEOUT_MINUTES="${SLIME_DISTRIBUTED_TIMEOUT_MINUTES:-60}"' in text
     assert "--distributed-timeout-minutes" in text
     assert "distributed_timeout_minutes=${DISTRIBUTED_TIMEOUT_MINUTES}" in text
+    assert 'RAY_OBJECT_STORE_MEMORY="${SLIME_RAY_OBJECT_STORE_MEMORY:-}"' in text
+    assert 'DEFAULT_RAY_OBJECT_STORE_MEMORY_FOR_OFFLOAD="${SLIME_DEFAULT_RAY_OBJECT_STORE_MEMORY_FOR_OFFLOAD:-17179869184}"' in text
+    assert 'RAY_OBJECT_STORE_MEMORY="${DEFAULT_RAY_OBJECT_STORE_MEMORY_FOR_OFFLOAD}"' in text
+    assert "RAY_START_ARGS=(" in text
+    assert '--object-store-memory "${RAY_OBJECT_STORE_MEMORY}"' in text
+    assert "verify_ray_object_store_memory" in text
+    assert "Ray object-store memory mismatch" in text
+    assert "ray_object_store_memory_requested=${RAY_OBJECT_STORE_MEMORY:-}" in text
+    assert "ray_object_store_memory_actual=${RAY_OBJECT_STORE_MEMORY_ACTUAL:-}" in text
     assert 'sft) OPTIMIZER_CPU_OFFLOAD=0 ;;' in text
     assert 'grpo) OPTIMIZER_CPU_OFFLOAD=0 ;;' in text
     assert 'timeout "${SLIME_RAY_STOP_TIMEOUT_SECONDS:-60}" ray stop --force' in text
@@ -125,7 +138,10 @@ def test_moonlight_cpp_perf_runner_has_base_sft_grpo_slime_modes() -> None:
     assert '"SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "${SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK}"' in text
     assert "sglang_disable_tp_memory_inbalance_check=${SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK}" in text
     assert 'CONVERT_MODEL_ARGS=("${MODEL_ARGS[@]}")' in text
-    assert 'SFT_ROLLOUT_BATCH_SIZE="${SLIME_SFT_ROLLOUT_BATCH_SIZE:-2}"' in text
+    assert "w8_biayn.integrations.slime_moonlight_hf_import" in text
+    assert 'CONVERT_EXTRA_ARGS+=(--no-persist-layer-norm --spec "${LOCAL_LAYER_SPEC_MODULE}" "${LOCAL_LAYER_SPEC_NAME}")' in text
+    assert 'SFT_ROLLOUT_BATCH_SIZE="${SLIME_SFT_ROLLOUT_BATCH_SIZE:-1}"' in text
+    assert 'SFT_GLOBAL_BATCH_SIZE="${SLIME_SFT_GLOBAL_BATCH_SIZE:-1}"' in text
     assert 'GRPO_ROLLOUT_BATCH_SIZE="${SLIME_GRPO_ROLLOUT_BATCH_SIZE:-2}"' in text
     assert 'SFT_SKIP_FINAL_TRAIN_SLEEP="${SLIME_SFT_SKIP_FINAL_TRAIN_SLEEP:-1}"' in text
     assert "sft_skip_final_train_sleep=${SFT_SKIP_FINAL_TRAIN_SLEEP}" in text
@@ -205,6 +221,7 @@ def test_moonlight_cpp_perf_runner_configures_wandb_and_local_sandbox() -> None:
     assert "--wandb-project" in text
     assert "slime-moonlight-cpp-perf" in text
     assert "--wandb-run-id" in text
+    assert '"WANDB_ENTITY"' in text
     assert "W8_BIAYN_DATA_DIR" in text
     assert "W8_CPP_SANDBOX_IMAGE" in text
     assert "W8_CPP_SANDBOX_CPU" in text
