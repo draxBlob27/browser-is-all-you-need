@@ -328,6 +328,15 @@ def _glm47_mtp_mappings(hf_config: Any) -> list[Any]:
                         hf_param=f"{hf_prefix}.mlp.gate.e_score_correction_bias",
                     ),
                     GatedMLPMapping(
+                        megatron_param=f"{megatron_prefix}.mlp.shared_experts.linear_fc1.weight",
+                        gate=f"{hf_prefix}.mlp.shared_experts.gate_proj.weight",
+                        up=f"{hf_prefix}.mlp.shared_experts.up_proj.weight",
+                    ),
+                    AutoMapping(
+                        megatron_param=f"{megatron_prefix}.mlp.shared_experts.linear_fc2.weight",
+                        hf_param=f"{hf_prefix}.mlp.shared_experts.down_proj.weight",
+                    ),
+                    GatedMLPMapping(
                         megatron_param=f"{megatron_prefix}.mlp.experts.linear_fc1.weight*",
                         gate=f"{hf_prefix}.mlp.experts.*.gate_proj.weight",
                         up=f"{hf_prefix}.mlp.experts.*.up_proj.weight",
