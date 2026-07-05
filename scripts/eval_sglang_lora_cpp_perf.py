@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import gc
+import inspect
 import json
 import os
 import time
@@ -174,7 +175,7 @@ def generate_rows(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[
             }
         )
 
-    engine = Engine(**engine_kwargs)
+    engine = Engine(**sglang_engine_kwargs(engine_kwargs))
     try:
         if args.adapter:
             engine.load_lora_adapter(args.label, args.adapter)
@@ -234,6 +235,34 @@ def output_text(output: Any) -> str:
         if isinstance(outputs, list) and outputs:
             return output_text(outputs[0])
     return str(output)
+
+
+def sglang_engine_kwargs(engine_kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Return kwargs accepted by the installed SGLang ServerArgs class."""
+
+    try:
+        from sglang.srt.server_args import ServerArgs
+    except ImportError:
+        return engine_kwargs
+    signature = inspect.signature(ServerArgs.__init__)
+    parameters = signature.parameters
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return engine_kwargs
+    return _filter_sglang_server_args(engine_kwargs, set(parameters))
+
+
+def _filter_sglang_server_args(engine_kwargs: dict[str, Any], server_arg_names: set[str]) -> dict[str, Any]:
+    compatible = dict(engine_kwargs)
+    cuda_graph_max_bs = compatible.get("cuda_graph_max_bs")
+    if cuda_graph_max_bs is not None and "cuda_graph_max_bs" not in server_arg_names:
+        compatible.pop("cuda_graph_max_bs", None)
+        if "cuda_graph_max_bs_decode" in server_arg_names:
+            compatible["cuda_graph_max_bs_decode"] = cuda_graph_max_bs
+        if "cuda_graph_max_bs_prefill" in server_arg_names:
+            compatible["cuda_graph_max_bs_prefill"] = cuda_graph_max_bs
+        if "cuda_graph_max_bs_for_capture" in server_arg_names:
+            compatible["cuda_graph_max_bs_for_capture"] = cuda_graph_max_bs
+    return {key: value for key, value in compatible.items() if key in server_arg_names}
 
 
 class PromptFormatter:

@@ -68,3 +68,29 @@ def test_eval_gates_raise_on_bad_truncation_or_format() -> None:
         assert "valid_format_rate" in str(exc)
     else:
         raise AssertionError("expected valid-format gate failure")
+
+
+def test_sglang_server_arg_filter_maps_cuda_graph_batch_alias() -> None:
+    module = _load_eval_module()
+
+    filtered = module._filter_sglang_server_args(
+        {
+            "model_path": "model",
+            "trust_remote_code": True,
+            "cuda_graph_max_bs": 1,
+            "unsupported_future_arg": "drop-me",
+        },
+        {
+            "model_path",
+            "trust_remote_code",
+            "cuda_graph_max_bs_decode",
+            "cuda_graph_max_bs_prefill",
+        },
+    )
+
+    assert filtered == {
+        "model_path": "model",
+        "trust_remote_code": True,
+        "cuda_graph_max_bs_decode": 1,
+        "cuda_graph_max_bs_prefill": 1,
+    }
