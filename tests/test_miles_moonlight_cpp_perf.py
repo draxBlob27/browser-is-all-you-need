@@ -8,16 +8,18 @@ from pathlib import Path
 EXAMPLE_ROOT = Path("examples/miles")
 SFT_RUNNER = EXAMPLE_ROOT / "moonlight_cpp_perf_lora_r16_sft.sh"
 GRPO_RUNNER = EXAMPLE_ROOT / "moonlight_cpp_perf_lora_r16_grpo.sh"
+GLM47_SFT_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_sft.sh"
+GLM47_GRPO_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_grpo.sh"
 
 
 def test_miles_moonlight_lora_r16_scripts_are_present_and_executable() -> None:
-    for script in (SFT_RUNNER, GRPO_RUNNER):
+    for script in (SFT_RUNNER, GRPO_RUNNER, GLM47_SFT_RUNNER, GLM47_GRPO_RUNNER):
         assert script.exists(), script
         assert os.access(script, os.X_OK), script
 
 
 def test_miles_moonlight_lora_r16_scripts_are_bash_syntax_valid() -> None:
-    for script in (SFT_RUNNER, GRPO_RUNNER):
+    for script in (SFT_RUNNER, GRPO_RUNNER, GLM47_SFT_RUNNER, GLM47_GRPO_RUNNER):
         subprocess.run(["bash", "-n", str(script)], check=True)
 
 
@@ -39,3 +41,23 @@ def test_miles_sft_defaults_share_the_2048_sequence_profile() -> None:
     assert 'SEQ_LENGTH="${MILES_SEQ_LENGTH:-2048}"' in text
     assert "seq_length=${SEQ_LENGTH}" in text
     assert "run_receipt.txt" in text
+
+
+def test_miles_moonlight_runners_accept_model_args_overrides() -> None:
+    for script in (SFT_RUNNER, GRPO_RUNNER):
+        text = script.read_text(encoding="utf-8")
+        assert 'MODEL_ARGS_FILE="${MILES_MODEL_ARGS_FILE:-moonlight.sh}"' in text
+        assert 'MODEL_ARGS_PATH="${MILES_MODEL_ARGS_PATH:-${MILES_ROOT}/scripts/models/${MODEL_ARGS_FILE}}"' in text
+        assert 'source "${MODEL_ARGS_PATH}"' in text
+        assert 'SGLANG_LORA_TARGET_MODULES="${MILES_SGLANG_LORA_TARGET_MODULES:-${LORA_TARGET_MODULES}}"' in text
+        assert 'read -r -a SGLANG_LORA_TARGET_MODULE_ARGS <<< "${SGLANG_LORA_TARGET_MODULES//,/ }"' in text
+        assert '--sglang-lora-target-modules "${SGLANG_LORA_TARGET_MODULE_ARGS[@]}"' in text
+
+
+def test_miles_glm47_wrappers_select_glm_defaults() -> None:
+    for script in (GLM47_SFT_RUNNER, GLM47_GRPO_RUNNER):
+        text = script.read_text(encoding="utf-8")
+        assert 'MILES_MODEL_ARGS_FILE="${MILES_MODEL_ARGS_FILE:-glm4.7-flash.sh}"' in text
+        assert 'MILES_HF_CHECKPOINT="${MILES_HF_CHECKPOINT:-/root/models/GLM-4.7-Flash}"' in text
+        assert "q_a_proj,q_b_proj,kv_a_proj_with_mqa,kv_b_proj,o_proj" in text
+        assert 'MILES_WANDB_PROJECT="${MILES_WANDB_PROJECT:-glm47-pie-cpp-posttraining}"' in text

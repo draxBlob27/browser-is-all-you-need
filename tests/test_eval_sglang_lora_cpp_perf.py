@@ -23,6 +23,17 @@ def test_parse_chat_template_kwargs_requires_json_object() -> None:
     assert module.parse_chat_template_kwargs('{"enable_thinking": false}') == {"enable_thinking": False}
 
 
+def test_parse_lora_target_modules_accepts_comma_or_space_lists() -> None:
+    module = _load_eval_module()
+
+    assert module.parse_lora_target_modules("gate_proj,up_proj,down_proj") == [
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ]
+    assert module.parse_lora_target_modules("q_a_proj q_b_proj") == ["q_a_proj", "q_b_proj"]
+
+
 def test_generation_summary_counts_length_finish_reason_as_truncated() -> None:
     module = _load_eval_module()
     generations = [

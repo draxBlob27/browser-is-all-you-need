@@ -12,6 +12,8 @@ else
   MILES_ROOT="/root/slime"
 fi
 PYTHON_BIN="${MILES_PYTHON:-python3}"
+MODEL_ARGS_FILE="${MILES_MODEL_ARGS_FILE:-moonlight.sh}"
+MODEL_ARGS_PATH="${MILES_MODEL_ARGS_PATH:-${MILES_ROOT}/scripts/models/${MODEL_ARGS_FILE}}"
 
 RUN_ID="${MILES_RUN_ID:-moonlight_pie_cpp_lora_r16_sft_$(date +%Y%m%d_%H%M%S)}"
 RUN_ROOT="${MILES_RUN_ROOT:-${REPO_ROOT}/.w8-biayn/miles/moonlight-cpp-perf/runs/${RUN_ID}}"
@@ -49,6 +51,8 @@ SFT_ROLLOUT_SHUFFLE="${MILES_SFT_ROLLOUT_SHUFFLE:-1}"
 LORA_RANK="${MILES_LORA_RANK:-16}"
 LORA_ALPHA="${MILES_LORA_ALPHA:-32}"
 LORA_TARGET_MODULES="${MILES_LORA_TARGET_MODULES:-gate_proj,up_proj,down_proj}"
+SGLANG_LORA_TARGET_MODULES="${MILES_SGLANG_LORA_TARGET_MODULES:-${LORA_TARGET_MODULES}}"
+read -r -a SGLANG_LORA_TARGET_MODULE_ARGS <<< "${SGLANG_LORA_TARGET_MODULES//,/ }"
 SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.20}"
 SGLANG_CUDA_GRAPH_MAX_BS="${MILES_SGLANG_CUDA_GRAPH_MAX_BS:-4}"
 
@@ -71,6 +75,7 @@ echo "run_root=${RUN_ROOT}"
 echo "tasks_dir=${TASKS_DIR}"
 echo "data_dir=${DATA_DIR}"
 echo "hf_checkpoint=${HF_CHECKPOINT}"
+echo "model_args_path=${MODEL_ARGS_PATH}"
 echo "ref_load=${REF_LOAD_DIR}"
 echo "save_dir=${SAVE_DIR}"
 echo "sft_num_epoch=${SFT_NUM_EPOCH}"
@@ -89,6 +94,10 @@ if [ ! -f "${HF_CHECKPOINT}/config.json" ]; then
 fi
 if [ ! -f "${REF_LOAD_DIR}/latest_checkpointed_iteration.txt" ]; then
   echo "Missing Megatron checkpoint: ${REF_LOAD_DIR}" >&2
+  exit 2
+fi
+if [ ! -f "${MODEL_ARGS_PATH}" ]; then
+  echo "Missing model args: ${MODEL_ARGS_PATH}" >&2
   exit 2
 fi
 if ! command -v ray >/dev/null 2>&1; then
@@ -168,6 +177,7 @@ max_memory_used_mib=${max_memory_used_mib}
 data_dir=${DATA_DIR}
 tasks_dir=${TASKS_DIR}
 hf_checkpoint=${HF_CHECKPOINT}
+model_args_path=${MODEL_ARGS_PATH}
 ref_load=${REF_LOAD_DIR}
 save_dir=${SAVE_DIR}
 seq_length=${SEQ_LENGTH}
@@ -215,7 +225,7 @@ fi
 echo "HAS_NVLINK=${HAS_NVLINK} detected_nvlink_refs=${NVLINK_COUNT}"
 
 cd "${MILES_ROOT}"
-source "${MILES_ROOT}/scripts/models/moonlight.sh"
+source "${MODEL_ARGS_PATH}"
 
 CKPT_ARGS=(
   --hf-checkpoint "${HF_CHECKPOINT}"
@@ -234,7 +244,7 @@ LORA_ARGS=(
   --sglang-lora-backend triton
   --sglang-enable-lora
   --sglang-max-lora-rank "${LORA_RANK}"
-  --sglang-lora-target-modules gate_proj up_proj down_proj
+  --sglang-lora-target-modules "${SGLANG_LORA_TARGET_MODULE_ARGS[@]}"
 )
 
 SFT_ARGS=(

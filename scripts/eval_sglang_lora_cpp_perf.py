@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", required=True, help="Directory produced by slime_cpp_perf build-data.")
     parser.add_argument("--model", required=True, help="Base HF model path.")
     parser.add_argument("--adapter", default=None, help="LoRA adapter directory to apply during generation.")
+    parser.add_argument("--lora-target-modules", default="gate_proj,up_proj,down_proj")
     parser.add_argument("--label", default="grpo")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--backend", choices=("sglang", "transformers"), default="sglang")
@@ -107,6 +108,7 @@ def main() -> None:
             "data_dir": str(data_dir),
             "model": args.model,
             "adapter": args.adapter,
+            "lora_target_modules": parse_lora_target_modules(args.lora_target_modules),
             "backend": args.backend,
             "output_dir": str(output_dir),
             "task_count": len(rows),
@@ -178,7 +180,7 @@ def generate_rows_sglang(args: argparse.Namespace, rows: list[dict[str, Any]]) -
             {
                 "enable_lora": True,
                 "max_lora_rank": 16,
-                "lora_target_modules": ["gate_proj", "up_proj", "down_proj"],
+                "lora_target_modules": parse_lora_target_modules(args.lora_target_modules),
                 "lora_backend": "triton",
             }
         )
@@ -399,6 +401,13 @@ def parse_chat_template_kwargs(raw_value: str) -> dict[str, Any]:
     return value
 
 
+def parse_lora_target_modules(raw_value: str) -> list[str]:
+    modules = [item.strip() for item in raw_value.replace(",", " ").split()]
+    if not modules:
+        raise ValueError("--lora-target-modules must name at least one module")
+    return modules
+
+
 def output_finish_reason(output: Any) -> str | None:
     if isinstance(output, dict):
         meta_info = output.get("meta_info")
@@ -493,6 +502,7 @@ def init_wandb(args: argparse.Namespace):
             "label": args.label,
             "model": args.model,
             "adapter": args.adapter,
+            "lora_target_modules": parse_lora_target_modules(args.lora_target_modules),
             "backend": args.backend,
             "max_tasks": args.max_tasks,
             "samples_per_task": args.samples_per_task,
