@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adapter", default=None, help="LoRA adapter directory to apply during generation.")
     parser.add_argument("--label", default="grpo")
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--backend", choices=("sglang", "transformers"), default="sglang")
     parser.add_argument("--max-tasks", type=int, default=None)
     parser.add_argument("--samples-per-task", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -73,7 +74,7 @@ def main() -> None:
     started_at = time.time()
     wandb_run = init_wandb(args)
     print(
-        f"SGLang PIE eval generation start: label={args.label} tasks={len(rows)} "
+        f"PIE eval generation start: backend={args.backend} label={args.label} tasks={len(rows)} "
         f"samples_per_task={args.samples_per_task}",
         flush=True,
     )
@@ -82,14 +83,14 @@ def main() -> None:
     generation_summary = summarize_generations(generations, max_tokens=args.max_tokens)
     write_json(generation_summary_path, generation_summary)
     print(
-        f"SGLang PIE eval generation complete: label={args.label} samples={len(generations)} "
+        f"PIE eval generation complete: backend={args.backend} label={args.label} samples={len(generations)} "
         f"path={generated_path}",
         flush=True,
     )
     _release_cuda_memory()
 
     print(
-        f"SGLang PIE eval scoring start: label={args.label} samples={len(generations)} "
+        f"PIE eval scoring start: label={args.label} samples={len(generations)} "
         f"workers={args.score_workers}",
         flush=True,
     )
@@ -107,6 +108,7 @@ def main() -> None:
             "data_dir": str(data_dir),
             "model": args.model,
             "adapter": args.adapter,
+            "backend": args.backend,
             "output_dir": str(output_dir),
             "task_count": len(rows),
             "sample_count": len(generations),
@@ -131,7 +133,7 @@ def main() -> None:
         artifact_paths=[generated_path, records_path, summary_path, generation_summary_path, receipt_path],
     )
     enforce_eval_gates(args, summary)
-    print(f"SGLang PIE eval scoring complete: label={args.label} path={summary_path}", flush=True)
+    print(f"PIE eval scoring complete: label={args.label} path={summary_path}", flush=True)
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
 
 
@@ -152,6 +154,12 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def generate_rows(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if args.backend == "transformers":
+        return generate_rows_transformers(args, rows)
+    return generate_rows_sglang(args, rows)
+
+
+def generate_rows_sglang(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from sglang import Engine
 
     prompt_formatter = PromptFormatter(args)
@@ -223,6 +231,94 @@ def generate_rows(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[
         return generations
     finally:
         engine.shutdown()
+
+
+def generate_rows_transformers(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if args.adapter:
+        raise ValueError("--backend transformers does not support --adapter in this eval script")
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    prompt_formatter = PromptFormatter(args)
+    tokenizer = prompt_formatter.tokenizer
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model,
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        device_map={"": "cuda:0"} if torch.cuda.is_available() else None,
+        low_cpu_mem_usage=True,
+    )
+    model.eval()
+
+    eos_token_ids = _eos_token_ids(tokenizer)
+    generations: list[dict[str, Any]] = []
+    expanded = []
+    for row in rows:
+        for sample_index in range(args.samples_per_task):
+            expanded.append((row, sample_index))
+
+    do_sample = args.temperature > 0.0
+    with torch.inference_mode():
+        for index, (row, sample_index) in enumerate(expanded, start=1):
+            prompt = prompt_formatter.format(str(row["prompt"]))
+            inputs = tokenizer(prompt, return_tensors="pt")
+            input_ids = inputs["input_ids"].to(model.device)
+            attention_mask = inputs.get("attention_mask")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(model.device)
+            generated_ids = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=args.max_tokens,
+                do_sample=do_sample,
+                temperature=args.temperature if do_sample else None,
+                top_p=args.top_p if do_sample else None,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+            completion_ids = generated_ids[0, input_ids.shape[-1] :]
+            completion_tokens = int(completion_ids.numel())
+            response = tokenizer.decode(completion_ids, skip_special_tokens=True)
+            finish_reason = "length" if completion_tokens >= args.max_tokens else "unknown"
+            if completion_tokens and int(completion_ids[-1]) in eos_token_ids:
+                finish_reason = "stop"
+            generations.append(
+                {
+                    "label": args.label,
+                    "task_id": row.get("task_id"),
+                    "problem_id": row.get("problem_id"),
+                    "split": row.get("split"),
+                    "sample_index": sample_index,
+                    "metadata": row.get("metadata", {}),
+                    "response": response,
+                    "finish_reason": finish_reason,
+                    "completion_tokens": completion_tokens,
+                    "prompt_tokens": int(input_ids.shape[-1]),
+                    "truncated": completion_tokens >= args.max_tokens,
+                }
+            )
+            if index == 1 or index == len(expanded) or index % 10 == 0:
+                print(
+                    "Transformers PIE eval generation progress: "
+                    f"{index}/{len(expanded)}",
+                    flush=True,
+                )
+    return generations
+
+
+def _eos_token_ids(tokenizer: Any) -> set[int]:
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None:
+        return set()
+    if isinstance(eos_token_id, list):
+        return {int(token_id) for token_id in eos_token_id}
+    return {int(eos_token_id)}
 
 
 def output_text(output: Any) -> str:
@@ -397,6 +493,7 @@ def init_wandb(args: argparse.Namespace):
             "label": args.label,
             "model": args.model,
             "adapter": args.adapter,
+            "backend": args.backend,
             "max_tasks": args.max_tasks,
             "samples_per_task": args.samples_per_task,
             "batch_size": args.batch_size,
