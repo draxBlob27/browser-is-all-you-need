@@ -340,7 +340,16 @@ env = {
     "W8_CPP_SANDBOX_CPU": os.environ.get("W8_CPP_SANDBOX_CPU", "1"),
     "W8_CPP_REWARD_WORKERS": os.environ.get("W8_CPP_REWARD_WORKERS", "8"),
 }
-for key in ("CUDA_HOME", "PATH", "LD_LIBRARY_PATH", "HF_HOME", "WANDB_API_KEY", "WANDB_ENTITY", "WANDB_BASE_URL"):
+for key in (
+    "CUDA_HOME",
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "HF_HOME",
+    "WANDB_API_KEY",
+    "WANDB_ENTITY",
+    "WANDB_BASE_URL",
+    "W8_REGISTER_GLM47_BRIDGE",
+):
     if key in os.environ:
         env[key] = os.environ[key]
 print(json.dumps({"env_vars": env}))

@@ -15,6 +15,7 @@ export MILES_REF_LOAD_DIR="${MILES_REF_LOAD_DIR:-${MILES_HF_CHECKPOINT}_torch_di
 export MILES_LORA_TARGET_MODULES="${MILES_LORA_TARGET_MODULES:-q_a_proj,q_b_proj,kv_a_proj_with_mqa,kv_b_proj,o_proj}"
 export MILES_SGLANG_LORA_TARGET_MODULES="${MILES_SGLANG_LORA_TARGET_MODULES:-${MILES_LORA_TARGET_MODULES}}"
 export MILES_TRAIN_MODULE="${MILES_TRAIN_MODULE:-w8_biayn.integrations.miles_train_with_glm47_bridge}"
+export W8_REGISTER_GLM47_BRIDGE="${W8_REGISTER_GLM47_BRIDGE:-1}"
 export MILES_WANDB_PROJECT="${MILES_WANDB_PROJECT:-glm47-pie-cpp-posttraining}"
 export MILES_WANDB_GROUP="${MILES_WANDB_GROUP:-glm47-pie-cpp-lora-r16-sft}"
 export MILES_WANDB_RUN_ID="${MILES_WANDB_RUN_ID:-${RUN_ID}}"

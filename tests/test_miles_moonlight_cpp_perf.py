@@ -78,6 +78,13 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
             'MILES_TRAIN_MODULE="${MILES_TRAIN_MODULE:-w8_biayn.integrations.miles_train_with_glm47_bridge}"'
             in text
         )
+        assert 'W8_REGISTER_GLM47_BRIDGE="${W8_REGISTER_GLM47_BRIDGE:-1}"' in text
+    sft_text = GLM47_SFT_RUNNER.read_text(encoding="utf-8")
+    assert '"W8_REGISTER_GLM47_BRIDGE",' in SFT_RUNNER.read_text(encoding="utf-8")
+    assert "W8_REGISTER_GLM47_BRIDGE" in sft_text
+    assert '\\"W8_REGISTER_GLM47_BRIDGE\\": \\"${W8_REGISTER_GLM47_BRIDGE:-}\\"' in GRPO_RUNNER.read_text(
+        encoding="utf-8"
+    )
     grpo_text = GLM47_GRPO_RUNNER.read_text(encoding="utf-8")
     assert (
         'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
