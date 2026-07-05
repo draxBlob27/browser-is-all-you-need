@@ -6,6 +6,7 @@ import gc
 import json
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +31,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tp-size", type=int, default=4)
     parser.add_argument("--mem-fraction-static", type=float, default=0.35)
     parser.add_argument("--cuda-graph-max-bs", type=int, default=16)
+    parser.add_argument("--apply-chat-template", action="store_true")
+    parser.add_argument("--chat-template-kwargs", default="{}")
+    parser.add_argument("--system-prompt", default="")
     parser.add_argument("--score-workers", type=int, default=16)
     parser.add_argument("--sandbox-image", default=os.environ.get("W8_CPP_SANDBOX_IMAGE", "w8-biayn-cpp-perf:latest"))
     parser.add_argument("--sandbox-cpu", default=os.environ.get("W8_CPP_SANDBOX_CPU", "1"))
+    parser.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", ""))
+    parser.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY", ""))
+    parser.add_argument("--wandb-group", default=os.environ.get("WANDB_GROUP", ""))
+    parser.add_argument("--wandb-run-id", default=os.environ.get("WANDB_RUN_ID", ""))
+    parser.add_argument("--wandb-name", default="")
+    parser.add_argument("--wandb-tags", default="")
+    parser.add_argument("--wandb-mode", default=os.environ.get("WANDB_MODE", "online"))
+    parser.add_argument("--wandb-notes", default="")
+    parser.add_argument("--wandb-log-artifacts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--max-truncated-ratio", type=float, default=None)
+    parser.add_argument("--min-valid-format-rate", type=float, default=None)
     return parser.parse_args()
 
 
@@ -51,9 +66,11 @@ def main() -> None:
     generated_path = output_dir / f"{args.label}.generated.jsonl"
     records_path = output_dir / f"{args.label}.records.jsonl"
     summary_path = output_dir / f"{args.label}.summary.json"
+    generation_summary_path = output_dir / f"{args.label}.generation_summary.json"
     receipt_path = output_dir / f"{args.label}.receipt.json"
 
     started_at = time.time()
+    wandb_run = init_wandb(args)
     print(
         f"SGLang PIE eval generation start: label={args.label} tasks={len(rows)} "
         f"samples_per_task={args.samples_per_task}",
@@ -61,6 +78,8 @@ def main() -> None:
     )
     generations = generate_rows(args, rows)
     write_jsonl(generated_path, generations)
+    generation_summary = summarize_generations(generations, max_tokens=args.max_tokens)
+    write_json(generation_summary_path, generation_summary)
     print(
         f"SGLang PIE eval generation complete: label={args.label} samples={len(generations)} "
         f"path={generated_path}",
@@ -77,6 +96,8 @@ def main() -> None:
     write_jsonl(records_path, records)
     summary = aggregate_eval_records(records, label=args.label)
     summary.pop("best_records", None)
+    summary.update(generation_summary)
+    summary["valid_format_rate"] = 1.0 - float(summary.get("invalid_format_rate", 0.0))
     write_json(summary_path, summary)
     write_json(
         receipt_path,
@@ -93,12 +114,22 @@ def main() -> None:
             "top_p": args.top_p,
             "max_tokens": args.max_tokens,
             "tp_size": args.tp_size,
+            "apply_chat_template": args.apply_chat_template,
+            "chat_template_kwargs": parse_chat_template_kwargs(args.chat_template_kwargs),
             "elapsed_seconds": time.time() - started_at,
             "summary_path": str(summary_path),
+            "generation_summary_path": str(generation_summary_path),
             "records_path": str(records_path),
             "generated_path": str(generated_path),
         },
     )
+    log_wandb(
+        wandb_run,
+        args,
+        summary=summary,
+        artifact_paths=[generated_path, records_path, summary_path, generation_summary_path, receipt_path],
+    )
+    enforce_eval_gates(args, summary)
     print(f"SGLang PIE eval scoring complete: label={args.label} path={summary_path}", flush=True)
     print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
 
@@ -122,6 +153,7 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def generate_rows(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from sglang import Engine
 
+    prompt_formatter = PromptFormatter(args)
     engine_kwargs: dict[str, Any] = {
         "model_path": args.model,
         "trust_remote_code": True,
@@ -160,7 +192,7 @@ def generate_rows(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[
         }
         for start in range(0, len(expanded), args.batch_size):
             batch = expanded[start : start + args.batch_size]
-            prompts = [str(row["prompt"]) for row, _sample_index in batch]
+            prompts = [prompt_formatter.format(str(row["prompt"])) for row, _sample_index in batch]
             lora_paths = [args.label] * len(prompts) if args.adapter else None
             outputs = engine.generate(prompts, sampling_params, lora_path=lora_paths)
             if isinstance(outputs, dict):
@@ -175,6 +207,10 @@ def generate_rows(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[
                         "sample_index": sample_index,
                         "metadata": row.get("metadata", {}),
                         "response": output_text(output),
+                        "finish_reason": output_finish_reason(output),
+                        "completion_tokens": output_token_count(output, "completion"),
+                        "prompt_tokens": output_token_count(output, "prompt"),
+                        "truncated": output_is_truncated(output, args.max_tokens),
                     }
                 )
             if len(generations) == len(batch) or len(generations) % 100 == 0 or len(generations) == len(expanded):
@@ -198,6 +234,191 @@ def output_text(output: Any) -> str:
         if isinstance(outputs, list) and outputs:
             return output_text(outputs[0])
     return str(output)
+
+
+class PromptFormatter:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.apply_chat_template = bool(args.apply_chat_template)
+        self.system_prompt = str(args.system_prompt or "")
+        self.chat_template_kwargs = parse_chat_template_kwargs(args.chat_template_kwargs)
+        self.tokenizer = None
+        if self.apply_chat_template:
+            from transformers import AutoTokenizer
+
+            self.tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+
+    def format(self, prompt: str) -> str:
+        if not self.apply_chat_template:
+            return prompt
+        messages = []
+        if self.system_prompt:
+            messages.append({"role": "system", "content": self.system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        assert self.tokenizer is not None
+        return str(
+            self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                **self.chat_template_kwargs,
+            )
+        )
+
+
+def parse_chat_template_kwargs(raw_value: str) -> dict[str, Any]:
+    if not raw_value:
+        return {}
+    value = json.loads(raw_value)
+    if not isinstance(value, dict):
+        raise ValueError("--chat-template-kwargs must decode to a JSON object")
+    return value
+
+
+def output_finish_reason(output: Any) -> str | None:
+    if isinstance(output, dict):
+        meta_info = output.get("meta_info")
+        if isinstance(meta_info, dict):
+            finish_reason = meta_info.get("finish_reason")
+            if isinstance(finish_reason, dict):
+                reason_type = finish_reason.get("type") or finish_reason.get("reason")
+                return str(reason_type) if reason_type is not None else json.dumps(finish_reason, sort_keys=True)
+            if finish_reason is not None:
+                return str(finish_reason)
+        outputs = output.get("outputs")
+        if isinstance(outputs, list) and outputs:
+            return output_finish_reason(outputs[0])
+    return None
+
+
+def output_token_count(output: Any, token_kind: str) -> int | None:
+    keys = (
+        ("completion_tokens", "num_completion_tokens", "output_tokens", "num_output_tokens")
+        if token_kind == "completion"
+        else ("prompt_tokens", "num_prompt_tokens", "input_tokens", "num_input_tokens")
+    )
+    if isinstance(output, dict):
+        meta_info = output.get("meta_info")
+        if isinstance(meta_info, dict):
+            for key in keys:
+                value = meta_info.get(key)
+                if isinstance(value, int):
+                    return value
+        for key in keys:
+            value = output.get(key)
+            if isinstance(value, int):
+                return value
+        outputs = output.get("outputs")
+        if isinstance(outputs, list) and outputs:
+            return output_token_count(outputs[0], token_kind)
+    return None
+
+
+def output_is_truncated(output: Any, max_tokens: int) -> bool:
+    finish_reason = output_finish_reason(output)
+    if finish_reason and finish_reason.lower() in {"length", "max_tokens", "abort_length"}:
+        return True
+    completion_tokens = output_token_count(output, "completion")
+    return completion_tokens is not None and completion_tokens >= max_tokens
+
+
+def summarize_generations(generations: list[dict[str, Any]], *, max_tokens: int) -> dict[str, Any]:
+    count = len(generations)
+    truncated = [item for item in generations if item.get("truncated") is True]
+    response_lengths = [len(str(item.get("response", ""))) for item in generations]
+    completion_tokens = [
+        int(item["completion_tokens"]) for item in generations if isinstance(item.get("completion_tokens"), int)
+    ]
+    prompt_tokens = [int(item["prompt_tokens"]) for item in generations if isinstance(item.get("prompt_tokens"), int)]
+    finish_reasons = Counter(str(item.get("finish_reason") or "unknown") for item in generations)
+    return {
+        "generation_sample_count": count,
+        "max_tokens": max_tokens,
+        "truncated_count": len(truncated),
+        "truncated_ratio": len(truncated) / count if count else 0.0,
+        "finish_reason_counts": dict(sorted(finish_reasons.items())),
+        "mean_response_chars": _mean_float(response_lengths),
+        "mean_completion_tokens": _mean_float(completion_tokens),
+        "mean_prompt_tokens": _mean_float(prompt_tokens),
+    }
+
+
+def _mean_float(values: list[int]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def init_wandb(args: argparse.Namespace):
+    if not args.wandb_project:
+        return None
+    try:
+        import wandb
+    except ImportError:
+        print("W&B logging requested but wandb is not installed; continuing without W&B.", flush=True)
+        return None
+    tags = [tag.strip() for tag in args.wandb_tags.split(",") if tag.strip()]
+    return wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity or None,
+        group=args.wandb_group or None,
+        id=args.wandb_run_id or None,
+        name=args.wandb_name or args.wandb_run_id or None,
+        mode=args.wandb_mode,
+        notes=args.wandb_notes or None,
+        tags=tags or None,
+        config={
+            "label": args.label,
+            "model": args.model,
+            "adapter": args.adapter,
+            "max_tasks": args.max_tasks,
+            "samples_per_task": args.samples_per_task,
+            "batch_size": args.batch_size,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "max_tokens": args.max_tokens,
+            "tp_size": args.tp_size,
+            "mem_fraction_static": args.mem_fraction_static,
+            "cuda_graph_max_bs": args.cuda_graph_max_bs,
+            "apply_chat_template": args.apply_chat_template,
+            "chat_template_kwargs": parse_chat_template_kwargs(args.chat_template_kwargs),
+        },
+    )
+
+
+def log_wandb(
+    wandb_run: Any,
+    args: argparse.Namespace,
+    *,
+    summary: dict[str, Any],
+    artifact_paths: list[Path],
+) -> None:
+    if wandb_run is None:
+        return
+    import wandb
+
+    scalar_metrics = {
+        key: value
+        for key, value in summary.items()
+        if isinstance(value, int | float) and not isinstance(value, bool)
+    }
+    wandb.log(scalar_metrics)
+    for key, value in summary.items():
+        wandb_run.summary[key] = value
+    if args.wandb_log_artifacts:
+        artifact = wandb.Artifact(f"pie-cpp-eval-{args.label}", type="eval")
+        for path in artifact_paths:
+            artifact.add_file(str(path))
+        wandb_run.log_artifact(artifact)
+    wandb_run.finish()
+
+
+def enforce_eval_gates(args: argparse.Namespace, summary: dict[str, Any]) -> None:
+    if args.max_truncated_ratio is not None and float(summary["truncated_ratio"]) > args.max_truncated_ratio:
+        raise SystemExit(
+            f"truncated_ratio {summary['truncated_ratio']:.4f} exceeds gate {args.max_truncated_ratio:.4f}"
+        )
+    if args.min_valid_format_rate is not None and float(summary["valid_format_rate"]) < args.min_valid_format_rate:
+        raise SystemExit(
+            f"valid_format_rate {summary['valid_format_rate']:.4f} below gate {args.min_valid_format_rate:.4f}"
+        )
 
 
 def score_rows(args: argparse.Namespace, data_dir: Path, generations: list[dict[str, Any]]) -> list[dict[str, Any]]:
