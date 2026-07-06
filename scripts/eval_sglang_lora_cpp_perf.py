@@ -22,6 +22,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True, help="Base HF model path.")
     parser.add_argument("--adapter", default=None, help="LoRA adapter directory to apply during generation.")
     parser.add_argument("--lora-target-modules", default="gate_proj,up_proj,down_proj")
+    parser.add_argument(
+        "--experts-shared-outer-loras",
+        action="store_true",
+        help="Serve adapters trained with the shared-outer expert LoRA contract (GLM-4.7-Flash).",
+    )
+    parser.add_argument(
+        "--lora-use-virtual-experts",
+        action="store_true",
+        help="Enable SGLang virtual-expert LoRA modules for MoE expert adapters.",
+    )
     parser.add_argument("--label", default="grpo")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--backend", choices=("sglang", "transformers"), default="sglang")
@@ -184,6 +194,10 @@ def generate_rows_sglang(args: argparse.Namespace, rows: list[dict[str, Any]]) -
                 "lora_backend": "triton",
             }
         )
+        if args.experts_shared_outer_loras:
+            engine_kwargs["experts_shared_outer_loras"] = True
+        if args.lora_use_virtual_experts:
+            engine_kwargs["lora_use_virtual_experts"] = True
 
     engine = Engine(**sglang_engine_kwargs(engine_kwargs))
     try:

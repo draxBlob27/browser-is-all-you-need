@@ -105,3 +105,41 @@ def test_sglang_server_arg_filter_maps_cuda_graph_batch_alias() -> None:
         "cuda_graph_max_bs_decode": 1,
         "cuda_graph_max_bs_prefill": 1,
     }
+
+
+def test_shared_outer_lora_serving_flags_parse_and_default_off(monkeypatch) -> None:
+    module = _load_eval_module()
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "eval_sglang_lora_cpp_perf.py",
+            "--data-dir",
+            "data",
+            "--model",
+            "model",
+            "--output-dir",
+            "out",
+        ],
+    )
+    args = module.parse_args()
+    assert args.experts_shared_outer_loras is False
+    assert args.lora_use_virtual_experts is False
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "eval_sglang_lora_cpp_perf.py",
+            "--data-dir",
+            "data",
+            "--model",
+            "model",
+            "--output-dir",
+            "out",
+            "--experts-shared-outer-loras",
+            "--lora-use-virtual-experts",
+        ],
+    )
+    args = module.parse_args()
+    assert args.experts_shared_outer_loras is True
+    assert args.lora_use_virtual_experts is True
