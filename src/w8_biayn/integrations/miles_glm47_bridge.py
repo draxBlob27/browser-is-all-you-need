@@ -12,13 +12,31 @@ _SGLANG_MEM_POOL_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
-    """Register GLM-4.7-Flash Lite with Megatron Bridge inside Miles."""
+    """Register GLM-4.7-Flash Lite with Megatron Bridge inside Miles.
 
-    _patch_mbridge_glm47_lite()
-    _patch_shared_outer_expert_adapter_replication()
+    Installs post-import hooks only — no heavy imports happen here. This runs
+    at interpreter startup in every gated process via sitecustomize, including
+    Ray's node agents; eagerly importing megatron.bridge/mbridge from those
+    agents stalls `ray start` past its node-start deadline. Each patch fires
+    right after its target module finishes importing, in processes that
+    actually load that module.
+    """
+
+    # Legacy mbridge registry: Miles never imports miles_plugins.mbridge on its
+    # own, and plugin/registry import order is not fixed, so hook both sides;
+    # _MBRIDGE_PATCHED keeps the patch idempotent.
+    _when_imported("mbridge.core.bridge", lambda module: _patch_mbridge_glm47_lite())
+    _when_imported("miles_plugins.mbridge", lambda module: _patch_mbridge_glm47_lite())
+    _when_imported(
+        "megatron.bridge.peft.utils",
+        lambda module: _patch_shared_outer_expert_adapter_replication(),
+    )
     _patch_sglang_lora_sync_skip_mtp()
     _patch_sglang_lora_mem_pool_ordering()
+    _when_imported("megatron.bridge", lambda module: _register_glm47_bridge_class())
 
+
+def _register_glm47_bridge_class() -> None:
     global _REGISTERED
     if _REGISTERED:
         return

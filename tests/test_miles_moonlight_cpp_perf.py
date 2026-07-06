@@ -274,3 +274,42 @@ def test_glm47_bridge_orders_sglang_mem_pool_per_expert_first() -> None:
         "self_attn.o_proj.lora_A.weight",
     ]
     assert observed[-1][1] == ["self_attn.o_proj.lora_A.weight"]
+
+
+def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch) -> None:
+    """Registration must be lazy: it runs via sitecustomize at interpreter startup
+    in every gated process (including Ray node agents, where an eager
+    megatron.bridge import once stalled `ray start` past its deadline)."""
+
+    import importlib.abc
+
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    heavy_roots = ("megatron", "mbridge", "miles_plugins", "transformers", "modelopt")
+    attempted: list[str] = []
+
+    class RecordingFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname.split(".")[0] in heavy_roots:
+                attempted.append(fullname)
+            return None
+
+    recorder = RecordingFinder()
+    monkeypatch.setattr(miles_glm47_bridge, "_REGISTERED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_MBRIDGE_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_SHARED_OUTER_CKPT_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_LORA_SYNC_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_SGLANG_MEM_POOL_PATCHED", False)
+    before_meta_path = list(sys.meta_path)
+    sys.meta_path.insert(0, recorder)
+    try:
+        miles_glm47_bridge.register_glm47_bridge()
+        assert attempted == []
+        added = [f for f in sys.meta_path if f is not recorder and f not in before_meta_path]
+        # one lazy hook per patch target: mbridge.core.bridge, miles_plugins.mbridge,
+        # megatron.bridge.peft.utils, miles update_weight module, sglang mem_pool,
+        # and megatron.bridge for the bridge-class registration
+        assert len(added) == 6
+    finally:
+        sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
+        sys.meta_path.remove(recorder)
