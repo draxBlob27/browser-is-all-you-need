@@ -7,6 +7,7 @@ from typing import Any
 _REGISTERED = False
 _MBRIDGE_PATCHED = False
 _SHARED_OUTER_CKPT_PATCHED = False
+_LORA_SYNC_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
@@ -14,6 +15,7 @@ def register_glm47_bridge() -> None:
 
     _patch_mbridge_glm47_lite()
     _patch_shared_outer_expert_adapter_replication()
+    _patch_sglang_lora_sync_skip_mtp()
 
     global _REGISTERED
     if _REGISTERED:
@@ -194,6 +196,98 @@ def _patch_shared_outer_expert_adapter_replication() -> None:
     adapter_cls.sharded_state_dict = sharded_state_dict
     adapter_cls._w8_ep_replica_patched = True
     _SHARED_OUTER_CKPT_PATCHED = True
+
+
+def _when_imported(module_name: str, callback) -> None:
+    """Run callback(module) now if imported, else right after its import completes."""
+
+    import importlib.abc
+    import importlib.util
+    import sys
+
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        callback(existing)
+        return
+
+    class _Finder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname != module_name:
+                return None
+            sys.meta_path.remove(self)
+            spec = importlib.util.find_spec(fullname)
+            if spec is None or spec.loader is None:
+                return None
+            wrapped = spec.loader
+
+            class _Loader(importlib.abc.Loader):
+                def create_module(self, spec_inner):
+                    return wrapped.create_module(spec_inner)
+
+                def exec_module(self, module):
+                    wrapped.exec_module(module)
+                    callback(module)
+
+            spec.loader = _Loader()
+            return spec
+
+    sys.meta_path.insert(0, _Finder())
+
+
+def _patch_sglang_lora_sync_skip_mtp() -> None:
+    """Keep MTP-layer adapter tensors out of the SGLang LoRA sync payload.
+
+    The trainer exports MTP adapters as HF layer indices >= num_layers (layer 47
+    for GLM-4.7-Flash). SGLang serves only the decoder layers and rejects the
+    whole adapter with 'index 47 is out of range', which kills rollout weight
+    sync. MTP adapters keep training on the Megatron side; generation does not
+    execute the MTP head, so dropping them from the rollout payload is lossless.
+    """
+
+    global _LORA_SYNC_PATCHED
+    if _LORA_SYNC_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_SGLANG_MTP_FILTER", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    _LORA_SYNC_PATCHED = True
+    _when_imported(
+        "miles.backends.megatron_utils.update_weight.update_weight_from_tensor",
+        _apply_sglang_lora_mtp_filter,
+    )
+
+
+def _apply_sglang_lora_mtp_filter(module) -> None:
+    import re
+
+    cls = getattr(module, "UpdateWeightFromTensor", None)
+    if cls is None or getattr(cls, "_w8_mtp_filter_patched", False):
+        return
+
+    original_send = cls._send_lora_params
+    layer_pattern = re.compile(r"\.layers\.(\d+)\.")
+
+    def _send_lora_params(self, hf_named_tensors):
+        num_layers = getattr(getattr(self, "args", None), "num_layers", None)
+        if num_layers:
+            kept = []
+            dropped = []
+            for name, tensor in hf_named_tensors:
+                match = layer_pattern.search(name)
+                if match and int(match.group(1)) >= num_layers:
+                    dropped.append(name)
+                    continue
+                kept.append((name, tensor))
+            if dropped and kept:
+                print(
+                    f"w8 GLM47 rollout LoRA sync: dropping {len(dropped)} MTP adapter tensors "
+                    f"(hf layer >= {num_layers}), e.g. {dropped[0]}",
+                    flush=True,
+                )
+                hf_named_tensors = kept
+        return original_send(self, hf_named_tensors)
+
+    cls._send_lora_params = _send_lora_params
+    cls._w8_mtp_filter_patched = True
 
 
 def _glm47_base_mappings() -> list[Any]:

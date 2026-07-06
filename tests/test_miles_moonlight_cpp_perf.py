@@ -195,3 +195,44 @@ def test_glm47_bridge_marks_shared_outer_lora_as_ep_replicated(monkeypatch) -> N
     miles_glm47_bridge._patch_shared_outer_expert_adapter_replication()
     rewrapped = FakeSharedOuterAdapter(is_fc1=True, replica_id=(0, 0, 0)).sharded_state_dict(prefix="d.")
     assert rewrapped["d.linear_in.weight"].replica_id == (0, 0, 3)
+
+
+def test_glm47_bridge_drops_mtp_adapters_from_sglang_lora_sync() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    sent = []
+
+    class FakeUpdater:
+        def __init__(self, num_layers):
+            self.args = types.SimpleNamespace(num_layers=num_layers)
+
+        def _send_lora_params(self, hf_named_tensors):
+            sent.append(list(hf_named_tensors))
+            return [], None
+
+    fake_module = types.ModuleType("miles.backends.megatron_utils.update_weight.update_weight_from_tensor")
+    fake_module.UpdateWeightFromTensor = FakeUpdater
+
+    miles_glm47_bridge._apply_sglang_lora_mtp_filter(fake_module)
+    assert FakeUpdater._w8_mtp_filter_patched is True
+
+    tensors = [
+        ("base_model.model.model.layers.0.self_attn.q_a_proj.lora_A.weight", "t0"),
+        ("base_model.model.model.layers.46.mlp.gate_proj.lora_B.weight", "t46"),
+        ("base_model.model.model.layers.47.mlp.shared_experts.gate_proj.lora_A.weight", "t47"),
+    ]
+    FakeUpdater(num_layers=47)._send_lora_params(tensors)
+    assert [name for name, _ in sent[-1]] == [
+        "base_model.model.model.layers.0.self_attn.q_a_proj.lora_A.weight",
+        "base_model.model.model.layers.46.mlp.gate_proj.lora_B.weight",
+    ]
+
+    # All-MTP payload must pass through unfiltered rather than become empty.
+    only_mtp = [("base_model.model.model.layers.47.mlp.gate_proj.lora_A.weight", "t")]
+    FakeUpdater(num_layers=47)._send_lora_params(only_mtp)
+    assert sent[-1] == only_mtp
+
+    # Double application must not re-wrap.
+    miles_glm47_bridge._apply_sglang_lora_mtp_filter(fake_module)
+    FakeUpdater(num_layers=47)._send_lora_params(tensors)
+    assert len(sent[-1]) == 2
