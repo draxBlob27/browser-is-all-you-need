@@ -236,3 +236,41 @@ def test_glm47_bridge_drops_mtp_adapters_from_sglang_lora_sync() -> None:
     miles_glm47_bridge._apply_sglang_lora_mtp_filter(fake_module)
     FakeUpdater(num_layers=47)._send_lora_params(tensors)
     assert len(sent[-1]) == 2
+
+
+def test_glm47_bridge_orders_sglang_mem_pool_per_expert_first() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    observed = []
+
+    class FakePool:
+        def load_lora_weight_to_buffer(self, uid, buffer_id, lora_adapter, *args, **kwargs):
+            observed.append([list(layer.weights) for layer in lora_adapter.layers])
+            return "ok"
+
+    fake_module = types.ModuleType("sglang.srt.lora.mem_pool")
+    fake_module.LoRAMemoryPool = FakePool
+
+    miles_glm47_bridge._apply_sglang_mem_pool_ordering(fake_module)
+    assert FakePool._w8_expert_order_patched is True
+
+    shared_first = types.SimpleNamespace(
+        weights={
+            "mlp.experts.gate_proj.lora_A.weight": "shared3d",
+            "mlp.experts.0.gate_proj.lora_B.weight": "e0",
+            "mlp.experts.1.gate_proj.lora_B.weight": "e1",
+            "self_attn.o_proj.lora_A.weight": "attn",
+        }
+    )
+    no_experts = types.SimpleNamespace(weights={"self_attn.o_proj.lora_A.weight": "attn"})
+    adapter = types.SimpleNamespace(layers=[shared_first, no_experts])
+
+    result = FakePool().load_lora_weight_to_buffer("uid", 0, adapter)
+    assert result == "ok"
+    assert observed[-1][0] == [
+        "mlp.experts.0.gate_proj.lora_B.weight",
+        "mlp.experts.1.gate_proj.lora_B.weight",
+        "mlp.experts.gate_proj.lora_A.weight",
+        "self_attn.o_proj.lora_A.weight",
+    ]
+    assert observed[-1][1] == ["self_attn.o_proj.lora_A.weight"]

@@ -8,6 +8,7 @@ _REGISTERED = False
 _MBRIDGE_PATCHED = False
 _SHARED_OUTER_CKPT_PATCHED = False
 _LORA_SYNC_PATCHED = False
+_SGLANG_MEM_POOL_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
@@ -16,6 +17,7 @@ def register_glm47_bridge() -> None:
     _patch_mbridge_glm47_lite()
     _patch_shared_outer_expert_adapter_replication()
     _patch_sglang_lora_sync_skip_mtp()
+    _patch_sglang_lora_mem_pool_ordering()
 
     global _REGISTERED
     if _REGISTERED:
@@ -288,6 +290,57 @@ def _apply_sglang_lora_mtp_filter(module) -> None:
 
     cls._send_lora_params = _send_lora_params
     cls._w8_mtp_filter_patched = True
+
+
+def _patch_sglang_lora_mem_pool_ordering() -> None:
+    """Feed per-expert LoRA tensors to SGLang's memory pool before shared ones.
+
+    SGLang's ``LoRAMemoryPool.load_lora_weight_to_buffer`` initializes its
+    per-module temp dicts only when the first weight it sees for a module is
+    per-expert. Under the shared-outer contract, fc1 ships a shared 3D lora_A
+    plus per-expert lora_B; if the shared tensor is iterated first, the
+    per-expert branch later re-guards ``temp_B_buffer`` but not
+    ``temp_B_cache_keys`` and the scheduler dies with "'NoneType' object does
+    not support item assignment". Reordering each layer's weights dict
+    per-expert-first makes SGLang's own init path set up all four temp dicts.
+    """
+
+    global _SGLANG_MEM_POOL_PATCHED
+    if _SGLANG_MEM_POOL_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_SGLANG_MEMPOOL_ORDER_PATCH", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    _SGLANG_MEM_POOL_PATCHED = True
+    _when_imported("sglang.srt.lora.mem_pool", _apply_sglang_mem_pool_ordering)
+
+
+def _apply_sglang_mem_pool_ordering(module) -> None:
+    import re
+
+    cls = getattr(module, "LoRAMemoryPool", None)
+    if cls is None or getattr(cls, "_w8_expert_order_patched", False):
+        return
+
+    original_load = cls.load_lora_weight_to_buffer
+    per_expert_pattern = re.compile(r"experts\.\d+\.")
+
+    def load_lora_weight_to_buffer(self, uid, buffer_id, lora_adapter, *args, **kwargs):
+        for layer in getattr(lora_adapter, "layers", None) or []:
+            weights = getattr(layer, "weights", None)
+            if not isinstance(weights, dict):
+                continue
+            per_expert = {n: w for n, w in weights.items() if per_expert_pattern.search(n)}
+            if not per_expert or len(per_expert) == len(weights):
+                continue
+            for name, weight in weights.items():
+                if name not in per_expert:
+                    per_expert[name] = weight
+            layer.weights = per_expert
+        return original_load(self, uid, buffer_id, lora_adapter, *args, **kwargs)
+
+    cls.load_lora_weight_to_buffer = load_lora_weight_to_buffer
+    cls._w8_expert_order_patched = True
+    print("w8 GLM47: SGLang LoRA mem-pool per-expert-first ordering active", flush=True)
 
 
 def _glm47_base_mappings() -> list[Any]:
