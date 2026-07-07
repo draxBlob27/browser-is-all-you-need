@@ -239,12 +239,17 @@ source "${MODEL_ARGS_PATH}"
 
 CKPT_ARGS=(
   --hf-checkpoint "${HF_CHECKPOINT}"
-  --ref-load "${REF_LOAD_DIR}"
   --load "${REF_LOAD_DIR}"
   --save "${SAVE_DIR}"
   --save-interval "${MILES_SAVE_INTERVAL:-1}"
   --megatron-to-hf-mode bridge
 )
+# The ref model is only needed for KL/ref-logprob paths. With kl 0 it is pure
+# overhead, and its per-cycle tag switching is under investigation for LoRA
+# state reversion (#11); MILES_NO_REF=1 drops it.
+if [ "${MILES_NO_REF:-0}" != "1" ]; then
+  CKPT_ARGS+=(--ref-load "${REF_LOAD_DIR}")
+fi
 
 LORA_ARGS=(
   --lora-rank "${LORA_RANK}"

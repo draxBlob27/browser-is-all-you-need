@@ -401,3 +401,9 @@ def test_grpo_runner_eval_prompt_data_is_configurable() -> None:
 def test_grpo_runner_supports_raw_extra_args() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'read -r -a EXTRA_ARGS <<< "${MILES_EXTRA_ARGS}"' in text
+
+
+def test_grpo_runner_ref_load_is_optional() -> None:
+    text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert 'if [ "${MILES_NO_REF:-0}" != "1" ]; then' in text
+    assert text.count('--ref-load "${REF_LOAD_DIR}"') == 1
