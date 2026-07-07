@@ -384,3 +384,9 @@ def test_router_circuit_breaker_patch_disables_breaker_and_widens_queue() -> Non
     # no double wrap
     miles_glm47_bridge._apply_router_cb_patch(fake_module)
     assert FakeRouterArgs.from_cli_args(object()).queue_size == 4096
+
+
+def test_grpo_runner_exposes_server_concurrency() -> None:
+    text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert 'SGLANG_SERVER_CONCURRENCY="${MILES_SGLANG_SERVER_CONCURRENCY:-512}"' in text
+    assert '--sglang-server-concurrency "${SGLANG_SERVER_CONCURRENCY}"' in text
