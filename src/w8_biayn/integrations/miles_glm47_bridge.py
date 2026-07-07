@@ -10,6 +10,7 @@ _SHARED_OUTER_CKPT_PATCHED = False
 _LORA_SYNC_PATCHED = False
 _SGLANG_MEM_POOL_PATCHED = False
 _ROUTER_CB_PATCHED = False
+_WARM_START_OPT_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
@@ -35,6 +36,7 @@ def register_glm47_bridge() -> None:
     _patch_sglang_lora_sync_skip_mtp()
     _patch_sglang_lora_mem_pool_ordering()
     _patch_router_circuit_breaker()
+    _patch_warm_start_optimizer_reload()
     _when_imported("megatron.bridge", lambda module: _register_glm47_bridge_class())
 
 
@@ -276,6 +278,51 @@ def _patch_sglang_lora_sync_skip_mtp() -> None:
         "miles.backends.megatron_utils.update_weight.update_weight_from_tensor",
         _apply_sglang_lora_mtp_filter,
     )
+
+
+def _patch_warm_start_optimizer_reload() -> None:
+    """Refresh optimizer fp32 master params after a LoRA warm-start load.
+
+    Megatron's distributed optimizer snapshots fp32 master copies of the
+    trainable (adapter) params when the optimizer is BUILT — before Miles'
+    ``load_lora_adapter`` copies the warm-start weights into the model. The
+    first ``optimizer.step()`` then writes the stale init-time masters (random
+    lora_A, zero lora_B) back over the model, silently resetting the adapter to
+    a blank state regardless of lr. Proven by lr=0 forensics (#11): sync 1
+    ships warm weights, every later sync ships fresh-init values. Calling
+    ``optimizer.reload_model_params()`` after a successful warm-start load
+    re-snapshots the masters from the loaded weights.
+    """
+
+    global _WARM_START_OPT_PATCHED
+    if _WARM_START_OPT_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_WARM_START_OPT_RELOAD", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    _WARM_START_OPT_PATCHED = True
+    _when_imported("miles.backends.megatron_utils.lora_utils", _apply_warm_start_optimizer_reload)
+
+
+def _apply_warm_start_optimizer_reload(module) -> None:
+    original_load = getattr(module, "load_lora_adapter", None)
+    if original_load is None or getattr(module, "_w8_opt_reload_patched", False):
+        return
+
+    def load_lora_adapter(model, adapter_path, *, optimizer=None, opt_param_scheduler=None):
+        loaded, iteration = original_load(
+            model, adapter_path, optimizer=optimizer, opt_param_scheduler=opt_param_scheduler
+        )
+        if loaded and optimizer is not None and hasattr(optimizer, "reload_model_params"):
+            optimizer.reload_model_params()
+            print(
+                "w8 GLM47 warm start: optimizer.reload_model_params() after adapter load "
+                "(fp32 masters now match the loaded adapter)",
+                flush=True,
+            )
+        return loaded, iteration
+
+    module.load_lora_adapter = load_lora_adapter
+    module._w8_opt_reload_patched = True
 
 
 def _dump_sync_forensics(updater, hf_named_tensors, out_dir) -> None:

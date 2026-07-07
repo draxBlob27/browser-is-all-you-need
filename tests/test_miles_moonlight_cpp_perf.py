@@ -301,6 +301,7 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
     monkeypatch.setattr(miles_glm47_bridge, "_LORA_SYNC_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_SGLANG_MEM_POOL_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_ROUTER_CB_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_WARM_START_OPT_PATCHED", False)
     before_meta_path = list(sys.meta_path)
     sys.meta_path.insert(0, recorder)
     try:
@@ -309,8 +310,9 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
         added = [f for f in sys.meta_path if f is not recorder and f not in before_meta_path]
         # one lazy hook per patch target: mbridge.core.bridge, miles_plugins.mbridge,
         # megatron.bridge.peft.utils, miles update_weight module, sglang mem_pool,
-        # miles router_manager, and megatron.bridge for the bridge-class registration
-        assert len(added) == 7
+        # miles router_manager, miles lora_utils (optimizer reload), and
+        # megatron.bridge for the bridge-class registration
+        assert len(added) == 8
     finally:
         sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
         sys.meta_path.remove(recorder)
@@ -407,3 +409,32 @@ def test_grpo_runner_ref_load_is_optional() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'if [ "${MILES_NO_REF:-0}" != "1" ]; then' in text
     assert text.count('--ref-load "${REF_LOAD_DIR}"') == 1
+
+
+def test_warm_start_reloads_optimizer_master_params() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    calls = []
+
+    class FakeOptimizer:
+        def reload_model_params(self):
+            calls.append("reloaded")
+
+    def fake_load(model, adapter_path, *, optimizer=None, opt_param_scheduler=None):
+        return True, 244
+
+    fake_module = types.SimpleNamespace(load_lora_adapter=fake_load)
+    miles_glm47_bridge._apply_warm_start_optimizer_reload(fake_module)
+
+    loaded, iteration = fake_module.load_lora_adapter([], "/x", optimizer=FakeOptimizer())
+    assert (loaded, iteration) == (True, 244)
+    assert calls == ["reloaded"]
+
+    # not-loaded path must not touch the optimizer
+    def fake_load_fail(model, adapter_path, *, optimizer=None, opt_param_scheduler=None):
+        return False, None
+
+    fake_module2 = types.SimpleNamespace(load_lora_adapter=fake_load_fail)
+    miles_glm47_bridge._apply_warm_start_optimizer_reload(fake_module2)
+    fake_module2.load_lora_adapter([], "/x", optimizer=FakeOptimizer())
+    assert calls == ["reloaded"]
