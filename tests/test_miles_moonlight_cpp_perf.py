@@ -319,3 +319,8 @@ def test_grpo_runner_supports_adapter_init_passthrough() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'LORA_ADAPTER_PATH="${MILES_LORA_ADAPTER_PATH:-}"' in text
     assert '--lora-adapter-path "${LORA_ADAPTER_PATH}"' in text
+
+
+def test_grpo_runner_save_interval_is_configurable() -> None:
+    text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert '--save-interval "${MILES_SAVE_INTERVAL:-1}"' in text

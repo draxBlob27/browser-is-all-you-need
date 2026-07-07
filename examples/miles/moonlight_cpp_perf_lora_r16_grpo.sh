@@ -232,7 +232,7 @@ CKPT_ARGS=(
   --ref-load "${REF_LOAD_DIR}"
   --load "${REF_LOAD_DIR}"
   --save "${SAVE_DIR}"
-  --save-interval 1
+  --save-interval "${MILES_SAVE_INTERVAL:-1}"
   --megatron-to-hf-mode bridge
 )
 
