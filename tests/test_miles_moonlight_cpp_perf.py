@@ -331,3 +331,29 @@ def test_grpo_runner_guards_existing_data_from_forced_rebuild() -> None:
     guard = 'if [ ! -f "${DATA_DIR}/grpo/train.jsonl" ]; then'
     assert text.count(guard) == 2
     assert text.index(guard) < text.index('BUILD_DATA_ARGS[@]}"')
+
+
+def test_warm_start_marks_engine_adapter_preloaded() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    class FakeArgs:
+        num_layers = 47
+        lora_adapter_path = "/some/adapter"
+
+    class FakeArgsNoWarmStart:
+        num_layers = 47
+        lora_adapter_path = None
+
+    class FakeUpdater:
+        def __init__(self, args):
+            self.args = args
+            self._lora_loaded = False
+
+        def _send_lora_params(self, hf_named_tensors):
+            return hf_named_tensors
+
+    fake_module = types.SimpleNamespace(UpdateWeightFromTensor=FakeUpdater)
+    miles_glm47_bridge._apply_sglang_lora_mtp_filter(fake_module)
+
+    assert FakeUpdater(FakeArgs())._lora_loaded is True
+    assert FakeUpdater(FakeArgsNoWarmStart())._lora_loaded is False

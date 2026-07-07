@@ -307,6 +307,20 @@ def _apply_sglang_lora_mtp_filter(module) -> None:
         return original_send(self, hf_named_tensors)
 
     cls._send_lora_params = _send_lora_params
+
+    # Warm starts (--lora-adapter-path) make the SGLang engine pre-load the
+    # adapter from disk at boot, but the actor's _lora_loaded flag starts False,
+    # so the first tensor sync skips the unload and the engine rejects the load
+    # with "already loaded". Mark the adapter as loaded when a warm-start path
+    # is configured so Miles' own unload-then-load branch handles the first sync.
+    original_init = cls.__init__
+
+    def __init__(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        if getattr(getattr(self, "args", None), "lora_adapter_path", None) and hasattr(self, "_lora_loaded"):
+            self._lora_loaded = True
+
+    cls.__init__ = __init__
     cls._w8_mtp_filter_patched = True
 
 
