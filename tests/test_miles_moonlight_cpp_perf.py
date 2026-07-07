@@ -313,3 +313,9 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
     finally:
         sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
         sys.meta_path.remove(recorder)
+
+
+def test_grpo_runner_supports_adapter_init_passthrough() -> None:
+    text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert 'LORA_ADAPTER_PATH="${MILES_LORA_ADAPTER_PATH:-}"' in text
+    assert '--lora-adapter-path "${LORA_ADAPTER_PATH}"' in text

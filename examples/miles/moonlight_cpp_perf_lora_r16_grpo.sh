@@ -246,6 +246,12 @@ LORA_ARGS=(
   --sglang-max-lora-rank "${LORA_RANK}"
   --sglang-lora-target-modules "${SGLANG_LORA_TARGET_MODULE_ARGS[@]}"
 )
+# Initialize adapter weights from a prior run (e.g. GRPO warm-started from the
+# SFT adapter): point at an iter_*/adapter dir with Megatron-native shards.
+LORA_ADAPTER_PATH="${MILES_LORA_ADAPTER_PATH:-}"
+if [ -n "${LORA_ADAPTER_PATH}" ]; then
+  LORA_ARGS+=(--lora-adapter-path "${LORA_ADAPTER_PATH}")
+fi
 if [ "${EXPERTS_SHARED_OUTER_LORAS}" = "1" ]; then
   LORA_ARGS+=(--experts-shared-outer-loras)
 fi
