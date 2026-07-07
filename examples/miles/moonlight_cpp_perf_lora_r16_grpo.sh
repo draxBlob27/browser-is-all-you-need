@@ -372,6 +372,11 @@ MISC_ARGS=(
   --attention-softmax-in-fp32
   --save-debug-rollout-data "${ROLLOUT_DUMP_TEMPLATE}"
 )
+# Raw passthrough for experiments (e.g. --sglang-disable-cuda-graph); appended last.
+if [ -n "${MILES_EXTRA_ARGS:-}" ]; then
+  read -r -a EXTRA_ARGS <<< "${MILES_EXTRA_ARGS}"
+  MISC_ARGS+=("${EXTRA_ARGS[@]}")
+fi
 
 ray start --head \
   --node-ip-address "${RAY_NODE_IP_ADDRESS}" \

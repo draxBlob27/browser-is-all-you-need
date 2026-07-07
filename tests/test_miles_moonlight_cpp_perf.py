@@ -396,3 +396,8 @@ def test_grpo_runner_eval_prompt_data_is_configurable() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'EVAL_PROMPT_DATA="${MILES_EVAL_PROMPT_DATA:-}"' in text
     assert '--eval-prompt-data pie_cpp "${EVAL_PROMPT_DATA:-${DATA_DIR}/eval/validation.jsonl}"' in text
+
+
+def test_grpo_runner_supports_raw_extra_args() -> None:
+    text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert 'read -r -a EXTRA_ARGS <<< "${MILES_EXTRA_ARGS}"' in text
