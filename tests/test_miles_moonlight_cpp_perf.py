@@ -390,3 +390,9 @@ def test_grpo_runner_exposes_server_concurrency() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'SGLANG_SERVER_CONCURRENCY="${MILES_SGLANG_SERVER_CONCURRENCY:-512}"' in text
     assert '--sglang-server-concurrency "${SGLANG_SERVER_CONCURRENCY}"' in text
+
+
+def test_grpo_runner_eval_prompt_data_is_configurable() -> None:
+    text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert 'EVAL_PROMPT_DATA="${MILES_EVAL_PROMPT_DATA:-}"' in text
+    assert '--eval-prompt-data pie_cpp "${EVAL_PROMPT_DATA:-${DATA_DIR}/eval/validation.jsonl}"' in text

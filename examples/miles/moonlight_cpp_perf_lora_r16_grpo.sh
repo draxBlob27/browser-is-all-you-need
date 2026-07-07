@@ -54,6 +54,7 @@ TRAIN_MODULE="${MILES_TRAIN_MODULE:-}"
 EVAL_INTERVAL="${MILES_EVAL_INTERVAL:-1}"
 EVAL_N_SAMPLES_PER_PROMPT="${MILES_EVAL_N_SAMPLES_PER_PROMPT:-1}"
 EVAL_MAX_RESPONSE_LEN="${MILES_EVAL_MAX_RESPONSE_LEN:-1536}"
+EVAL_PROMPT_DATA="${MILES_EVAL_PROMPT_DATA:-}"
 
 LORA_RANK="${MILES_LORA_RANK:-16}"
 LORA_ALPHA="${MILES_LORA_ALPHA:-32}"
@@ -298,7 +299,7 @@ fi
 
 EVAL_ARGS=(
   --eval-interval "${EVAL_INTERVAL}"
-  --eval-prompt-data pie_cpp "${DATA_DIR}/eval/validation.jsonl"
+  --eval-prompt-data pie_cpp "${EVAL_PROMPT_DATA:-${DATA_DIR}/eval/validation.jsonl}"
   --eval-input-key prompt
   --eval-label-key label
   --n-samples-per-eval-prompt "${EVAL_N_SAMPLES_PER_PROMPT}"
