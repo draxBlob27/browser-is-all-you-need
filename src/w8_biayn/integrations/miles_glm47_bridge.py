@@ -9,6 +9,7 @@ _MBRIDGE_PATCHED = False
 _SHARED_OUTER_CKPT_PATCHED = False
 _LORA_SYNC_PATCHED = False
 _SGLANG_MEM_POOL_PATCHED = False
+_ROUTER_CB_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
@@ -33,6 +34,7 @@ def register_glm47_bridge() -> None:
     )
     _patch_sglang_lora_sync_skip_mtp()
     _patch_sglang_lora_mem_pool_ordering()
+    _patch_router_circuit_breaker()
     _when_imported("megatron.bridge", lambda module: _register_glm47_bridge_class())
 
 
@@ -322,6 +324,51 @@ def _apply_sglang_lora_mtp_filter(module) -> None:
 
     cls.__init__ = __init__
     cls._w8_mtp_filter_patched = True
+
+
+def _patch_router_circuit_breaker() -> None:
+    """Disable the sgl-router circuit breaker for single-worker colocated runs.
+
+    Rollout and eval submit hundreds of concurrent requests to a router with
+    exactly one worker behind it. The overflow beyond the router's tiny default
+    queue (100) fails instantly; ten failures inside the breaker window open the
+    circuit, and with no second worker to fail over to every retry sees 503
+    "no_available_workers" until Miles' retry budget (~75s) expires and the job
+    tears down a perfectly healthy engine. A breaker only makes sense with
+    replicas; here it converts a burst into a fatal error. Also widen the queue
+    so submission bursts wait instead of failing.
+    """
+
+    global _ROUTER_CB_PATCHED
+    if _ROUTER_CB_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_ROUTER_CB_PATCH", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    _ROUTER_CB_PATCHED = True
+    _when_imported("miles.ray.rollout.router_manager", _apply_router_cb_patch)
+
+
+def _apply_router_cb_patch(module) -> None:
+    router_args_cls = getattr(module, "RouterArgs", None)
+    if router_args_cls is None or getattr(router_args_cls, "_w8_cb_patched", False):
+        return
+
+    original_from_cli_args = router_args_cls.from_cli_args
+
+    def from_cli_args(*args, **kwargs):
+        router_args = original_from_cli_args(*args, **kwargs)
+        router_args.disable_circuit_breaker = True
+        router_args.queue_size = max(4096, int(getattr(router_args, "queue_size", 0) or 0))
+        router_args.queue_timeout_secs = max(1800, int(getattr(router_args, "queue_timeout_secs", 0) or 0))
+        print(
+            "w8 GLM47 router patch: circuit breaker disabled, "
+            f"queue_size={router_args.queue_size}, queue_timeout_secs={router_args.queue_timeout_secs}",
+            flush=True,
+        )
+        return router_args
+
+    router_args_cls.from_cli_args = staticmethod(from_cli_args)
+    router_args_cls._w8_cb_patched = True
 
 
 def _patch_sglang_lora_mem_pool_ordering() -> None:

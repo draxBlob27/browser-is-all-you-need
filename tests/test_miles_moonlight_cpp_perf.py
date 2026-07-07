@@ -300,6 +300,7 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
     monkeypatch.setattr(miles_glm47_bridge, "_SHARED_OUTER_CKPT_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_LORA_SYNC_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_SGLANG_MEM_POOL_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_ROUTER_CB_PATCHED", False)
     before_meta_path = list(sys.meta_path)
     sys.meta_path.insert(0, recorder)
     try:
@@ -308,8 +309,8 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
         added = [f for f in sys.meta_path if f is not recorder and f not in before_meta_path]
         # one lazy hook per patch target: mbridge.core.bridge, miles_plugins.mbridge,
         # megatron.bridge.peft.utils, miles update_weight module, sglang mem_pool,
-        # and megatron.bridge for the bridge-class registration
-        assert len(added) == 6
+        # miles router_manager, and megatron.bridge for the bridge-class registration
+        assert len(added) == 7
     finally:
         sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
         sys.meta_path.remove(recorder)
@@ -357,3 +358,29 @@ def test_warm_start_marks_engine_adapter_preloaded() -> None:
 
     assert FakeUpdater(FakeArgs())._lora_loaded is True
     assert FakeUpdater(FakeArgsNoWarmStart())._lora_loaded is False
+
+
+def test_router_circuit_breaker_patch_disables_breaker_and_widens_queue() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    class FakeRouterArgs:
+        def __init__(self):
+            self.disable_circuit_breaker = False
+            self.queue_size = 100
+            self.queue_timeout_secs = 60
+
+        @classmethod
+        def from_cli_args(cls, args, use_router_prefix=False):
+            return cls()
+
+    fake_module = types.SimpleNamespace(RouterArgs=FakeRouterArgs)
+    miles_glm47_bridge._apply_router_cb_patch(fake_module)
+
+    router_args = FakeRouterArgs.from_cli_args(object(), use_router_prefix=True)
+    assert router_args.disable_circuit_breaker is True
+    assert router_args.queue_size == 4096
+    assert router_args.queue_timeout_secs == 1800
+
+    # no double wrap
+    miles_glm47_bridge._apply_router_cb_patch(fake_module)
+    assert FakeRouterArgs.from_cli_args(object()).queue_size == 4096
