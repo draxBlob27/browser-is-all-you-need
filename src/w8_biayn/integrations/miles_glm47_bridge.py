@@ -278,6 +278,55 @@ def _patch_sglang_lora_sync_skip_mtp() -> None:
     )
 
 
+def _dump_sync_forensics(updater, hf_named_tensors, out_dir) -> None:
+    """Per-sync fingerprint of the gathered adapter tensors (W8_GLM47_SYNC_FORENSICS).
+
+    With lr=0 every sync must ship bit-identical tensors; a fingerprint change
+    between syncs convicts the trainer side (offload/wake or gather), while
+    identical fingerprints with degraded generations convict the engine side.
+    """
+    import hashlib
+    import json
+    import os as _os
+
+    try:
+        rank = int(_os.environ.get("RANK", "0"))
+    except ValueError:
+        rank = 0
+    _os.makedirs(out_dir, exist_ok=True)
+    count = getattr(updater, "_w8_forensic_sync_count", 0) + 1
+    updater._w8_forensic_sync_count = count
+
+    entries = {}
+    digest = hashlib.sha256()
+    for name, tensor in sorted(hf_named_tensors, key=lambda item: item[0]):
+        t = tensor.detach().float().cpu()
+        entries[name] = {
+            "shape": list(t.shape),
+            "sum_abs": float(t.abs().sum()),
+            "max_abs": float(t.abs().max()) if t.numel() else 0.0,
+            "first3": t.flatten()[:3].tolist(),
+        }
+        digest.update(name.encode())
+        digest.update(t.numpy().tobytes())
+    payload = {
+        "sync": count,
+        "rank": rank,
+        "n_tensors": len(entries),
+        "sha256": digest.hexdigest(),
+        "total_sum_abs": sum(e["sum_abs"] for e in entries.values()),
+        "tensors": entries,
+    }
+    path = _os.path.join(out_dir, f"sync{count:02d}_rank{rank}.json")
+    with open(path, "w") as fh:
+        json.dump(payload, fh)
+    print(
+        f"w8 sync forensics: sync={count} rank={rank} tensors={len(entries)} "
+        f"sha256={payload['sha256'][:16]} total_sum_abs={payload['total_sum_abs']:.3f}",
+        flush=True,
+    )
+
+
 def _apply_sglang_lora_mtp_filter(module) -> None:
     import re
 
@@ -289,6 +338,9 @@ def _apply_sglang_lora_mtp_filter(module) -> None:
     layer_pattern = re.compile(r"\.layers\.(\d+)\.")
 
     def _send_lora_params(self, hf_named_tensors):
+        forensics_dir = os.environ.get("W8_GLM47_SYNC_FORENSICS", "").strip()
+        if forensics_dir:
+            _dump_sync_forensics(self, hf_named_tensors, forensics_dir)
         num_layers = getattr(getattr(self, "args", None), "num_layers", None)
         if num_layers:
             kept = []
