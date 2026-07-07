@@ -324,3 +324,10 @@ def test_grpo_runner_supports_adapter_init_passthrough() -> None:
 def test_grpo_runner_save_interval_is_configurable() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert '--save-interval "${MILES_SAVE_INTERVAL:-1}"' in text
+
+
+def test_grpo_runner_guards_existing_data_from_forced_rebuild() -> None:
+    text = GRPO_RUNNER.read_text(encoding="utf-8")
+    guard = 'if [ ! -f "${DATA_DIR}/grpo/train.jsonl" ]; then'
+    assert text.count(guard) == 2
+    assert text.index(guard) < text.index('BUILD_DATA_ARGS[@]}"')

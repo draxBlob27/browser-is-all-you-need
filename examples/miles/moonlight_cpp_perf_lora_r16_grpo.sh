@@ -135,7 +135,15 @@ if [ "${FILTER_TRAIN_ORACLE_FULL_MARKS}" = "1" ]; then
   BUILD_DATA_ARGS+=(--filter-train-oracle-full-marks --oracle-filter-workers "${ORACLE_FILTER_WORKERS}")
 fi
 
-PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" "${BUILD_DATA_ARGS[@]}"
+# Skip the (destructive, --force) rebuild when the data dir is already
+# populated — same contract as the SFT runner's manifest guard.
+if [ ! -f "${DATA_DIR}/grpo/train.jsonl" ]; then
+  PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" "${BUILD_DATA_ARGS[@]}"
+fi
+if [ ! -f "${DATA_DIR}/grpo/train.jsonl" ]; then
+  echo "Missing GRPO train data: ${DATA_DIR}/grpo/train.jsonl" >&2
+  exit 2
+fi
 
 monitor_vram() {
   echo "timestamp,index,memory.used,memory.total,utilization.gpu" > "${VRAM_LOG}"
