@@ -244,6 +244,38 @@ def test_sandbox_dry_run_and_runtime_parser():
     assert parse_runtime_benchmark_output("") is None
 
 
+def test_local_sandbox_backend_drops_docker_and_keeps_timing_semantics(monkeypatch):
+    from w8_biayn.cpp_perf.sandbox import compile_command, sandbox_backend
+
+    monkeypatch.setenv("W8_CPP_SANDBOX_BACKEND", "local")
+    assert sandbox_backend() == "local"
+
+    compile_cmd = compile_command(sample_task(), "/tmp/w8")
+    assert compile_cmd[0] == "bash"
+    assert "docker" not in " ".join(compile_cmd)
+    assert compile_cmd[-1].startswith("cd ")
+    assert "tmp/w8" in compile_cmd[-1]
+    assert "g++ -O3 -std=c++20 candidate.cpp -o candidate" in compile_cmd[-1]
+
+    # taskset pinning and timeout stay identical to the Docker scripts
+    test_cmd = " ".join(run_test_command(0, "/tmp/w8", cpu="5"))
+    assert "taskset -c 5" in test_cmd
+    assert "timeout" in test_cmd
+    assert "docker" not in test_cmd
+
+    plan = dry_run_plan(sample_task(), image="gcc:13", cpu="3")
+    assert "--network none" not in plan
+
+    monkeypatch.setenv("W8_CPP_SANDBOX_BACKEND", "podman")
+    with pytest.raises(ValueError, match="docker|local"):
+        sandbox_backend()
+
+    # docker stays the default backend
+    monkeypatch.delenv("W8_CPP_SANDBOX_BACKEND")
+    assert sandbox_backend() == "docker"
+    assert compile_command(sample_task(), "/tmp/w8")[0] == "docker"
+
+
 def test_runtime_benchmark_skips_output_validation_for_reference_only():
     # The trusted reference oracle is timed without re-checking its stdout; the
     # candidate is still validated. This is what keeps a benignly-formatted oracle

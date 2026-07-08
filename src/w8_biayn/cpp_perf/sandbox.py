@@ -23,6 +23,43 @@ DEFAULT_MEMORY = "2g"
 DEFAULT_RUN_TIMEOUT_S = 5
 DEFAULT_RUNTIME_WARMUPS = 1
 DEFAULT_RUNTIME_REPEATS = 3
+SANDBOX_BACKEND_ENV = "W8_CPP_SANDBOX_BACKEND"
+
+
+def sandbox_backend() -> str:
+    """Selected sandbox backend: ``docker`` (default) or ``local``.
+
+    ``local`` runs the same stage scripts directly in this process's container
+    with the working directory set to the scratch dir — for hosts without a
+    Docker daemon (Modal's gVisor runtime). ``timeout`` and ``taskset`` timing
+    semantics are identical; the Docker cgroup memory/pids caps and read-only
+    rootfs do not apply, so candidate and oracle still race in the same
+    environment but without container isolation.
+    """
+
+    backend = os.environ.get(SANDBOX_BACKEND_ENV, "docker").strip().lower() or "docker"
+    if backend not in ("docker", "local"):
+        raise ValueError(f"{SANDBOX_BACKEND_ENV} must be docker|local, got: {backend}")
+    return backend
+
+
+def sandbox_command(
+    scratch: str | Path,
+    script: str,
+    *,
+    image: str = DEFAULT_DOCKER_IMAGE,
+    memory: str = DEFAULT_MEMORY,
+) -> list[str]:
+    """Wrap one stage script for the selected backend.
+
+    Every harness stage is a bash script using paths relative to the scratch
+    dir; Docker mode mounts scratch at /work, local mode cd's into it.
+    """
+
+    if sandbox_backend() == "local":
+        wrapped = f"cd {shlex.quote(str(Path(scratch).resolve()))} && ulimit -c 0 && {script}"
+        return ["bash", "-lc", wrapped]
+    return docker_base_args(scratch, image=image, memory=memory) + ["bash", "-lc", script]
 
 
 @dataclass(frozen=True)
@@ -129,12 +166,12 @@ def build_sandbox_image(*, image: str = DEFAULT_DOCKER_IMAGE) -> subprocess.Comp
 
 def compile_command(task: CppTask, scratch: str | Path, *, image: str = DEFAULT_DOCKER_IMAGE) -> list[str]:
     script = f"timeout {task.build.timeout_s}s {task.build.cmd}"
-    return docker_base_args(scratch, image=image) + ["bash", "-lc", script]
+    return sandbox_command(scratch, script, image=image)
 
 
 def reference_compile_command(task: CppTask, scratch: str | Path, *, image: str = DEFAULT_DOCKER_IMAGE) -> list[str]:
     script = f"timeout {task.build.timeout_s}s g++ {task.reference.compiler_flags} reference.cpp -o reference"
-    return docker_base_args(scratch, image=image) + ["bash", "-lc", script]
+    return sandbox_command(scratch, script, image=image)
 
 
 def sanitizer_command(task: CppTask, scratch: str | Path, *, image: str = DEFAULT_DOCKER_IMAGE) -> list[str]:
@@ -143,7 +180,7 @@ def sanitizer_command(task: CppTask, scratch: str | Path, *, image: str = DEFAUL
         f"{task.build.timeout_s}s g++ -O1 -g -std=c++20 -fsanitize=address,undefined "
         "candidate.cpp -o candidate_san"
     )
-    return docker_base_args(scratch, image=image) + ["bash", "-lc", script]
+    return sandbox_command(scratch, script, image=image)
 
 
 def run_test_command(
@@ -169,7 +206,7 @@ def run_test_command(
         f"normalize tests/{index}.actual > tests/{index}.actual.norm && "
         f"diff -u tests/{index}.expected.norm tests/{index}.actual.norm"
     )
-    return docker_base_args(scratch, image=image) + ["bash", "-lc", script]
+    return sandbox_command(scratch, script, image=image)
 
 
 def runtime_benchmark_command(
@@ -193,7 +230,7 @@ def runtime_benchmark_command(
         repeats=repeats,
         validate_output=validate_output,
     )
-    return docker_base_args(scratch, image=image) + ["bash", "-lc", script]
+    return sandbox_command(scratch, script, image=image)
 
 
 def runtime_preflight_command(
@@ -222,7 +259,7 @@ def runtime_preflight_command(
             repeats=repeats,
         )
     )
-    return docker_base_args(scratch, image=image) + ["bash", "-lc", script]
+    return sandbox_command(scratch, script, image=image)
 
 
 def dry_run_plan(
