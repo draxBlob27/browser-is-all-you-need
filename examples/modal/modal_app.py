@@ -1,0 +1,242 @@
+"""Modal 8x H100 runner for the GLM-4.7-Flash Miles lane.
+
+One app, one heavy function. Every stage (convert / probe / sft / grpo) runs
+the repo's own launcher scripts inside the Miles image on a single 8x H100
+container; volumes carry the model, data, and run outputs across containers.
+
+Stages:
+    modal run examples/modal/modal_app.py::download_weights
+    modal run examples/modal/modal_app.py::convert
+    modal run examples/modal/modal_app.py::probe
+    modal run examples/modal/modal_app.py::sft
+    modal run examples/modal/modal_app.py::grpo
+
+Discipline (from the slime-sss lane, reimplemented Modal-native):
+- fail-fast W&B auth check before any GPU minute is spent
+- per-stage receipt (env + git SHA + timing) written to the runs volume
+- C++ runtime preflight (local backend) before reward-bearing stages
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+
+import modal
+
+REPO_URL = "https://github.com/tokenbender/browser-is-all-you-need.git"
+REPO_REF = os.environ.get("W8_MODAL_REPO_REF", "pie-slime-posttraining")
+MILES_IMAGE = os.environ.get("W8_MODAL_MILES_IMAGE", "radixark/miles:latest-cu12")
+HF_MODEL_ID = "zai-org/GLM-4.7-Flash"
+
+REPO_DIR = "/workspace/browser-is-all-you-need"
+MODELS_DIR = "/root/models"
+RUNS_DIR = "/workspace/runs"
+DATA_DIR = "/data"
+
+app = modal.App("glm47-pie-cpp")
+
+models_vol = modal.Volume.from_name("glm47-models", create_if_missing=True)
+data_vol = modal.Volume.from_name("glm47-data", create_if_missing=True)
+runs_vol = modal.Volume.from_name("glm47-runs", create_if_missing=True)
+
+# The gcc:13 sandbox image used on the A100 line compiled with GCC 13; install
+# the same major version from the toolchain PPA so oracle-vs-candidate timing
+# runs under the closest compiler. Reward fairness is relative (both sides use
+# the same g++), but keeping the major version avoids gratuitous drift.
+image = (
+    modal.Image.from_registry(MILES_IMAGE)
+    .apt_install("software-properties-common", "rsync", "gawk", "util-linux", "git")
+    .run_commands(
+        "add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update "
+        "&& DEBIAN_FRONTEND=noninteractive apt-get install -y g++-13 gcc-13 "
+        "&& update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100 "
+        "&& update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 "
+        "|| echo 'gcc-13 PPA unavailable; falling back to distro g++'",
+    )
+    .pip_install("huggingface_hub[hf_transfer]")
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+)
+
+GPU_KW = dict(
+    image=image,
+    gpu="H100!:8",
+    cpu=48.0,
+    memory=(262_144, 1_048_576),  # request 256 GiB host RAM (trainer offload ~150 GiB), no tight cap
+    timeout=86_400,
+    volumes={MODELS_DIR: models_vol, DATA_DIR: data_vol, RUNS_DIR: runs_vol},
+    secrets=[modal.Secret.from_name("wandb-glm47")],
+)
+
+
+def _sh(cmd: str, *, cwd: str | None = None, env: dict[str, str] | None = None) -> None:
+    print(f"+ {cmd}", flush=True)
+    merged = {**os.environ, **(env or {})}
+    subprocess.run(["bash", "-lc", cmd], cwd=cwd, env=merged, check=True)
+
+
+def _checkout(sha: str) -> None:
+    if not Path(REPO_DIR, ".git").exists():
+        _sh(f"git clone --branch {REPO_REF} {REPO_URL} {REPO_DIR}")
+    _sh(f"git fetch origin {REPO_REF} && git checkout {sha or f'origin/{REPO_REF}'}", cwd=REPO_DIR)
+    _sh("git rev-parse HEAD", cwd=REPO_DIR)
+
+
+def _wandb_check() -> None:
+    """Fail before burning GPU time if W&B capture cannot work."""
+    _sh(
+        "python -c \"import os,wandb;"
+        "assert os.environ.get('WANDB_API_KEY'),'WANDB_API_KEY missing';"
+        "v=wandb.Api(timeout=30).viewer; print('wandb_auth_ok', v.entity)\""
+    )
+
+
+def _reward_preflight() -> None:
+    """Prove local-backend CPU-time measurement works before reward stages."""
+    env = {**os.environ, "W8_CPP_SANDBOX_BACKEND": "local", "PYTHONPATH": f"{REPO_DIR}/src"}
+    out = subprocess.run(
+        [
+            "python",
+            "-c",
+            "from w8_biayn.cpp_perf.sandbox import run_runtime_preflight;"
+            "import json; r = run_runtime_preflight(cpu='3');"
+            "print(json.dumps(r.as_dict(), default=str))",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    print(out.stdout[-2000:], out.stderr[-2000:], flush=True)
+    payload = json.loads(out.stdout.strip().splitlines()[-1])
+    if not payload.get("ok"):
+        raise RuntimeError(f"local reward preflight failed: {payload.get('reason')}")
+    print(f"reward_preflight_ok cpu_ns={payload['runtime_cpu_ns']}", flush=True)
+
+
+def _receipt(stage: str, run_id: str, extra: dict) -> None:
+    receipt_dir = Path(RUNS_DIR, "receipts")
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_DIR, capture_output=True, text=True
+    ).stdout.strip()
+    body = {
+        "stage": stage,
+        "run_id": run_id,
+        "repo_sha": sha,
+        "image": MILES_IMAGE,
+        "env": {k: v for k, v in os.environ.items() if k.startswith(("MILES_", "W8_"))},
+        **extra,
+    }
+    (receipt_dir / f"{run_id}.{stage}.json").write_text(json.dumps(body, indent=2))
+    runs_vol.commit()
+
+
+def _base_env(run_id: str) -> dict[str, str]:
+    return {
+        "MILES_RUN_ID": run_id,
+        "MILES_RUN_ROOT": f"{RUNS_DIR}/issue10-miles/{run_id}",
+        "MILES_HF_CHECKPOINT": f"{MODELS_DIR}/GLM-4.7-Flash",
+        "MILES_REF_LOAD_DIR": f"{MODELS_DIR}/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8",
+        "MILES_CPP_DATA_DIR": f"{DATA_DIR}/glm47-pie-data-sft-full-seq4096",
+        "MILES_CPP_TASKS_DIR": f"{DATA_DIR}/pie-tasks-full-20260706",
+        "W8_CPP_SANDBOX_BACKEND": "local",
+        "W8_CPP_REWARD_WORKERS": "32",
+        "WANDB_MODE": os.environ.get("WANDB_MODE", "online"),
+        "WANDB_DIR": f"{RUNS_DIR}/wandb",
+        "PYTHONUNBUFFERED": "1",
+    }
+
+
+def _run_stage(script: str, run_id: str, env: dict[str, str], stage: str) -> None:
+    _wandb_check()
+    started = time.time()
+    Path(RUNS_DIR, "wandb").mkdir(parents=True, exist_ok=True)
+    # PYTHONPATH must stay unset at launch (sitecustomize import storm breaks
+    # Ray node start); the runner rebuilds it inside the Ray runtime env.
+    _sh(
+        f"unset PYTHONPATH && cd {REPO_DIR} && bash {script}",
+        env=env,
+    )
+    _receipt(stage, run_id, {"wall_s": round(time.time() - started, 1), "script": script})
+
+
+slim_image = (
+    modal.Image.debian_slim()
+    .pip_install("huggingface_hub[hf_transfer]")
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+)
+
+
+@app.function(image=slim_image, timeout=14_400, cpu=16.0, volumes={MODELS_DIR: models_vol})
+def download_weights() -> None:
+    """Pull the HF checkpoint into the models volume (CPU-only container)."""
+    target = f"{MODELS_DIR}/GLM-4.7-Flash"
+    _sh(f"hf download {HF_MODEL_ID} --local-dir {target}")
+    _sh(f"ls {target} | head; du -sh {target}")
+    models_vol.commit()
+
+
+@app.function(**GPU_KW)
+def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") -> str:
+    """Run one lane stage on the 8x H100 container."""
+    _checkout(sha)
+    _sh("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | sort | uniq -c")
+    rid = run_id or f"glm47_h100_{stage}_{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    env = _base_env(rid)
+    env.update(json.loads(env_overrides))
+
+    if stage == "convert":
+        started = time.time()
+        _sh(
+            f"cd {REPO_DIR} && unset PYTHONPATH && "
+            "bash examples/miles/glm47_h100_convert_tp4_pp1_ep8.sh",
+            env=env,
+        )
+        models_vol.commit()
+        _receipt(stage, rid, {"wall_s": round(time.time() - started, 1)})
+    elif stage == "probe":
+        # Short SFT over the 64 longest rows: fit + DeepEP-under-gVisor check.
+        # Separate data dir so the runner's build-data step constructs the
+        # 64-row size-sorted subset instead of skipping on the full manifest.
+        env["MILES_CPP_DATA_DIR"] = f"{RUNS_DIR}/probe-data"
+        env.setdefault("MILES_SFT_NUM_EPOCH", "1")
+        env.setdefault("MILES_CPP_TRAIN_LIMIT", "64")
+        env.setdefault("MILES_CPP_EVAL_LIMIT", "4")
+        env.setdefault("MILES_CPP_SORT_BY_SIZE", "1")
+        _reward_preflight()
+        _run_stage("examples/miles/glm47_cpp_perf_lora_r16_h100_sft.sh", rid, env, stage)
+    elif stage == "sft":
+        _run_stage("examples/miles/glm47_cpp_perf_lora_r16_h100_sft.sh", rid, env, stage)
+    elif stage == "grpo":
+        env.setdefault("MILES_LORA_ADAPTER_PATH", f"{DATA_DIR}/adapter_warmstart_iter_0000244")
+        _reward_preflight()
+        _run_stage("examples/miles/glm47_cpp_perf_lora_r16_h100_grpo.sh", rid, env, stage)
+    else:
+        raise ValueError(f"unknown stage: {stage}")
+
+    runs_vol.commit()
+    return rid
+
+
+@app.local_entrypoint()
+def convert(sha: str = ""):
+    print(run.remote("convert", sha=sha))
+
+
+@app.local_entrypoint()
+def probe(sha: str = ""):
+    print(run.remote("probe", sha=sha))
+
+
+@app.local_entrypoint()
+def sft(sha: str = "", run_id: str = ""):
+    print(run.remote("sft", sha=sha, run_id=run_id))
+
+
+@app.local_entrypoint()
+def grpo(sha: str = "", run_id: str = "", env_overrides: str = "{}"):
+    print(run.remote("grpo", sha=sha, run_id=run_id, env_overrides=env_overrides))
