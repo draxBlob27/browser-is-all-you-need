@@ -206,8 +206,39 @@ def test_miles_convert_wrapper_registers_bridge_before_exec() -> None:
     from w8_biayn.integrations import miles_convert_with_glm47_bridge as wrapper
 
     source = inspect.getsource(wrapper.main)
-    assert source.index("register_glm47_bridge()") < source.index("runpy.run_path")
+    assert source.index("register_glm47_bridge()") < source.index("exec(compile(")
     assert "convert_hf_to_torch_dist.py" in inspect.getsource(wrapper)
+
+
+def test_miles_convert_wrapper_pp1_patch(tmp_path, monkeypatch) -> None:
+    from w8_biayn.integrations import miles_convert_with_glm47_bridge as wrapper
+
+    tool = tmp_path / "convert_hf_to_torch_dist.py"
+    body = (
+        "def get_args(args, world_size):\n"
+        f"    {wrapper.PP_OVERRIDE_MARKER}\n"
+        "        args.pipeline_model_parallel_size = world_size\n"
+        "    return args\n"
+    )
+    tool.write_text(body, encoding="utf-8")
+
+    # gate off: source untouched
+    monkeypatch.delenv("W8_CONVERT_KEEP_PP1", raising=False)
+    assert wrapper._load_source(tool) == body
+
+    # gate on: override branch neutralized, body still valid python
+    monkeypatch.setenv("W8_CONVERT_KEEP_PP1", "1")
+    patched = wrapper._load_source(tool)
+    assert wrapper.PP_OVERRIDE_MARKER not in patched
+    assert "if False:" in patched
+    compile(patched, str(tool), "exec")
+
+    # gate on but marker missing: fail loud instead of converting a lie
+    tool.write_text("def get_args():\n    return None\n", encoding="utf-8")
+    import pytest as _pytest
+
+    with _pytest.raises(RuntimeError, match="PP-override marker"):
+        wrapper._load_source(tool)
 
 
 def test_glm47_bridge_patches_mbridge_qk_layernorm_mapping(monkeypatch) -> None:
