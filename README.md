@@ -29,6 +29,60 @@ uses one rollout, one sample per prompt, batch size 4, short responses, eval
 disabled, and `SLIME_RAY_MEMORY_USAGE_THRESHOLD=0.99` so Ray does not kill the
 Megatron train actors during the temporary host-RAM spike at checkpoint load.
 
+## Miles GLM-4.7 H100:8 Fast Profile
+
+The fastest single-node GLM-4.7-Flash Miles path is explicit rather than hidden
+behind generic Moonlight defaults:
+
+- checkpoint layout: TP4 / PP1 / EP8 / ETP1
+- training node: 8x H100, 4096 sequence length, 24576 max tokens per GPU,
+  selective (attention-only) activation recompute via
+  `MILES_RECOMPUTE_GRANULARITY=selective` (`full` remains the default for
+  memory-tight A100 nodes; `none` is fastest when activations fit)
+- MoE dispatch: Hopper `flex` with DeepEP enabled
+- serving: SGLang DP attention, DP LM head, mem fraction 0.75, 64-way CUDA
+  graph capture, 256 max running requests, custom allreduce on (NVLink);
+  EAGLE speculative decoding is opt-in (`MILES_SGLANG_SPECULATIVE=1`) because
+  LoRA serving + spec decode is unproven — validate in a fit probe first
+- GRPO: production scale by default — 32 prompts x 8 samples = 256 sequences
+  per rollout, 100 rollouts, lr 2e-6, mini eval every 20 rollouts, save every
+  10, and `MILES_NO_REF=1` because the GRPO config has KL disabled
+- in-training eval automatically prefers
+  `${DATA_DIR}/eval/validation_mini126.jsonl` (the stratified 1/10 subset from
+  `scripts/build_eval_subset.py`) when present; the full validation set stays
+  a standalone gate
+
+Build the matching Megatron checkpoint once inside the Miles runtime container:
+
+```bash
+bash examples/miles/glm47_h100_convert_tp4_pp1_ep8.sh
+```
+
+Then run the H100 SFT or GRPO profiles:
+
+```bash
+bash examples/miles/glm47_cpp_perf_lora_r16_h100_sft.sh
+bash examples/miles/glm47_cpp_perf_lora_r16_h100_grpo.sh
+```
+
+If DeepEP is unavailable in a specific container, fall back without changing
+the script:
+
+```bash
+MILES_MOE_TOKEN_DISPATCHER_TYPE=alltoall \
+MILES_MOE_ENABLE_DEEPEP=0 \
+bash examples/miles/glm47_cpp_perf_lora_r16_h100_grpo.sh
+```
+
+## Modal 8x H100 Lane
+
+The next compute target for the GLM-4.7-Flash Miles lane is a single Modal
+8x H100 node running the fast profile above. The plan, the carry-over list,
+and the open design items (reward sandbox without docker-in-docker, Modal
+Volumes, staged pipeline discipline) live in `examples/modal/README.md`.
+The SkyPilot/GCP lane on the `slime-sss` branch is kept as reference; it is
+not merged, ported, or deleted.
+
 ## Goal
 
 - Data: official PIE C++ slower-to-faster pairs and official/merged/generated tests.

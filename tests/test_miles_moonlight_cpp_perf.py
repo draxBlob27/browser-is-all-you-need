@@ -12,16 +12,28 @@ SFT_RUNNER = EXAMPLE_ROOT / "moonlight_cpp_perf_lora_r16_sft.sh"
 GRPO_RUNNER = EXAMPLE_ROOT / "moonlight_cpp_perf_lora_r16_grpo.sh"
 GLM47_SFT_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_sft.sh"
 GLM47_GRPO_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_grpo.sh"
+GLM47_H100_SFT_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_h100_sft.sh"
+GLM47_H100_GRPO_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_h100_grpo.sh"
+GLM47_H100_CONVERTER = EXAMPLE_ROOT / "glm47_h100_convert_tp4_pp1_ep8.sh"
+MILES_SCRIPTS = (
+    SFT_RUNNER,
+    GRPO_RUNNER,
+    GLM47_SFT_RUNNER,
+    GLM47_GRPO_RUNNER,
+    GLM47_H100_SFT_RUNNER,
+    GLM47_H100_GRPO_RUNNER,
+    GLM47_H100_CONVERTER,
+)
 
 
 def test_miles_moonlight_lora_r16_scripts_are_present_and_executable() -> None:
-    for script in (SFT_RUNNER, GRPO_RUNNER, GLM47_SFT_RUNNER, GLM47_GRPO_RUNNER):
+    for script in MILES_SCRIPTS:
         assert script.exists(), script
         assert os.access(script, os.X_OK), script
 
 
 def test_miles_moonlight_lora_r16_scripts_are_bash_syntax_valid() -> None:
-    for script in (SFT_RUNNER, GRPO_RUNNER, GLM47_SFT_RUNNER, GLM47_GRPO_RUNNER):
+    for script in MILES_SCRIPTS:
         subprocess.run(["bash", "-n", str(script)], check=True)
 
 
@@ -106,6 +118,82 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
         'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
         in grpo_text
     )
+
+
+def test_miles_glm47_h100_wrappers_select_fast_8x_h100_defaults() -> None:
+    for script in (GLM47_H100_SFT_RUNNER, GLM47_H100_GRPO_RUNNER):
+        text = script.read_text(encoding="utf-8")
+        assert 'MILES_MODEL_ARGS_FILE="${MILES_MODEL_ARGS_FILE:-glm4.7-flash.sh}"' in text
+        assert 'MILES_HF_CHECKPOINT="${MILES_HF_CHECKPOINT:-/root/models/GLM-4.7-Flash}"' in text
+        assert 'MILES_REF_LOAD_DIR="${MILES_REF_LOAD_DIR:-${MILES_HF_CHECKPOINT}_torch_dist_tp4_pp1_ep8}"' in text
+        assert 'MILES_GPUS_PER_NODE="${MILES_GPUS_PER_NODE:-8}"' in text
+        assert 'MILES_TENSOR_MODEL_PARALLEL_SIZE="${MILES_TENSOR_MODEL_PARALLEL_SIZE:-4}"' in text
+        assert 'MILES_PIPELINE_MODEL_PARALLEL_SIZE="${MILES_PIPELINE_MODEL_PARALLEL_SIZE:-1}"' in text
+        assert 'MILES_CONTEXT_PARALLEL_SIZE="${MILES_CONTEXT_PARALLEL_SIZE:-1}"' in text
+        assert 'MILES_EXPERT_MODEL_PARALLEL_SIZE="${MILES_EXPERT_MODEL_PARALLEL_SIZE:-8}"' in text
+        assert 'MILES_EXPERT_TENSOR_PARALLEL_SIZE="${MILES_EXPERT_TENSOR_PARALLEL_SIZE:-1}"' in text
+        assert 'MILES_SEQ_LENGTH="${MILES_SEQ_LENGTH:-4096}"' in text
+        assert 'MILES_MAX_TOKENS_PER_GPU="${MILES_MAX_TOKENS_PER_GPU:-24576}"' in text
+        assert 'MILES_RECOMPUTE_GRANULARITY="${MILES_RECOMPUTE_GRANULARITY:-selective}"' in text
+        assert 'MILES_MOE_TOKEN_DISPATCHER_TYPE="${MILES_MOE_TOKEN_DISPATCHER_TYPE:-flex}"' in text
+        assert 'MILES_MOE_ENABLE_DEEPEP="${MILES_MOE_ENABLE_DEEPEP:-1}"' in text
+        assert 'NVSHMEM_DISABLE_NCCL="${NVSHMEM_DISABLE_NCCL:-1}"' in text
+        assert 'MILES_ATTENTION_BACKEND="${MILES_ATTENTION_BACKEND:-flash}"' in text
+        assert 'MILES_SGLANG_ENABLE_DP_ATTENTION="${MILES_SGLANG_ENABLE_DP_ATTENTION:-1}"' in text
+        assert 'MILES_SGLANG_DP_SIZE="${MILES_SGLANG_DP_SIZE:-8}"' in text
+        assert 'MILES_SGLANG_ENABLE_DP_LM_HEAD="${MILES_SGLANG_ENABLE_DP_LM_HEAD:-1}"' in text
+        assert 'MILES_SGLANG_MOE_DENSE_TP_SIZE="${MILES_SGLANG_MOE_DENSE_TP_SIZE:-1}"' in text
+        # Speculative decoding is opt-in until SGLang LoRA + EAGLE is proven.
+        assert 'MILES_SGLANG_SPECULATIVE="${MILES_SGLANG_SPECULATIVE:-0}"' in text
+        # Custom allreduce stays on for NVLink nodes.
+        assert 'MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE="${MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE:-0}"' in text
+        assert 'MILES_EXPERTS_SHARED_OUTER_LORAS="${MILES_EXPERTS_SHARED_OUTER_LORAS:-1}"' in text
+        assert 'MILES_TRAIN_MODULE="${MILES_TRAIN_MODULE:-w8_biayn.integrations.miles_train_with_glm47_bridge}"' in text
+
+    grpo_text = GLM47_H100_GRPO_RUNNER.read_text(encoding="utf-8")
+    assert 'MILES_NUM_ROLLOUT="${MILES_NUM_ROLLOUT:-100}"' in grpo_text
+    assert 'MILES_ROLLOUT_BATCH_SIZE="${MILES_ROLLOUT_BATCH_SIZE:-32}"' in grpo_text
+    assert 'MILES_N_SAMPLES_PER_PROMPT="${MILES_N_SAMPLES_PER_PROMPT:-8}"' in grpo_text
+    assert 'MILES_GLOBAL_BATCH_SIZE="${MILES_GLOBAL_BATCH_SIZE:-256}"' in grpo_text
+    assert 'MILES_ROLLOUT_MAX_RESPONSE_LEN="${MILES_ROLLOUT_MAX_RESPONSE_LEN:-1536}"' in grpo_text
+    assert 'MILES_ROLLOUT_TEMPERATURE="${MILES_ROLLOUT_TEMPERATURE:-1.0}"' in grpo_text
+    assert 'MILES_EVAL_MAX_RESPONSE_LEN="${MILES_EVAL_MAX_RESPONSE_LEN:-1536}"' in grpo_text
+    assert 'MILES_EVAL_INTERVAL="${MILES_EVAL_INTERVAL:-20}"' in grpo_text
+    assert 'MILES_SAVE_INTERVAL="${MILES_SAVE_INTERVAL:-10}"' in grpo_text
+    assert 'MILES_LR="${MILES_LR:-2e-6}"' in grpo_text
+    assert 'MILES_NO_REF="${MILES_NO_REF:-1}"' in grpo_text
+    assert 'MILES_SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.75}"' in grpo_text
+    assert 'MILES_SGLANG_SERVER_CONCURRENCY="${MILES_SGLANG_SERVER_CONCURRENCY:-1024}"' in grpo_text
+    assert 'MILES_SGLANG_CUDA_GRAPH_MAX_BS="${MILES_SGLANG_CUDA_GRAPH_MAX_BS:-64}"' in grpo_text
+    assert 'MILES_SGLANG_MAX_RUNNING_REQUESTS="${MILES_SGLANG_MAX_RUNNING_REQUESTS:-256}"' in grpo_text
+    assert 'W8_CPP_REWARD_WORKERS="${W8_CPP_REWARD_WORKERS:-32}"' in grpo_text
+    assert (
+        'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
+        in grpo_text
+    )
+
+    sft_text = GLM47_H100_SFT_RUNNER.read_text(encoding="utf-8")
+    assert 'MILES_ROLLOUT_BATCH_SIZE="${MILES_ROLLOUT_BATCH_SIZE:-32}"' in sft_text
+    assert 'MILES_GLOBAL_BATCH_SIZE="${MILES_GLOBAL_BATCH_SIZE:-32}"' in sft_text
+    assert 'MILES_SAVE_INTERVAL="${MILES_SAVE_INTERVAL:-1000}"' in sft_text
+    assert 'MILES_SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.60}"' in sft_text
+    assert 'MILES_SGLANG_CUDA_GRAPH_MAX_BS="${MILES_SGLANG_CUDA_GRAPH_MAX_BS:-16}"' in sft_text
+    assert 'MILES_SGLANG_MAX_RUNNING_REQUESTS="${MILES_SGLANG_MAX_RUNNING_REQUESTS:-64}"' in sft_text
+
+
+def test_miles_glm47_h100_converter_matches_runner_layout() -> None:
+    text = GLM47_H100_CONVERTER.read_text(encoding="utf-8")
+    assert 'MODEL_ARGS_FILE="${MILES_MODEL_ARGS_FILE:-glm4.7-flash.sh}"' in text
+    assert 'HF_CHECKPOINT="${MILES_HF_CHECKPOINT:-/root/models/GLM-4.7-Flash}"' in text
+    assert 'REF_LOAD_DIR="${MILES_REF_LOAD_DIR:-${HF_CHECKPOINT}_torch_dist_tp4_pp1_ep8}"' in text
+    assert 'TP_SIZE="${MILES_TENSOR_MODEL_PARALLEL_SIZE:-4}"' in text
+    assert 'PP_SIZE="${MILES_PIPELINE_MODEL_PARALLEL_SIZE:-1}"' in text
+    assert 'EP_SIZE="${MILES_EXPERT_MODEL_PARALLEL_SIZE:-8}"' in text
+    assert 'ETP_SIZE="${MILES_EXPERT_TENSOR_PARALLEL_SIZE:-1}"' in text
+    assert 'CONVERT_NPROC="${MILES_CONVERT_NPROC:-8}"' in text
+    assert 'if [ "${arg}" = "--moe-grouped-gemm" ]; then' in text
+    assert 'convert_hf_to_torch_dist.py' in text
+    assert '--expert-model-parallel-size "${EP_SIZE}"' in text
 
 
 def test_glm47_bridge_patches_mbridge_qk_layernorm_mapping(monkeypatch) -> None:
@@ -403,6 +491,55 @@ def test_grpo_runner_eval_prompt_data_is_configurable() -> None:
 def test_grpo_runner_supports_raw_extra_args() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'read -r -a EXTRA_ARGS <<< "${MILES_EXTRA_ARGS}"' in text
+
+
+def test_miles_runners_expose_h100_throughput_knobs() -> None:
+    for script in (SFT_RUNNER, GRPO_RUNNER):
+        text = script.read_text(encoding="utf-8")
+        assert 'MOE_ENABLE_DEEPEP="${MILES_MOE_ENABLE_DEEPEP:-0}"' in text
+        assert 'SGLANG_MAX_RUNNING_REQUESTS="${MILES_SGLANG_MAX_RUNNING_REQUESTS:-}"' in text
+        assert 'SGLANG_DP_SIZE="${MILES_SGLANG_DP_SIZE:-${GPUS_PER_NODE}}"' in text
+        assert 'SGLANG_ENABLE_DP_ATTENTION="${MILES_SGLANG_ENABLE_DP_ATTENTION:-0}"' in text
+        assert 'SGLANG_ENABLE_DP_LM_HEAD="${MILES_SGLANG_ENABLE_DP_LM_HEAD:-0}"' in text
+        assert 'SGLANG_MOE_DENSE_TP_SIZE="${MILES_SGLANG_MOE_DENSE_TP_SIZE:-}"' in text
+        assert 'SGLANG_SPECULATIVE="${MILES_SGLANG_SPECULATIVE:-0}"' in text
+        assert 'SGLANG_DISABLE_CUSTOM_ALL_REDUCE="${MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE:-0}"' in text
+        assert 'PERF_ARGS+=(--moe-enable-deepep)' in text
+        assert 'SGLANG_ARGS+=(--sglang-enable-dp-attention --sglang-dp-size "${SGLANG_DP_SIZE}")' in text
+        assert 'SGLANG_ARGS+=(--sglang-enable-dp-lm-head)' in text
+        assert 'SGLANG_ARGS+=(--sglang-moe-dense-tp-size "${SGLANG_MOE_DENSE_TP_SIZE}")' in text
+        assert "--sglang-speculative-algorithm EAGLE" in text
+        assert 'SGLANG_ARGS+=(--sglang-max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}")' in text
+        assert 'SGLANG_ARGS+=(--sglang-disable-custom-all-reduce)' in text
+        assert "moe_enable_deepep=${MOE_ENABLE_DEEPEP}" in text
+        assert "sglang_speculative=${SGLANG_SPECULATIVE}" in text
+
+    grpo_text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert '\\"NVSHMEM_DISABLE_NCCL\\": \\"${NVSHMEM_DISABLE_NCCL:-}\\"' in grpo_text
+    sft_text = SFT_RUNNER.read_text(encoding="utf-8")
+    assert '"NVSHMEM_DISABLE_NCCL": os.environ.get("NVSHMEM_DISABLE_NCCL", "")' in sft_text
+
+
+def test_miles_runners_gate_recompute_behind_env() -> None:
+    for script in (SFT_RUNNER, GRPO_RUNNER):
+        text = script.read_text(encoding="utf-8")
+        assert 'RECOMPUTE_GRANULARITY="${MILES_RECOMPUTE_GRANULARITY:-full}"' in text
+        assert 'case "${RECOMPUTE_GRANULARITY}" in' in text
+        assert "PERF_ARGS+=(--recompute-granularity full --recompute-method uniform --recompute-num-layers 1)" in text
+        assert "PERF_ARGS+=(--recompute-granularity selective)" in text
+        assert "recompute_granularity=${RECOMPUTE_GRANULARITY}" in text
+        # The default profile keeps full recompute; the flags must no longer be
+        # unconditional members of PERF_ARGS.
+        assert "  --recompute-granularity full\n" not in text
+
+
+def test_grpo_runner_prefers_mini_eval_when_present() -> None:
+    text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert '[ -f "${DATA_DIR}/eval/validation_mini126.jsonl" ]' in text
+    assert 'EVAL_PROMPT_DATA="${DATA_DIR}/eval/validation_mini126.jsonl"' in text
+    fallback = text.index("validation_mini126.jsonl")
+    eval_args = text.index("--eval-prompt-data pie_cpp")
+    assert fallback < eval_args
 
 
 def test_grpo_runner_ref_load_is_optional() -> None:

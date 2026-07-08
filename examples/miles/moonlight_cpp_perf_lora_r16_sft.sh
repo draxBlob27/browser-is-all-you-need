@@ -39,6 +39,8 @@ CP_SIZE="${MILES_CONTEXT_PARALLEL_SIZE:-1}"
 EP_SIZE="${MILES_EXPERT_MODEL_PARALLEL_SIZE:-4}"
 ETP_SIZE="${MILES_EXPERT_TENSOR_PARALLEL_SIZE:-1}"
 MOE_TOKEN_DISPATCHER_TYPE="${MILES_MOE_TOKEN_DISPATCHER_TYPE:-}"
+MOE_ENABLE_DEEPEP="${MILES_MOE_ENABLE_DEEPEP:-0}"
+RECOMPUTE_GRANULARITY="${MILES_RECOMPUTE_GRANULARITY:-full}"
 ATTENTION_BACKEND="${MILES_ATTENTION_BACKEND:-}"
 SEQ_LENGTH="${MILES_SEQ_LENGTH:-2048}"
 MAX_TOKENS_PER_GPU="${MILES_MAX_TOKENS_PER_GPU:-4096}"
@@ -63,6 +65,16 @@ NO_GRADIENT_ACCUMULATION_FUSION="${MILES_NO_GRADIENT_ACCUMULATION_FUSION:-0}"
 SGLANG_LORA_USE_VIRTUAL_EXPERTS="${MILES_SGLANG_LORA_USE_VIRTUAL_EXPERTS:-0}"
 SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.20}"
 SGLANG_CUDA_GRAPH_MAX_BS="${MILES_SGLANG_CUDA_GRAPH_MAX_BS:-4}"
+SGLANG_MAX_RUNNING_REQUESTS="${MILES_SGLANG_MAX_RUNNING_REQUESTS:-}"
+SGLANG_DP_SIZE="${MILES_SGLANG_DP_SIZE:-${GPUS_PER_NODE}}"
+SGLANG_ENABLE_DP_ATTENTION="${MILES_SGLANG_ENABLE_DP_ATTENTION:-0}"
+SGLANG_ENABLE_DP_LM_HEAD="${MILES_SGLANG_ENABLE_DP_LM_HEAD:-0}"
+SGLANG_MOE_DENSE_TP_SIZE="${MILES_SGLANG_MOE_DENSE_TP_SIZE:-}"
+SGLANG_SPECULATIVE="${MILES_SGLANG_SPECULATIVE:-0}"
+SGLANG_SPECULATIVE_NUM_STEPS="${MILES_SGLANG_SPECULATIVE_NUM_STEPS:-3}"
+SGLANG_SPECULATIVE_EAGLE_TOPK="${MILES_SGLANG_SPECULATIVE_EAGLE_TOPK:-1}"
+SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS="${MILES_SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS:-4}"
+SGLANG_DISABLE_CUSTOM_ALL_REDUCE="${MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE:-0}"
 
 WANDB_PROJECT="${MILES_WANDB_PROJECT:-miles-moonlight-cpp-sft}"
 WANDB_GROUP="${MILES_WANDB_GROUP:-moonlight-pie-cpp-lora-r16-sft}"
@@ -198,6 +210,17 @@ lora_rank=${LORA_RANK}
 lora_alpha=${LORA_ALPHA}
 sft_rollout_function_path=${SFT_ROLLOUT_FUNCTION_PATH}
 train_module=${TRAIN_MODULE}
+moe_token_dispatcher_type=${MOE_TOKEN_DISPATCHER_TYPE}
+moe_enable_deepep=${MOE_ENABLE_DEEPEP}
+recompute_granularity=${RECOMPUTE_GRANULARITY}
+sglang_mem_fraction_static=${SGLANG_MEM_FRACTION_STATIC}
+sglang_cuda_graph_max_bs=${SGLANG_CUDA_GRAPH_MAX_BS}
+sglang_max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS}
+sglang_dp_size=${SGLANG_DP_SIZE}
+sglang_enable_dp_attention=${SGLANG_ENABLE_DP_ATTENTION}
+sglang_enable_dp_lm_head=${SGLANG_ENABLE_DP_LM_HEAD}
+sglang_moe_dense_tp_size=${SGLANG_MOE_DENSE_TP_SIZE}
+sglang_speculative=${SGLANG_SPECULATIVE}
 wandb_project=${WANDB_PROJECT}
 wandb_group=${WANDB_GROUP}
 wandb_run_id=${WANDB_RUN_ID}
@@ -297,12 +320,28 @@ PERF_ARGS=(
   --seq-length "${SEQ_LENGTH}"
   --micro-batch-size "${MICRO_BATCH_SIZE}"
   --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU}"
-  --recompute-granularity full
-  --recompute-method uniform
-  --recompute-num-layers 1
 )
+# Recompute trades compute for VRAM: full pays ~30% step time and is only
+# needed on memory-tight nodes (4x A100); selective recomputes attention only;
+# none holds all activations and is fastest when they fit (8x H100 LoRA).
+case "${RECOMPUTE_GRANULARITY}" in
+  full)
+    PERF_ARGS+=(--recompute-granularity full --recompute-method uniform --recompute-num-layers 1)
+    ;;
+  selective)
+    PERF_ARGS+=(--recompute-granularity selective)
+    ;;
+  none) ;;
+  *)
+    echo "MILES_RECOMPUTE_GRANULARITY must be full|selective|none, got: ${RECOMPUTE_GRANULARITY}" >&2
+    exit 2
+    ;;
+esac
 if [ -n "${MOE_TOKEN_DISPATCHER_TYPE}" ]; then
   PERF_ARGS+=(--moe-token-dispatcher-type "${MOE_TOKEN_DISPATCHER_TYPE}")
+fi
+if [ "${MOE_ENABLE_DEEPEP}" = "1" ]; then
+  PERF_ARGS+=(--moe-enable-deepep)
 fi
 if [ -n "${ATTENTION_BACKEND}" ]; then
   PERF_ARGS+=(--attention-backend "${ATTENTION_BACKEND}")
@@ -334,6 +373,29 @@ SGLANG_ARGS=(
   --sglang-cuda-graph-max-bs "${SGLANG_CUDA_GRAPH_MAX_BS}"
   --sglang-moe-runner-backend triton
 )
+if [ "${SGLANG_ENABLE_DP_ATTENTION}" = "1" ]; then
+  SGLANG_ARGS+=(--sglang-enable-dp-attention --sglang-dp-size "${SGLANG_DP_SIZE}")
+fi
+if [ "${SGLANG_ENABLE_DP_LM_HEAD}" = "1" ]; then
+  SGLANG_ARGS+=(--sglang-enable-dp-lm-head)
+fi
+if [ -n "${SGLANG_MOE_DENSE_TP_SIZE}" ]; then
+  SGLANG_ARGS+=(--sglang-moe-dense-tp-size "${SGLANG_MOE_DENSE_TP_SIZE}")
+fi
+if [ "${SGLANG_SPECULATIVE}" = "1" ]; then
+  SGLANG_ARGS+=(
+    --sglang-speculative-algorithm EAGLE
+    --sglang-speculative-num-steps "${SGLANG_SPECULATIVE_NUM_STEPS}"
+    --sglang-speculative-eagle-topk "${SGLANG_SPECULATIVE_EAGLE_TOPK}"
+    --sglang-speculative-num-draft-tokens "${SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS}"
+  )
+fi
+if [ -n "${SGLANG_MAX_RUNNING_REQUESTS}" ]; then
+  SGLANG_ARGS+=(--sglang-max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}")
+fi
+if [ "${SGLANG_DISABLE_CUSTOM_ALL_REDUCE}" = "1" ]; then
+  SGLANG_ARGS+=(--sglang-disable-custom-all-reduce)
+fi
 
 MISC_ARGS=(
   --attention-dropout 0.0
@@ -361,8 +423,10 @@ env = {
     "NCCL_NVLS_ENABLE": "${HAS_NVLINK}",
     "W8_BIAYN_DATA_DIR": "${DATA_DIR}",
     "W8_CPP_SANDBOX_IMAGE": os.environ.get("W8_CPP_SANDBOX_IMAGE", "w8-biayn-cpp-perf:latest"),
+    "W8_CPP_SANDBOX_BACKEND": os.environ.get("W8_CPP_SANDBOX_BACKEND", "docker"),
     "W8_CPP_SANDBOX_CPU": os.environ.get("W8_CPP_SANDBOX_CPU", "1"),
     "W8_CPP_REWARD_WORKERS": os.environ.get("W8_CPP_REWARD_WORKERS", "8"),
+    "NVSHMEM_DISABLE_NCCL": os.environ.get("NVSHMEM_DISABLE_NCCL", ""),
 }
 for key in (
     "CUDA_HOME",
