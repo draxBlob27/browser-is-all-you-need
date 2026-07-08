@@ -72,10 +72,28 @@ GPU_KW = dict(
 )
 
 
-def _sh(cmd: str, *, cwd: str | None = None, env: dict[str, str] | None = None) -> None:
+def _sh(
+    cmd: str,
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    log: str | None = None,
+) -> None:
+    """Run a shell command; with log=, tee output to a durable file on the runs
+    volume so failures survive Modal's log retention window."""
+    if log:
+        Path(log).parent.mkdir(parents=True, exist_ok=True)
+        cmd = f"set -o pipefail; ({cmd}) 2>&1 | tee {log}"
     print(f"+ {cmd}", flush=True)
     merged = {**os.environ, **(env or {})}
-    subprocess.run(["bash", "-lc", cmd], cwd=cwd, env=merged, check=True)
+    try:
+        subprocess.run(["bash", "-lc", cmd], cwd=cwd, env=merged, check=True)
+    except subprocess.CalledProcessError:
+        if log:
+            runs_vol.commit()
+            print(f"stage failed; full log preserved at {log}", flush=True)
+            print(Path(log).read_text()[-4000:], flush=True)
+        raise
 
 
 def _checkout(sha: str) -> None:
@@ -160,6 +178,7 @@ def _run_stage(script: str, run_id: str, env: dict[str, str], stage: str) -> Non
     _sh(
         f"unset PYTHONPATH && cd {REPO_DIR} && bash {script}",
         env=env,
+        log=f"{RUNS_DIR}/receipts/{run_id}.{stage}.log",
     )
     _receipt(stage, run_id, {"wall_s": round(time.time() - started, 1), "script": script})
 
@@ -195,6 +214,7 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
             f"cd {REPO_DIR} && unset PYTHONPATH && "
             "bash examples/miles/glm47_h100_convert_tp4_pp1_ep8.sh",
             env=env,
+            log=f"{RUNS_DIR}/receipts/{rid}.convert.log",
         )
         models_vol.commit()
         _receipt(stage, rid, {"wall_s": round(time.time() - started, 1)})

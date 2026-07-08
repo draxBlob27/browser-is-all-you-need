@@ -194,6 +194,20 @@ def test_miles_glm47_h100_converter_matches_runner_layout() -> None:
     assert 'if [ "${arg}" = "--moe-grouped-gemm" ]; then' in text
     assert 'convert_hf_to_torch_dist.py' in text
     assert '--expert-model-parallel-size "${EP_SIZE}"' in text
+    # The converter must run through the bridge-registering wrapper with the
+    # repo src on PYTHONPATH; stock mbridge cannot map Glm4MoeLite.
+    assert "-m w8_biayn.integrations.miles_convert_with_glm47_bridge" in text
+    assert 'CONVERT_PYTHONPATH="${REPO_ROOT}/src:${MEGATRON_DIR}:${PYTHONPATH:-}"' in text
+
+
+def test_miles_convert_wrapper_registers_bridge_before_exec() -> None:
+    import inspect
+
+    from w8_biayn.integrations import miles_convert_with_glm47_bridge as wrapper
+
+    source = inspect.getsource(wrapper.main)
+    assert source.index("register_glm47_bridge()") < source.index("runpy.run_path")
+    assert "convert_hf_to_torch_dist.py" in inspect.getsource(wrapper)
 
 
 def test_glm47_bridge_patches_mbridge_qk_layernorm_mapping(monkeypatch) -> None:

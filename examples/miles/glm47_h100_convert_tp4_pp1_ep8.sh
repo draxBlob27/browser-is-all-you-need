@@ -68,18 +68,23 @@ echo "hf_checkpoint=${HF_CHECKPOINT}"
 echo "ref_load=${REF_LOAD_DIR}"
 echo "tp=${TP_SIZE} pp=${PP_SIZE} ep=${EP_SIZE} etp=${ETP_SIZE}"
 
+# The converter must see the GLM-4.7 bridge (stock mbridge cannot map
+# Glm4MoeLite); run it through the bridge-registering wrapper with the repo
+# src on PYTHONPATH, mirroring how training uses miles_train_with_glm47_bridge.
+export MILES_CONVERT_PY="${MILES_ROOT}/tools/convert_hf_to_torch_dist.py"
+CONVERT_PYTHONPATH="${REPO_ROOT}/src:${MEGATRON_DIR}:${PYTHONPATH:-}"
 if [ "${CONVERT_NPROC}" = "1" ]; then
   CUDA_DEVICE_MAX_CONNECTIONS=1 \
-    PYTHONPATH="${MEGATRON_DIR}:${PYTHONPATH:-}" \
-    "${PYTHON_BIN}" "${MILES_ROOT}/tools/convert_hf_to_torch_dist.py" \
+    PYTHONPATH="${CONVERT_PYTHONPATH}" \
+    "${PYTHON_BIN}" -m w8_biayn.integrations.miles_convert_with_glm47_bridge \
     "${CONVERT_MODEL_ARGS[@]}" \
     --hf-checkpoint "${HF_CHECKPOINT}" \
     --save "${REF_LOAD_DIR}"
 else
   CUDA_DEVICE_MAX_CONNECTIONS=1 \
-    PYTHONPATH="${MEGATRON_DIR}:${PYTHONPATH:-}" \
+    PYTHONPATH="${CONVERT_PYTHONPATH}" \
     torchrun --nproc-per-node "${CONVERT_NPROC}" \
-    "${MILES_ROOT}/tools/convert_hf_to_torch_dist.py" \
+    -m w8_biayn.integrations.miles_convert_with_glm47_bridge \
     "${CONVERT_MODEL_ARGS[@]}" \
     --hf-checkpoint "${HF_CHECKPOINT}" \
     --save "${REF_LOAD_DIR}"
