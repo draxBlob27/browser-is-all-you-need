@@ -45,9 +45,14 @@ fi
 cd "${MILES_ROOT}"
 source "${MODEL_ARGS_PATH}"
 
+# mbridge's expert mapper only understands grouped-GEMM weight names
+# (mlp.experts.linear_fc1.weightN); sequential local_experts naming raises
+# NotImplementedError. Keep --moe-grouped-gemm by default — training uses it
+# too — and strip it only for old images whose mbridge mapped sequential names.
+STRIP_GROUPED_GEMM="${W8_CONVERT_STRIP_MOE_GROUPED_GEMM:-0}"
 CONVERT_MODEL_ARGS=()
 for arg in "${MODEL_ARGS[@]}"; do
-  if [ "${arg}" = "--moe-grouped-gemm" ]; then
+  if [ "${STRIP_GROUPED_GEMM}" = "1" ] && [ "${arg}" = "--moe-grouped-gemm" ]; then
     continue
   fi
   CONVERT_MODEL_ARGS+=("${arg}")

@@ -191,7 +191,10 @@ def test_miles_glm47_h100_converter_matches_runner_layout() -> None:
     assert 'EP_SIZE="${MILES_EXPERT_MODEL_PARALLEL_SIZE:-8}"' in text
     assert 'ETP_SIZE="${MILES_EXPERT_TENSOR_PARALLEL_SIZE:-1}"' in text
     assert 'CONVERT_NPROC="${MILES_CONVERT_NPROC:-8}"' in text
-    assert 'if [ "${arg}" = "--moe-grouped-gemm" ]; then' in text
+    # grouped-GEMM stays in conversion args by default (mbridge's expert
+    # mapper needs grouped names); stripping is opt-in for old images.
+    assert 'STRIP_GROUPED_GEMM="${W8_CONVERT_STRIP_MOE_GROUPED_GEMM:-0}"' in text
+    assert 'if [ "${STRIP_GROUPED_GEMM}" = "1" ] && [ "${arg}" = "--moe-grouped-gemm" ]; then' in text
     assert 'convert_hf_to_torch_dist.py' in text
     assert '--expert-model-parallel-size "${EP_SIZE}"' in text
     # The converter must run through the bridge-registering wrapper with the
