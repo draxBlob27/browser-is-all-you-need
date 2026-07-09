@@ -44,6 +44,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tp-size", type=int, default=4)
     parser.add_argument("--mem-fraction-static", type=float, default=0.35)
     parser.add_argument("--cuda-graph-max-bs", type=int, default=16)
+    parser.add_argument(
+        "--attention-backend",
+        default="",
+        help="SGLang attention backend override (e.g. flashinfer, triton); "
+        "empty keeps SGLang's auto choice.",
+    )
     parser.add_argument("--apply-chat-template", action="store_true")
     parser.add_argument("--chat-template-kwargs", default="{}")
     parser.add_argument("--system-prompt", default="")
@@ -185,6 +191,8 @@ def generate_rows_sglang(args: argparse.Namespace, rows: list[dict[str, Any]]) -
         "moe_runner_backend": "triton",
         "log_level": "warning",
     }
+    if args.attention_backend:
+        engine_kwargs["attention_backend"] = args.attention_backend
     if args.adapter:
         engine_kwargs.update(
             {

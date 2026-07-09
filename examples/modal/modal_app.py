@@ -369,6 +369,9 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
             # engine gets to 8 GPUs via DP attention instead). TP4 also
             # matches the A100 anchor recipe exactly.
             f"--tp-size {env.get('W8_EVAL_TP', '4')} --mem-fraction-static 0.85 "
+            # flashinfer: the image's sglang auto-picks an FA3 path whose
+            # flash_attn (2.7.4) lacks only_qv and crashes at first forward.
+            f"--attention-backend {env.get('W8_EVAL_ATTN_BACKEND', 'flashinfer')} "
             "--cuda-graph-max-bs 64 --batch-size 64 --score-workers 32 "
             "--apply-chat-template --chat-template-kwargs '{\"enable_thinking\": false}' "
             f"--wandb-project glm47-pie-cpp-posttraining --wandb-group glm47-h100-evals "

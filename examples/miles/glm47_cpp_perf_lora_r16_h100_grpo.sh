@@ -69,6 +69,10 @@ export MILES_SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS="${MILES_SGLANG_SPECULATIVE_NUM
 # Custom allreduce is the fast path on NVLink; disabling it was a PCIe-node
 # stability carryover.
 export MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE="${MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE:-0}"
+# The latest-cu12 image's sglang auto-picks an FA3 attention path whose
+# flash_attn (2.7.4) lacks only_qv and crashes at first forward; flashinfer
+# 0.6.11 in-image works.
+export MILES_SGLANG_ATTENTION_BACKEND="${MILES_SGLANG_ATTENTION_BACKEND:-flashinfer}"
 
 export MILES_LORA_TARGET_MODULES="${MILES_LORA_TARGET_MODULES:-q_a_proj,kv_a_proj_with_mqa,o_proj,gate_proj,up_proj,down_proj}"
 export MILES_SGLANG_LORA_TARGET_MODULES="${MILES_SGLANG_LORA_TARGET_MODULES:-${MILES_LORA_TARGET_MODULES}}"
