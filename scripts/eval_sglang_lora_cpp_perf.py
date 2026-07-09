@@ -26,6 +26,11 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Replay a preserved generated JSONL through scoring instead of running model generation.",
     )
+    parser.add_argument(
+        "--task-allowlist",
+        default="",
+        help="JSON list of reference-valid task ids to retain for generation or replay.",
+    )
     parser.add_argument("--adapter", default=None, help="LoRA adapter directory to apply during generation.")
     parser.add_argument("--lora-target-modules", default="gate_proj,up_proj,down_proj")
     parser.add_argument(
@@ -90,6 +95,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rows = read_jsonl(data_dir / "eval" / "validation.jsonl")
+    source_task_count = len(rows)
+    task_allowlist_path = Path(args.task_allowlist) if args.task_allowlist else None
+    allowed_task_ids = load_task_allowlist(task_allowlist_path) if task_allowlist_path else None
+    if allowed_task_ids is not None:
+        rows = filter_rows_by_task_ids(rows, allowed_task_ids)
     if args.max_tasks is not None:
         rows = rows[: args.max_tasks]
     if not rows:
@@ -107,6 +117,9 @@ def main() -> None:
         generations = read_jsonl(source_generated_path)
         if not generations:
             raise ValueError(f"No generated rows found in {source_generated_path}")
+        source_generation_sample_count = len(generations)
+        if allowed_task_ids is not None:
+            generations = filter_rows_by_task_ids(generations, allowed_task_ids)
         if args.max_tasks is not None:
             generations = limit_generations_by_task_count(generations, args.max_tasks)
         print(
@@ -123,6 +136,7 @@ def main() -> None:
             flush=True,
         )
         generations = generate_rows(args, rows)
+        source_generation_sample_count = len(generations)
     write_jsonl(generated_path, generations)
     generation_summary = summarize_generations(generations, max_tokens=args.max_tokens)
     write_json(generation_summary_path, generation_summary)
@@ -161,6 +175,12 @@ def main() -> None:
             "timing_status": args.wandb_timing_status,
             "timing_trustworthy": args.wandb_timing_status == "verified",
             "elapsed_seconds": elapsed_seconds,
+            "source_task_count": source_task_count,
+            "task_allowlist_count": len(allowed_task_ids) if allowed_task_ids is not None else None,
+            "task_allowlist_excluded_count": source_task_count - len(rows),
+            "task_allowlist_path": str(task_allowlist_path) if task_allowlist_path else "",
+            "source_generation_sample_count": source_generation_sample_count,
+            "task_allowlist_excluded_sample_count": source_generation_sample_count - len(generations),
         }
     )
     write_json(summary_path, summary)
@@ -193,15 +213,24 @@ def main() -> None:
         "records_path": str(records_path),
         "generated_path": str(generated_path),
         "source_generated_path": str(source_generated_path) if source_generated_path is not None else "",
+        "source_task_count": source_task_count,
+        "task_allowlist_count": len(allowed_task_ids) if allowed_task_ids is not None else None,
+        "task_allowlist_excluded_count": source_task_count - len(rows),
+        "task_allowlist_path": str(task_allowlist_path) if task_allowlist_path else "",
+        "source_generation_sample_count": source_generation_sample_count,
+        "task_allowlist_excluded_sample_count": source_generation_sample_count - len(generations),
     }
     write_json(receipt_path, receipt)
+    artifact_paths = [generated_path, records_path, summary_path, generation_summary_path, receipt_path]
+    if task_allowlist_path is not None:
+        artifact_paths.append(task_allowlist_path)
     log_wandb(
         args,
         summary=summary,
         records=records,
         generations=generations,
         receipt=receipt,
-        artifact_paths=[generated_path, records_path, summary_path, generation_summary_path, receipt_path],
+        artifact_paths=artifact_paths,
     )
     enforce_eval_gates(args, summary)
     print(f"PIE eval scoring complete: label={args.label} path={summary_path}", flush=True)
@@ -222,6 +251,23 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def load_task_allowlist(path: Path) -> set[str]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+        raise ValueError(f"Task allowlist must be a JSON list of strings: {path}")
+    return set(data)
+
+
+def filter_rows_by_task_ids(rows: list[dict[str, Any]], allowed_task_ids: set[str]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        task_id = str(row.get("task_id") or metadata.get("task_id") or "")
+        if task_id in allowed_task_ids:
+            filtered.append(row)
+    return filtered
 
 
 def limit_generations_by_task_count(

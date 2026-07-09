@@ -184,6 +184,22 @@ def test_replay_task_limit_keeps_all_samples_for_selected_tasks() -> None:
     ]
 
 
+def test_task_allowlist_filters_rows_using_top_level_or_metadata_ids(tmp_path: Path) -> None:
+    module = _load_eval_module()
+    allowlist = tmp_path / "keep.json"
+    allowlist.write_text('["a", "c"]\n', encoding="utf-8")
+    rows = [
+        {"task_id": "a"},
+        {"metadata": {"task_id": "b"}},
+        {"metadata": {"task_id": "c"}},
+    ]
+
+    allowed = module.load_task_allowlist(allowlist)
+
+    assert allowed == {"a", "c"}
+    assert module.filter_rows_by_task_ids(rows, allowed) == [rows[0], rows[2]]
+
+
 def test_wandb_lineage_and_timing_flags_parse(monkeypatch) -> None:
     module = _load_eval_module()
     monkeypatch.setattr(
