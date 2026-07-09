@@ -346,6 +346,15 @@ def test_runtime_harness_normalize_ignores_leading_blank_lines():
     assert bad["ok"] is False and bad["reason"] == "wrong_output"
 
 
+def test_timed_candidate_correctness_failure_revokes_initial_test_pass():
+    from w8_biayn.cpp_perf import sandbox as sb
+
+    assert sb._tests_passed_after_runtime_failure(2, "wrong_output") == 1
+    assert sb._tests_passed_after_runtime_failure(2, "nonzero_exit") == 1
+    assert sb._tests_passed_after_runtime_failure(2, "timeout") == 2
+    assert sb._tests_passed_after_runtime_failure(2, "runtime_command_failed") == 2
+
+
 def test_task_json_round_trip(tmp_path):
     task = sample_task()
     path = task.write_json(tmp_path / "task.json")

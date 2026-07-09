@@ -501,9 +501,10 @@ def _run_in_directory(task: CppTask, candidate_code: str, scratch: Path, *, imag
     )
     if candidate_returncode != 0 or not _runtime_payload_ok(candidate_payload):
         logs["runtime_candidate"] = candidate_logs
+        failure_reason = _runtime_payload_reason(candidate_payload)
         return HarnessResult(
-            timeout=_runtime_payload_reason(candidate_payload) == "timeout",
-            tests_passed=tests_passed,
+            timeout=failure_reason == "timeout",
+            tests_passed=_tests_passed_after_runtime_failure(tests_passed, failure_reason),
             tests_total=len(tests),
             logs=logs,
         )
@@ -557,6 +558,14 @@ def parse_runtime_benchmark_output(text: str) -> dict[str, Any] | None:
         if isinstance(payload, dict):
             return payload
     return None
+
+
+def _tests_passed_after_runtime_failure(tests_passed: int, reason: str) -> int:
+    """Turn a timed correctness/reliability failure into one failed test."""
+
+    if reason in {"wrong_output", "nonzero_exit"}:
+        return max(0, tests_passed - 1)
+    return tests_passed
 
 
 def _run_runtime_benchmark(
