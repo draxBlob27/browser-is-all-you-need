@@ -178,6 +178,7 @@ def test_miles_glm47_h100_wrappers_select_fast_8x_h100_defaults() -> None:
     assert 'MILES_ROLLOUT_BATCH_SIZE="${MILES_ROLLOUT_BATCH_SIZE:-32}"' in sft_text
     assert 'MILES_GLOBAL_BATCH_SIZE="${MILES_GLOBAL_BATCH_SIZE:-32}"' in sft_text
     assert 'MILES_SAVE_INTERVAL="${MILES_SAVE_INTERVAL:-1000}"' in sft_text
+    assert 'MILES_NO_REF="${MILES_NO_REF:-1}"' in sft_text
     assert 'MILES_SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.60}"' in sft_text
     assert 'MILES_SGLANG_CUDA_GRAPH_MAX_BS="${MILES_SGLANG_CUDA_GRAPH_MAX_BS:-16}"' in sft_text
     assert 'MILES_SGLANG_MAX_RUNNING_REQUESTS="${MILES_SGLANG_MAX_RUNNING_REQUESTS:-64}"' in sft_text
@@ -635,6 +636,19 @@ def test_grpo_runner_ref_load_is_optional() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'if [ "${MILES_NO_REF:-0}" != "1" ]; then' in text
     assert text.count('--ref-load "${REF_LOAD_DIR}"') == 1
+
+
+def test_sft_runner_ref_load_is_optional() -> None:
+    text = SFT_RUNNER.read_text(encoding="utf-8")
+    assert 'if [ "${MILES_NO_REF:-0}" != "1" ]; then' in text
+    assert text.count('--ref-load "${REF_LOAD_DIR}"') == 1
+
+
+def test_miles_runners_forward_offline_wandb_mode() -> None:
+    sft_text = SFT_RUNNER.read_text(encoding="utf-8")
+    grpo_text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert '"WANDB_MODE",' in sft_text
+    assert '\\"WANDB_MODE\\": \\"${WANDB_MODE:-online}\\"' in grpo_text
 
 
 def test_warm_start_reloads_optimizer_master_params() -> None:

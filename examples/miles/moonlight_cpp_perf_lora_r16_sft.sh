@@ -296,12 +296,14 @@ source "${MODEL_ARGS_PATH}"
 
 CKPT_ARGS=(
   --hf-checkpoint "${HF_CHECKPOINT}"
-  --ref-load "${REF_LOAD_DIR}"
   --load "${REF_LOAD_DIR}"
   --save "${SAVE_DIR}"
   --save-interval "${SAVE_INTERVAL}"
   --megatron-to-hf-mode bridge
 )
+if [ "${MILES_NO_REF:-0}" != "1" ]; then
+  CKPT_ARGS+=(--ref-load "${REF_LOAD_DIR}")
+fi
 
 LORA_ARGS=(
   --lora-rank "${LORA_RANK}"
@@ -470,6 +472,7 @@ for key in (
     "WANDB_API_KEY",
     "WANDB_ENTITY",
     "WANDB_BASE_URL",
+    "WANDB_MODE",
     "WANDB_JOB_TYPE",
     "WANDB_RUN_GROUP",
     "WANDB_TAGS",

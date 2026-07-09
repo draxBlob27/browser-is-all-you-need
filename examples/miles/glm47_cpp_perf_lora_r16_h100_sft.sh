@@ -36,6 +36,9 @@ export MILES_ATTENTION_BACKEND="${MILES_ATTENTION_BACKEND:-flash}"
 export MILES_ROLLOUT_BATCH_SIZE="${MILES_ROLLOUT_BATCH_SIZE:-32}"
 export MILES_GLOBAL_BATCH_SIZE="${MILES_GLOBAL_BATCH_SIZE:-32}"
 export MILES_SAVE_INTERVAL="${MILES_SAVE_INTERVAL:-1000}"
+# SFT has no KL/reference-logprob path; loading a second frozen policy only
+# adds startup, host-memory, and state-switching overhead.
+export MILES_NO_REF="${MILES_NO_REF:-1}"
 
 export MILES_SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.60}"
 export MILES_SGLANG_CUDA_GRAPH_MAX_BS="${MILES_SGLANG_CUDA_GRAPH_MAX_BS:-16}"
