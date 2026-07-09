@@ -217,6 +217,15 @@ def _base_env(run_id: str) -> dict[str, str]:
     }
 
 
+def _ckpt_meta_path(ref: Path) -> Path:
+    """Resolve the dist-ckpt .metadata path for either marker convention:
+    a numeric iteration (iter_NNNNNNN/) or the converter's weights-only
+    'release' tag (release/)."""
+    tag = (ref / "latest_checkpointed_iteration.txt").read_text().strip()
+    dirname = "release" if tag == "release" else f"iter_{int(tag):07d}"
+    return ref / dirname / ".metadata"
+
+
 def _require_ref_checkpoint(env: dict[str, str]) -> None:
     """Fail in seconds — not after a five-minute Ray boot — if the converted
     checkpoint is absent or incomplete (missing .metadata = unfinalized save
@@ -225,15 +234,14 @@ def _require_ref_checkpoint(env: dict[str, str]) -> None:
     marker = ref / "latest_checkpointed_iteration.txt"
     if not marker.exists():
         raise RuntimeError(f"ref checkpoint missing: {marker}; run the convert stage first")
-    iteration = int(marker.read_text().strip())
-    meta = ref / f"iter_{iteration:07d}" / ".metadata"
+    meta = _ckpt_meta_path(ref)
     if not meta.exists():
         raise RuntimeError(
             f"ref checkpoint incomplete: {meta} missing — the conversion save "
             "did not finalize or its volume commit has not propagated; "
             "re-run convert or wait and retry"
         )
-    print(f"ref_checkpoint_ok {ref} iter={iteration}", flush=True)
+    print(f"ref_checkpoint_ok {meta.parent}", flush=True)
 
 
 def _run_stage(script: str, run_id: str, env: dict[str, str], stage: str) -> None:
@@ -291,7 +299,7 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
         marker = ref / "latest_checkpointed_iteration.txt"
         if not marker.exists():
             raise RuntimeError(f"conversion produced no checkpoint marker at {marker}")
-        meta = ref / f"iter_{int(marker.read_text().strip()):07d}" / ".metadata"
+        meta = _ckpt_meta_path(ref)
         for _ in range(60):
             if meta.exists():
                 break
