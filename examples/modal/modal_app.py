@@ -34,12 +34,18 @@ HF_MODEL_ID = "zai-org/GLM-4.7-Flash"
 
 REPO_DIR = "/workspace/browser-is-all-you-need"
 MODELS_DIR = "/root/models"
+HF_DIR = "/hfmodels"
 RUNS_DIR = "/workspace/runs"
 DATA_DIR = "/data"
 
 app = modal.App("glm47-pie-cpp")
 
-models_vol = modal.Volume.from_name("glm47-models", create_if_missing=True)
+# glm47-models2 is a VolumeFS v2 volume: the original v1 volume served
+# inconsistent views of the checkpoint prefix after delete/recommit churn
+# (listings oscillated between snapshots with no containers running). The
+# static HF weights stay on the old v1 volume, which has always read fine.
+models_vol = modal.Volume.from_name("glm47-models2")
+hf_vol = modal.Volume.from_name("glm47-models")
 data_vol = modal.Volume.from_name("glm47-data", create_if_missing=True)
 runs_vol = modal.Volume.from_name("glm47-runs", create_if_missing=True)
 
@@ -67,7 +73,7 @@ GPU_KW = dict(
     cpu=48.0,
     memory=(262_144, 1_048_576),  # request 256 GiB host RAM (trainer offload ~150 GiB), no tight cap
     timeout=86_400,
-    volumes={MODELS_DIR: models_vol, DATA_DIR: data_vol, RUNS_DIR: runs_vol},
+    volumes={MODELS_DIR: models_vol, HF_DIR: hf_vol, DATA_DIR: data_vol, RUNS_DIR: runs_vol},
     secrets=[modal.Secret.from_name("wandb-glm47")],
 )
 
@@ -199,7 +205,7 @@ def _base_env(run_id: str) -> dict[str, str]:
     return {
         "MILES_RUN_ID": run_id,
         "MILES_RUN_ROOT": f"{RUNS_DIR}/issue10-miles/{run_id}",
-        "MILES_HF_CHECKPOINT": f"{MODELS_DIR}/GLM-4.7-Flash",
+        "MILES_HF_CHECKPOINT": f"{HF_DIR}/GLM-4.7-Flash",
         "MILES_REF_LOAD_DIR": f"{MODELS_DIR}/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8",
         "MILES_CPP_DATA_DIR": f"{DATA_DIR}/glm47-pie-data-sft-full-seq4096",
         "MILES_CPP_TASKS_DIR": f"{DATA_DIR}/pie-tasks-full-20260706",
@@ -211,8 +217,28 @@ def _base_env(run_id: str) -> dict[str, str]:
     }
 
 
+def _require_ref_checkpoint(env: dict[str, str]) -> None:
+    """Fail in seconds — not after a five-minute Ray boot — if the converted
+    checkpoint is absent or incomplete (missing .metadata = unfinalized save
+    or an unpropagated volume commit)."""
+    ref = Path(env["MILES_REF_LOAD_DIR"])
+    marker = ref / "latest_checkpointed_iteration.txt"
+    if not marker.exists():
+        raise RuntimeError(f"ref checkpoint missing: {marker}; run the convert stage first")
+    iteration = int(marker.read_text().strip())
+    meta = ref / f"iter_{iteration:07d}" / ".metadata"
+    if not meta.exists():
+        raise RuntimeError(
+            f"ref checkpoint incomplete: {meta} missing — the conversion save "
+            "did not finalize or its volume commit has not propagated; "
+            "re-run convert or wait and retry"
+        )
+    print(f"ref_checkpoint_ok {ref} iter={iteration}", flush=True)
+
+
 def _run_stage(script: str, run_id: str, env: dict[str, str], stage: str) -> None:
     _wandb_check()
+    _require_ref_checkpoint(env)
     started = time.time()
     Path(RUNS_DIR, "wandb").mkdir(parents=True, exist_ok=True)
     # PYTHONPATH must stay unset at launch (sitecustomize import storm breaks
@@ -232,13 +258,13 @@ slim_image = (
 )
 
 
-@app.function(image=slim_image, timeout=14_400, cpu=16.0, volumes={MODELS_DIR: models_vol})
+@app.function(image=slim_image, timeout=14_400, cpu=16.0, volumes={HF_DIR: hf_vol})
 def download_weights() -> None:
-    """Pull the HF checkpoint into the models volume (CPU-only container)."""
-    target = f"{MODELS_DIR}/GLM-4.7-Flash"
+    """Pull the HF checkpoint into the weights volume (CPU-only container)."""
+    target = f"{HF_DIR}/GLM-4.7-Flash"
     _sh(f"hf download {HF_MODEL_ID} --local-dir {target}")
     _sh(f"ls {target} | head; du -sh {target}")
-    models_vol.commit()
+    hf_vol.commit()
 
 
 @app.function(**GPU_KW)
@@ -258,6 +284,20 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
             env=env,
             log=f"{RUNS_DIR}/receipts/{rid}.convert.log",
         )
+        # The dist save's .metadata is written at finalize; wait for it before
+        # committing so an unfinalized save can never be committed as a
+        # checkpoint (that failure mode cost two debugging rounds).
+        ref = Path(env["MILES_REF_LOAD_DIR"])
+        marker = ref / "latest_checkpointed_iteration.txt"
+        if not marker.exists():
+            raise RuntimeError(f"conversion produced no checkpoint marker at {marker}")
+        meta = ref / f"iter_{int(marker.read_text().strip()):07d}" / ".metadata"
+        for _ in range(60):
+            if meta.exists():
+                break
+            time.sleep(5)
+        else:
+            raise RuntimeError(f"conversion save never finalized: {meta} missing after 300s")
         models_vol.commit()
         _receipt(stage, rid, {"wall_s": round(time.time() - started, 1)})
     elif stage == "probe":
