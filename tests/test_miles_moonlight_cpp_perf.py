@@ -182,6 +182,8 @@ def test_miles_glm47_h100_wrappers_select_fast_8x_h100_defaults() -> None:
     assert 'MILES_SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.60}"' in sft_text
     assert 'MILES_SGLANG_CUDA_GRAPH_MAX_BS="${MILES_SGLANG_CUDA_GRAPH_MAX_BS:-16}"' in sft_text
     assert 'MILES_SGLANG_MAX_RUNNING_REQUESTS="${MILES_SGLANG_MAX_RUNNING_REQUESTS:-64}"' in sft_text
+    assert 'MILES_LORA_BASE_CPU_BACKUP="${MILES_LORA_BASE_CPU_BACKUP:-0}"' in sft_text
+    assert 'MILES_EXTRA_ARGS="--no-offload-train${MILES_EXTRA_ARGS:+ ${MILES_EXTRA_ARGS}}"' in sft_text
 
 
 def test_miles_h100_wandb_lineage_reaches_ray_workers_and_receipts() -> None:
@@ -569,6 +571,12 @@ def test_grpo_runner_eval_prompt_data_is_configurable() -> None:
 def test_grpo_runner_supports_raw_extra_args() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'read -r -a EXTRA_ARGS <<< "${MILES_EXTRA_ARGS}"' in text
+
+
+def test_sft_runner_supports_raw_extra_args() -> None:
+    text = SFT_RUNNER.read_text(encoding="utf-8")
+    assert 'read -r -a EXTRA_ARGS <<< "${MILES_EXTRA_ARGS}"' in text
+    assert "extra_args=${MILES_EXTRA_ARGS:-}" in text
 
 
 def test_miles_runners_expose_h100_throughput_knobs() -> None:

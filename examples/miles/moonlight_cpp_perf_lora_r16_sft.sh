@@ -217,6 +217,7 @@ rollout_batch_size=${ROLLOUT_BATCH_SIZE}
 global_batch_size=${GLOBAL_BATCH_SIZE}
 lora_rank=${LORA_RANK}
 lora_alpha=${LORA_ALPHA}
+lora_base_cpu_backup=${LORA_BASE_CPU_BACKUP}
 sft_rollout_function_path=${SFT_ROLLOUT_FUNCTION_PATH}
 train_module=${TRAIN_MODULE}
 moe_token_dispatcher_type=${MOE_TOKEN_DISPATCHER_TYPE}
@@ -236,6 +237,7 @@ wandb_run_id=${WANDB_RUN_ID}
 wandb_job_type=${WANDB_JOB_TYPE}
 experiment_id=${EXPERIMENT_ID}
 timing_status=${W8_TIMING_STATUS:-unverified}
+extra_args=${MILES_EXTRA_ARGS:-}
 EOF
   cat "${RUN_RECEIPT}"
 }
@@ -440,6 +442,12 @@ MISC_ARGS=(
   --attention-softmax-in-fp32
   --save-debug-rollout-data "${ROLLOUT_DUMP_TEMPLATE}"
 )
+# Raw passthrough for measured runtime experiments; appended last so an
+# explicit setting can override Miles' colocated defaults.
+if [ -n "${MILES_EXTRA_ARGS:-}" ]; then
+  read -r -a EXTRA_ARGS <<< "${MILES_EXTRA_ARGS}"
+  MISC_ARGS+=("${EXTRA_ARGS[@]}")
+fi
 
 ray start --head \
   --node-ip-address "${RAY_NODE_IP_ADDRESS}" \
