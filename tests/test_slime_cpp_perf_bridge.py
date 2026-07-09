@@ -148,16 +148,22 @@ def test_build_slime_cpp_perf_datasets_can_keep_only_full_mark_oracles(
     sft_rows = _read_jsonl(paths["sft_train"])
     grpo_rows = _read_jsonl(paths["grpo_train"])
     oracle_filter_rows = _read_jsonl(paths["oracle_filter"])
+    oracle_keep_task_ids = json.loads(paths["oracle_keep_task_ids"].read_text(encoding="utf-8"))
+    oracle_drop_task_ids = json.loads(paths["oracle_drop_task_ids"].read_text(encoding="utf-8"))
     manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
 
     assert [row["task_id"] for row in sft_rows] == ["train-good"]
     assert [row["task_id"] for row in grpo_rows] == ["train-good"]
     assert {row["task_id"]: row["keep"] for row in oracle_filter_rows} == {"train-good": True, "train-bad": False}
+    assert oracle_keep_task_ids == ["train-good"]
+    assert oracle_drop_task_ids == ["train-bad"]
     assert manifest["counts"] == {"copied_tasks": 2, "eval": 1, "train": 1}
     assert manifest["filter_train_oracle_full_marks"] is True
     assert manifest["oracle_filter"]["scored"] == 2
     assert manifest["oracle_filter"]["kept"] == 1
     assert manifest["oracle_filter"]["reason_counts"] == {"correct": 1, "tests_failed": 1}
+    assert manifest["files"]["oracle_keep_task_ids"] == "oracle_filter/keep_task_ids.json"
+    assert manifest["files"]["oracle_drop_task_ids"] == "oracle_filter/drop_task_ids.json"
 
 
 def test_reward_func_invalid_format_returns_score_dict_without_running_sandbox(tmp_path: Path, monkeypatch) -> None:

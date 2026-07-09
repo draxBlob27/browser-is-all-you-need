@@ -112,11 +112,21 @@ def build_slime_cpp_perf_datasets(
     }
     if filter_train_oracle_full_marks:
         paths["oracle_filter"] = output / "oracle_filter" / "train.jsonl"
+        paths["oracle_keep_task_ids"] = output / "oracle_filter" / "keep_task_ids.json"
+        paths["oracle_drop_task_ids"] = output / "oracle_filter" / "drop_task_ids.json"
     _write_jsonl(paths["sft_train"], sft_rows)
     _write_jsonl(paths["grpo_train"], grpo_rows)
     _write_jsonl(paths["eval"], eval_prompt_rows)
     if filter_train_oracle_full_marks:
         _write_jsonl(paths["oracle_filter"], [_oracle_filter_row(result) for result in oracle_filter_results])
+        write_json(
+            paths["oracle_keep_task_ids"],
+            [result.task.task_id for result in oracle_filter_results if result.keep],
+        )
+        write_json(
+            paths["oracle_drop_task_ids"],
+            [result.task.task_id for result in oracle_filter_results if not result.keep],
+        )
     write_json(
         paths["manifest"],
         {
