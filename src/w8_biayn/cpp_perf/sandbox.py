@@ -226,12 +226,13 @@ def compile_command(task: CppTask, scratch: str | Path, *, image: str = DEFAULT_
 
 
 def reference_compile_command(task: CppTask, scratch: str | Path, *, image: str = DEFAULT_DOCKER_IMAGE) -> list[str]:
-    # Some accepted PIE references rely on fixed-width integer limit macros
-    # arriving transitively under their original compiler. Make that legacy
-    # compatibility explicit without weakening model-candidate compilation.
+    # Some accepted PIE references rely on INT32_MAX arriving transitively
+    # under their original compiler. Define only that legacy constant here:
+    # force-including a standard header before source-level _GLIBCXX_DEBUG
+    # changes libstdc++ ABI mode and breaks otherwise-valid references.
     script = (
         f"timeout {task.build.timeout_s}s g++ {task.reference.compiler_flags} "
-        "-include cstdint reference.cpp -o reference"
+        "-DINT32_MAX=__INT32_MAX__ reference.cpp -o reference"
     )
     return sandbox_command(scratch, script, image=image)
 

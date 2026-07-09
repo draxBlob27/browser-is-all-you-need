@@ -255,7 +255,7 @@ def test_sandbox_dry_run_and_runtime_parser():
     assert "/tmp/w8_runtime_bench.py" not in plan
     assert "--binary ./candidate" in plan
     assert "--binary ./reference" in plan
-    assert "-include cstdint reference.cpp" in plan
+    assert "-DINT32_MAX=__INT32_MAX__ reference.cpp" in plan
     assert "expected.norm" in " ".join(run_test_command(0, "/tmp/w8", image="gcc:13"))
 
     parsed = parse_runtime_benchmark_output('noise\n{"ok":true,"runtime_cpu_ns":12,"runtime_wall_ns":20}\n')
