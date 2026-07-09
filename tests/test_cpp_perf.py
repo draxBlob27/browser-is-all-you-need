@@ -251,7 +251,8 @@ def test_sandbox_dry_run_and_runtime_parser():
     plan = dry_run_plan(sample_task(), image="gcc:13", cpu="3")
     assert "--network none" in plan
     assert "g++ -O3 -std=c++20 candidate.cpp -o candidate" in plan
-    assert "python3 /tmp/w8_runtime_bench.py" in plan
+    assert "python3 ./.w8_runtime_bench.py" in plan
+    assert "/tmp/w8_runtime_bench.py" not in plan
     assert "--binary ./candidate" in plan
     assert "--binary ./reference" in plan
     assert "-include cstdint reference.cpp" in plan

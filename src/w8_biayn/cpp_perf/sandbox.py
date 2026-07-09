@@ -611,12 +611,12 @@ def _runtime_benchmark_shell(
     validate_output: bool = True,
 ) -> str:
     return (
-        "cat > /tmp/w8_runtime_bench.py <<'PY'\n"
+        "cat > .w8_runtime_bench.py <<'PY'\n"
         + _runtime_benchmark_python().rstrip()
         + "\nPY\n"
         + "taskset -c "
         + shlex.quote(cpu)
-        + " python3 /tmp/w8_runtime_bench.py "
+        + " python3 ./.w8_runtime_bench.py "
         + f"--binary {shlex.quote('./' + binary)} "
         + f"--test-count {test_count} "
         + f"--timeout-s {timeout_s} "
