@@ -69,6 +69,23 @@ def test_task_requires_hidden_tests_and_coverage():
         )
 
 
+def test_task_repairs_blank_gap_after_preprocessor_line_continuation():
+    task_data = sample_task().model_dump()
+    task_data["oracle_solution"] = (
+        '#define inout(s) freopen(s, "r", stdin),\\\n\n'
+        '    freopen(s, "w", stdout);\n'
+        "int main(){return 0;}\n"
+    )
+
+    task = CppTask.model_validate(task_data)
+
+    assert task.oracle_solution == (
+        '#define inout(s) freopen(s, "r", stdin),\\\n'
+        '    freopen(s, "w", stdout);\n'
+        "int main(){return 0;}\n"
+    )
+
+
 def test_pie_parser_builds_valid_tasks_only_when_manifest_has_tests(tmp_path):
     tsv = tmp_path / "pie.tsv"
     tsv.write_text(

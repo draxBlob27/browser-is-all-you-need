@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+LINE_CONTINUATION_BLANK_GAP_RE = re.compile(
+    r"(\\[^\S\r\n]*\r?\n)(?:[^\S\r\n]*\r?\n)+"
+)
 
 
 class TestCase(BaseModel):
@@ -60,6 +66,13 @@ class CppTask(BaseModel):
     build: BuildConfig = Field(default_factory=BuildConfig)
     split: Literal["train", "test", "validation"]
     source: str = "PIE"
+
+    @field_validator("prompt_code", "oracle_solution")
+    @classmethod
+    def _repair_preprocessor_line_continuations(cls, source: str) -> str:
+        """Remove exporter-added blank lines that split a trailing backslash."""
+
+        return LINE_CONTINUATION_BLANK_GAP_RE.sub(r"\1", source)
 
     @field_validator("unit_tests", "hidden_tests")
     @classmethod
