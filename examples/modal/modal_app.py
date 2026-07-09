@@ -64,6 +64,11 @@ image = (
         "|| echo 'gcc-13 PPA unavailable; falling back to distro g++'",
     )
     .pip_install("huggingface_hub[hf_transfer]")
+    # The image ships sglang-kernel 0.4.2.post2+cu129 but its sglang engine
+    # asserts >=0.4.4 at boot. Fires on any Engine init (standalone eval,
+    # GRPO rollouts); SFT's debug-train-only path never boots an engine,
+    # which is why the fit probe passed without it.
+    .run_commands("pip install 'sglang-kernel>=0.4.4' --force-reinstall --no-deps")
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
 )
 
