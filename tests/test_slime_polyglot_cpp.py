@@ -343,6 +343,25 @@ def test_aggregate_reports_recovery_diagnostics_without_changing_strict_pass_rat
     assert summary["category_summary"]["conditionals"]["recovered_task_pass_rate"] == 1.0
 
 
+def test_run_polyglot_tests_preserves_exercise_dir_basename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    exercise = tmp_path / "knapsack"
+    exercise.mkdir()
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(polyglot.subprocess, "run", fake_run)
+
+    result = polyglot.run_polyglot_tests(exercise)
+
+    assert result.passed
+    command = commands[0]
+    assert command[command.index("-v") + 1] == f"{tmp_path.resolve()}:/work:rw"
+    assert command[command.index("-w") + 1] == "/work/knapsack"
+
+
 def test_polyglot_sandbox_image_plan_installs_cmake_and_make() -> None:
     plan = polyglot.polyglot_sandbox_image_build_plan()
     assert "docker build -t w8-biayn-polyglot-cpp:latest -" in plan

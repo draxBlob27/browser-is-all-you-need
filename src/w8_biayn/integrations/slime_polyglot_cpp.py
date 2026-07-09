@@ -16,7 +16,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, Iterable, Sequence
 
 from w8_biayn.cpp_perf.eval import write_json
-from w8_biayn.cpp_perf.sandbox import BASE_DOCKER_IMAGE, docker_base_args
+from w8_biayn.cpp_perf.sandbox import BASE_DOCKER_IMAGE, DEFAULT_MEMORY
 from w8_biayn.integrations.slime_cpp_perf import load_slime_debug_samples
 
 DATA_SOURCE = "Aider-AI/polyglot-benchmark"
@@ -542,7 +542,7 @@ def _run_replacements(metadata: dict[str, Any], replacements: dict[str, str]) ->
 
     source_exercise = _resolve_exercise_path(str(exercise_path), metadata=metadata)
     with TemporaryDirectory(prefix="w8-polyglot-cpp-") as scratch_dir:
-        scratch = Path(scratch_dir) / "exercise"
+        scratch = Path(scratch_dir) / source_exercise.name
         shutil.copytree(source_exercise, scratch)
         for rel_path, content in replacements.items():
             target = scratch / rel_path
@@ -595,7 +595,13 @@ def run_polyglot_tests(exercise_dir: str | Path) -> PolyglotTestResult:
     timeout_s = int(os.environ.get(TEST_TIMEOUT_ENV, str(DEFAULT_TEST_TIMEOUT_SECONDS)))
     image = os.environ.get(SANDBOX_IMAGE_ENV, DEFAULT_POLYGLOT_SANDBOX_IMAGE)
     script = "mkdir -p build && cd build && cmake -DEXERCISM_RUN_ALL_TESTS=1 -G 'Unix Makefiles' .. && make"
-    command = docker_base_args(exercise_dir, image=image) + ["bash", "-lc", f"timeout {timeout_s}s bash -lc {shlex.quote(script)}"]
+    exercise_path = Path(exercise_dir).resolve()
+    workdir = PurePosixPath("/work") / exercise_path.name
+    command = _polyglot_docker_args(exercise_path.parent, workdir=workdir.as_posix(), image=image) + [
+        "bash",
+        "-lc",
+        f"timeout {timeout_s}s bash -lc {shlex.quote(script)}",
+    ]
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_s + 30, check=False)
     except subprocess.TimeoutExpired as exc:
@@ -603,6 +609,44 @@ def run_polyglot_tests(exercise_dir: str | Path) -> PolyglotTestResult:
         return PolyglotTestResult(returncode=None, logs=logs, timeout=True)
     logs = "\n".join(part for part in (result.stdout, result.stderr) if part)
     return PolyglotTestResult(returncode=result.returncode, logs=logs, timeout=result.returncode == 124)
+
+
+def _polyglot_docker_args(
+    mount_root: str | Path,
+    *,
+    workdir: str,
+    image: str = DEFAULT_POLYGLOT_SANDBOX_IMAGE,
+    memory: str = DEFAULT_MEMORY,
+) -> list[str]:
+    """Return Docker args while preserving the exercise directory basename for CMake."""
+
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--network",
+        "none",
+        "--cpus",
+        "1",
+        "--memory",
+        memory,
+        "--pids-limit",
+        "128",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=64m,mode=1777",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "-v",
+        f"{Path(mount_root).resolve()}:/work:rw",
+        "-w",
+        workdir,
+        image,
+    ]
 
 
 def _record_from_test_result(
