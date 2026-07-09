@@ -46,15 +46,12 @@ def sandbox_backend() -> str:
 
 
 class _LocalCorePool:
-    """Leases one host core per concurrent candidate in local-backend mode.
+    """Leases one host-visible core per concurrent candidate.
 
-    Docker mode pins inside each container's private cpuset, so a fixed
-    `taskset -c N` never contends. Local mode shares the host cpuset across
-    every scoring worker: a fixed pin stampedes one core, inflating timings
-    into timeouts and corrupting speedup ratios (observed: 26/1259 missing
-    runtimes and a 59525x mean speedup on the first H100 eval). Leasing a
-    distinct core per candidate keeps candidate and oracle on the same quiet
-    core for the whole measurement.
+    Both backends share the host CPU namespace. Docker's ``--cpus 1`` is a
+    quota, not a private cpuset, so a fixed ``taskset -c N`` stampedes one core
+    there just as it does in local mode. Leasing a distinct core per candidate
+    keeps candidate and oracle on the same core for the whole measurement.
     """
 
     def __init__(self) -> None:
@@ -66,12 +63,13 @@ class _LocalCorePool:
             self._available = [str(c) for c in sorted(os.sched_getaffinity(0))]
 
     @contextmanager
-    def lease(self) -> Any:
+    def lease(self, preferred: str) -> Any:
         with self._cv:
             self._ensure()
             while not self._available:
                 self._cv.wait()
-            core = self._available.pop()
+            core = preferred if preferred in self._available else self._available[-1]
+            self._available.remove(core)
         try:
             yield core
         finally:
@@ -87,11 +85,8 @@ _LOCAL_CORE_POOL = _LocalCorePool()
 def _sandbox_cpu(cpu: str) -> Any:
     """Resolve the pin target for one candidate's full measurement."""
 
-    if sandbox_backend() == "local":
-        with _LOCAL_CORE_POOL.lease() as core:
-            yield core
-    else:
-        yield cpu
+    with _LOCAL_CORE_POOL.lease(cpu) as core:
+        yield core
 
 
 def sandbox_command(
