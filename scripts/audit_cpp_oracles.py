@@ -110,7 +110,8 @@ def write_json(path: Path, value: Any) -> None:
 def repo_sha() -> str:
     repo_root = Path(__file__).resolve().parents[1]
     return subprocess.check_output(
-        ["git", "-C", str(repo_root), "rev-parse", "HEAD"], text=True
+        ["git", "-c", f"safe.directory={repo_root}", "-C", str(repo_root), "rev-parse", "HEAD"],
+        text=True,
     ).strip()
 
 
