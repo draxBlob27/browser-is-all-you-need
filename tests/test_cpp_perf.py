@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
@@ -354,6 +355,37 @@ def test_timed_candidate_correctness_failure_revokes_initial_test_pass():
     assert sb._tests_passed_after_runtime_failure(2, "nonzero_exit") == 1
     assert sb._tests_passed_after_runtime_failure(2, "timeout") == 2
     assert sb._tests_passed_after_runtime_failure(2, "runtime_command_failed") == 2
+
+
+def test_docker_infrastructure_failures_raise_instead_of_scoring_candidates():
+    from w8_biayn.cpp_perf import sandbox as sb
+
+    with pytest.raises(sb.SandboxInfrastructureError, match="exit 125"):
+        sb._raise_for_docker_infrastructure(
+            ["docker", "run"],
+            subprocess.CompletedProcess(["docker", "run"], 125, "", "daemon failed"),
+        )
+    with pytest.raises(sb.SandboxInfrastructureError, match="overlay mount"):
+        sb._raise_for_docker_infrastructure(
+            ["docker", "run"],
+            subprocess.CompletedProcess(
+                ["docker", "run"],
+                1,
+                "",
+                "Error response from daemon: error creating overlay mount",
+            ),
+        )
+
+    # A compiler failure inside a successfully launched container remains a
+    # candidate compile error, and local-backend exit codes are not Docker state.
+    sb._raise_for_docker_infrastructure(
+        ["docker", "run"],
+        subprocess.CompletedProcess(["docker", "run"], 1, "", "candidate.cpp: error: bad code"),
+    )
+    sb._raise_for_docker_infrastructure(
+        ["bash", "-lc", "g++"],
+        subprocess.CompletedProcess(["bash"], 125, "", ""),
+    )
 
 
 def test_task_json_round_trip(tmp_path):

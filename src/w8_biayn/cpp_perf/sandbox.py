@@ -26,6 +26,16 @@ DEFAULT_RUN_TIMEOUT_S = 5
 DEFAULT_RUNTIME_WARMUPS = 1
 DEFAULT_RUNTIME_REPEATS = 3
 SANDBOX_BACKEND_ENV = "W8_CPP_SANDBOX_BACKEND"
+DOCKER_INFRASTRUCTURE_ERROR_MARKERS = (
+    "cannot connect to the docker daemon",
+    "error response from daemon",
+    "error creating overlay mount",
+    "failed to create shim task",
+)
+
+
+class SandboxInfrastructureError(RuntimeError):
+    """The sandbox runtime failed before candidate code could be evaluated."""
 
 
 def sandbox_backend() -> str:
@@ -801,4 +811,19 @@ def _combined_logs(proc: subprocess.CompletedProcess[str]) -> str:
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, check=False, capture_output=True, text=True)
+    proc = subprocess.run(args, check=False, capture_output=True, text=True)
+    _raise_for_docker_infrastructure(args, proc)
+    return proc
+
+
+def _raise_for_docker_infrastructure(
+    args: list[str], proc: subprocess.CompletedProcess[str]
+) -> None:
+    if not args or args[0] != "docker" or proc.returncode == 0:
+        return
+    logs = _combined_logs(proc)
+    normalized = logs.lower()
+    if proc.returncode >= 125 or any(marker in normalized for marker in DOCKER_INFRASTRUCTURE_ERROR_MARKERS):
+        raise SandboxInfrastructureError(
+            f"Docker sandbox infrastructure failed (exit {proc.returncode}): {logs[-2000:]}"
+        )
