@@ -107,6 +107,8 @@ def main() -> None:
         generations = read_jsonl(source_generated_path)
         if not generations:
             raise ValueError(f"No generated rows found in {source_generated_path}")
+        if args.max_tasks is not None:
+            generations = limit_generations_by_task_count(generations, args.max_tasks)
         print(
             f"PIE eval generation reused: label={args.label} samples={len(generations)} "
             f"source={source_generated_path}",
@@ -220,6 +222,24 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def limit_generations_by_task_count(
+    generations: list[dict[str, Any]], max_tasks: int
+) -> list[dict[str, Any]]:
+    """Keep every sample for the first ``max_tasks`` task ids in a replay file."""
+
+    selected: set[str] = set()
+    limited: list[dict[str, Any]] = []
+    for index, row in enumerate(generations):
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        task_id = str(row.get("task_id") or metadata.get("task_id") or f"row-{index}")
+        if task_id not in selected:
+            if len(selected) >= max_tasks:
+                continue
+            selected.add(task_id)
+        limited.append(row)
+    return limited
 
 
 def generate_rows(args: argparse.Namespace, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

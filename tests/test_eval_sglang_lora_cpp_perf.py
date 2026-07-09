@@ -166,6 +166,24 @@ def test_preserved_generations_can_be_replayed_without_model(monkeypatch) -> Non
     assert args.generated == "preserved.generated.jsonl"
 
 
+def test_replay_task_limit_keeps_all_samples_for_selected_tasks() -> None:
+    module = _load_eval_module()
+    generations = [
+        {"task_id": "a", "sample_index": 0},
+        {"task_id": "b", "sample_index": 0},
+        {"task_id": "a", "sample_index": 1},
+        {"task_id": "c", "sample_index": 0},
+    ]
+
+    limited = module.limit_generations_by_task_count(generations, 2)
+
+    assert [(row["task_id"], row["sample_index"]) for row in limited] == [
+        ("a", 0),
+        ("b", 0),
+        ("a", 1),
+    ]
+
+
 def test_wandb_lineage_and_timing_flags_parse(monkeypatch) -> None:
     module = _load_eval_module()
     monkeypatch.setattr(
