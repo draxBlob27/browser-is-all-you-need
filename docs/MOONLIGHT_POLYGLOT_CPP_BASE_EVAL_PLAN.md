@@ -5,7 +5,7 @@ This document is a future implementation plan for evaluating the base
 `Aider-AI/polyglot-benchmark` using a workflow that resembles the current
 repo-owned Moonlight `eval_base.sh` lane.
 
-Status: design/runbook only. The lane described here is not implemented yet.
+Status: implemented as an optional base-eval lane. Implementation lives in `examples/slime/moonlight_polyglot_cpp/` and `src/w8_biayn/integrations/slime_polyglot_cpp.py`.
 
 ## Goal
 

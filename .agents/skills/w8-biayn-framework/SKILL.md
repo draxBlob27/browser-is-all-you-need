@@ -71,6 +71,7 @@ upstream repos or data.
 - Eval aggregation: `src/w8_biayn/cpp_perf/eval.py`
 - SLIME setup/doctor/sandbox helpers: `src/w8_biayn/slime_integration/`
 - SLIME C++ bridge: `src/w8_biayn/integrations/slime_cpp_perf.py`
+- SLIME Polyglot C++ bridge: `src/w8_biayn/integrations/slime_polyglot_cpp.py`
 - W&B reporting layer (metrics/tables/artifacts/alerts/workspace):
   `src/w8_biayn/wandb_report.py`
 - Network reachability probes + launch watchdog: `src/w8_biayn/net_health.py`
@@ -201,6 +202,18 @@ bash examples/slime/moonlight_cpp_perf/eval_sft.sh
 bash examples/slime/moonlight_cpp_perf/grpo.sh
 bash examples/slime/moonlight_cpp_perf/eval_grpo.sh
 bash examples/slime/moonlight_cpp_perf/compare.sh
+```
+
+
+Optional Moonlight Polyglot C++ base-eval benchmark. This is not active PIE
+training and not an official Aider leaderboard run; it is a repo-owned
+SLIME rollout-only eval of base Moonlight on C++ Exercism tasks. Its eval rows
+and reward records carry repo-owned `category`/`categories` fields, and
+`base.summary.json` includes `category_summary` for heatmaps:
+
+```bash
+bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
+bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 ```
 
 Moonlight rank-16 LoRA C++ lane:

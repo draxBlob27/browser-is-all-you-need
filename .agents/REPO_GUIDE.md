@@ -180,6 +180,18 @@ bash examples/slime/moonlight_cpp_perf/eval_grpo.sh
 bash examples/slime/moonlight_cpp_perf/compare.sh
 ```
 
+
+Optional Moonlight Polyglot C++ base-eval benchmark. This is not active PIE
+training and not an official Aider leaderboard run; it is a repo-owned
+SLIME rollout-only eval of base Moonlight on C++ Exercism tasks. Its eval rows
+and reward records carry repo-owned `category`/`categories` fields, and
+`base.summary.json` includes `category_summary` for heatmaps:
+
+```bash
+bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
+bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
+```
+
 Moonlight rank-16 LoRA C++ lane:
 
 ```bash
@@ -312,6 +324,7 @@ scripts/prepare_dapo_math_dataset.py         optional SLIME text-smoke data prep
 scripts/wandb_milestone.py                   standalone pipeline-milestone logger (elapsed curve + timeline table)
 examples/slime/moonlight_cpp_perf/           active Moonlight C++ lane
 examples/slime/moonlight_lora_cpp_perf/      rank-16 LoRA Moonlight C++ lane
+examples/slime/moonlight_polyglot_cpp/       optional Moonlight base eval on Aider Polyglot C++
 examples/slime/glm47_cpp_perf/               active GLM C++ lane when present
 examples/slime/glm47_swe_agent_cpp_perf/     agentic SWE-agent file-state C++ lane
 examples/slime/retool/                       Moonlight ReTool lane
@@ -325,6 +338,8 @@ tests/test_regression_lints.py               one guard per bug the GPU smoke cam
 src/w8_biayn/cpp_perf/                       PIE task, prompt, sandbox, reward, eval code
 src/w8_biayn/slime_integration/              SLIME doctor/setup/sandbox helpers
 src/w8_biayn/integrations/slime_cpp_perf.py  SLIME C++ data/reward/eval bridge
+src/w8_biayn/integrations/slime_polyglot_cpp.py
+                                             SLIME Polyglot C++ data/reward/eval bridge
 src/w8_biayn/integrations/slime_swe_agent_cpp_perf.py
                                              agentic SWE-agent generate() hook (file-state reward)
 src/w8_biayn/integrations/swe_agent_driver.py

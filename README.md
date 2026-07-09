@@ -54,6 +54,7 @@ files and report asset directories should not be committed.
 Use repo-owned wrappers rather than editing `.cache/upstreams/slime` directly.
 
 - Moonlight C++ performance lane: `examples/slime/moonlight_cpp_perf/`
+- Moonlight Polyglot C++ base-eval lane: `examples/slime/moonlight_polyglot_cpp/`
 - Moonlight rank-16 LoRA C++ performance lane: `examples/slime/moonlight_lora_cpp_perf/`
 - GLM C++ performance lane: `examples/slime/glm47_cpp_perf/`
 - GLM agentic SWE-agent C++ lane (multi-turn, file-state scored): `examples/slime/glm47_swe_agent_cpp_perf/`
@@ -64,6 +65,13 @@ Use repo-owned wrappers rather than editing `.cache/upstreams/slime` directly.
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt
 builder, Docker C++ sandbox, reward function, and eval aggregation through
 `src/w8_biayn/integrations/slime_cpp_perf.py`.
+
+The Moonlight Polyglot C++ lane is an optional base-eval benchmark lane for the
+C++ subset of `Aider-AI/polyglot-benchmark`. It is not an official Aider
+leaderboard run and is not part of the PIE training proof. It uses
+`src/w8_biayn/integrations/slime_polyglot_cpp.py` to build whole-file C++
+exercise prompts, run SLIME rollout-only eval, and grade replacements with
+Exercism C++ tests in a dedicated Docker sandbox.
 
 The GLM agentic SWE-agent lane grades the final edited FILE instead of model
 text: SWE-agent edits `candidate.cpp` over many turns, the hardened Docker
@@ -297,6 +305,42 @@ bash examples/slime/moonlight_cpp_perf/compare.sh
 
 The lane writes local state under
 `.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/`.
+
+
+## Moonlight Polyglot C++ Base Eval
+
+This optional benchmark lane evaluates the base Moonlight checkpoint on the C++
+subset of `Aider-AI/polyglot-benchmark` using SLIME rollout-only eval. It is a
+repo-owned whole-file prompt/parser/reward loop, not an official Aider
+leaderboard run.
+
+From the repo root, clone the benchmark and build the CMake-capable sandbox
+image:
+
+```bash
+git clone https://github.com/Aider-AI/polyglot-benchmark \
+  .w8-biayn/data/polyglot-benchmark
+uv run python -m w8_biayn.integrations.slime_polyglot_cpp sandbox-image
+```
+
+Inside the SLIME container:
+
+```bash
+export SLIME_RUN_ID="moonlight_polyglot_cpp_$(date -u +%Y%m%d%H%M%S)"
+export SLIME_POLYGLOT_SOURCE=/workspace/browser-is-all-you-need/.w8-biayn/data/polyglot-benchmark
+export SLIME_POLYGLOT_EVAL_LIMIT=10
+export SLIME_EVAL_MAX_RESPONSE_LEN=4096
+
+bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
+bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
+```
+
+Artifacts are written under
+`.w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/`, including
+`eval/base.records.jsonl`, `eval/base.summary.json`, and
+`stages/base-eval/run_receipt.txt`. Eval rows and reward records include a
+primary `category` plus multi-label `categories`; `base.summary.json` includes
+`category_summary` for heatmaps of pass/error rates by exercise concept.
 
 For the lighter Moonlight MoE smoke, use:
 

@@ -22,6 +22,7 @@ preserved, then measure speed.
 - SGLang: the rollout/inference backend used by the SLIME lanes.
 - Moonlight: the active Moonlight-16B-A3B model lane.
 - GLM: the active GLM-4.7-Flash model lane.
+- Polyglot: optional Aider Polyglot C++ base-eval benchmark, separate from the PIE training proof.
 - Docker sandbox: the compile/test/runtime harness for C++ reward execution.
 
 SkyRL/rLLM names may still appear in legacy files. Treat that stack as retired
@@ -245,6 +246,35 @@ correct-and-faster rate, and missing runtime rows.
 
 Decision gate: do not claim training progress until baseline evaluation has
 complete records and no unexplained missing runtime rows.
+
+
+
+## Optional Side Benchmark: Polyglot C++ Base Eval
+
+Question:
+
+> How does the base Moonlight checkpoint perform on Aider Polyglot C++
+> exercises under a repo-owned SLIME rollout-only harness?
+
+This benchmark is separate from the active PIE optimization training proof. It
+uses whole-file solution replacement prompts and Exercism C++ tests, not PIE
+`v0 -> v1` speed reward and not the official Aider edit harness.
+
+```bash
+git clone https://github.com/Aider-AI/polyglot-benchmark \
+  .w8-biayn/data/polyglot-benchmark
+uv run python -m w8_biayn.integrations.slime_polyglot_cpp sandbox-image
+
+bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
+bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
+```
+
+Inspect `eval/base.records.jsonl`, `eval/base.summary.json`, and
+`stages/base-eval/run_receipt.txt`. The eval rows and reward records include a
+primary `category` plus multi-label `categories`; `base.summary.json` includes
+`category_summary` for heatmaps of pass/error rates by exercise concept. Do not
+compare these results directly with Aider leaderboard numbers; use Aider's
+benchmark harness for that.
 
 ## Stage 4: Run SFT
 
