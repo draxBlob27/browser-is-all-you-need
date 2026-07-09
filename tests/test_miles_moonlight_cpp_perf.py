@@ -110,7 +110,12 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
     assert '"W8_REGISTER_GLM47_BRIDGE",' in sft_runner_text
     assert "W8_REGISTER_GLM47_BRIDGE" in sft_text
     assert '\\"W8_REGISTER_GLM47_BRIDGE\\": \\"${W8_REGISTER_GLM47_BRIDGE:-}\\"' in grpo_runner_text
-    for probe_key in ("W8_GLM47_SURFACE_PROBE", "W8_GLM47_PROBE_OUT", "W8_GLM47_NO_SHARED_LORA_CKPT_PATCH"):
+    for probe_key in (
+        "W8_GLM47_SURFACE_PROBE",
+        "W8_GLM47_PROBE_OUT",
+        "W8_GLM47_NO_SHARED_LORA_CKPT_PATCH",
+        "W8_GLM47_SYNC_FORENSICS",
+    ):
         assert f'"{probe_key}",' in sft_runner_text
         assert f'\\"{probe_key}\\": \\"${{{probe_key}:-}}\\"' in grpo_runner_text
     grpo_text = GLM47_GRPO_RUNNER.read_text(encoding="utf-8")
@@ -207,11 +212,15 @@ def test_miles_h100_wandb_lineage_reaches_ray_workers_and_receipts() -> None:
         assert "WANDB_JOB_TYPE" in text
         assert "WANDB_RUN_GROUP" in text
         assert "WANDB_TAGS" in text
-        assert "WANDB_RUN_ID" in text
         assert '"${REPO_ROOT}/scripts/wandb_posttraining.py" finalize-stage' in text
         assert '--timing-status "${W8_TIMING_STATUS:-unverified}"' in text
         assert "wall_s=$((SECONDS - STAGE_STARTED_AT))" in text
         assert 'finalize_wandb "${STAGE_STATUS}"' in text
+
+    sft_runner_text = SFT_RUNNER.read_text(encoding="utf-8")
+    grpo_runner_text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert '"WANDB_RUN_ID": "${WANDB_RUN_ID}",' in sft_runner_text
+    assert '\\"WANDB_RUN_ID\\": \\"${WANDB_RUN_ID}\\",' in grpo_runner_text
 
 
 def test_miles_glm47_h100_converter_matches_runner_layout() -> None:

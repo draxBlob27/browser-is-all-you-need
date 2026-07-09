@@ -501,6 +501,7 @@ for key in (
     "W8_GLM47_SURFACE_PROBE",
     "W8_GLM47_PROBE_OUT",
     "W8_GLM47_NO_SHARED_LORA_CKPT_PATCH",
+    "W8_GLM47_SYNC_FORENSICS",
 ):
     if key in os.environ:
         env[key] = os.environ[key]
