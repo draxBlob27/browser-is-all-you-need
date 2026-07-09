@@ -6,6 +6,8 @@ import json
 import os
 import shlex
 import subprocess
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -41,6 +43,55 @@ def sandbox_backend() -> str:
     if backend not in ("docker", "local"):
         raise ValueError(f"{SANDBOX_BACKEND_ENV} must be docker|local, got: {backend}")
     return backend
+
+
+class _LocalCorePool:
+    """Leases one host core per concurrent candidate in local-backend mode.
+
+    Docker mode pins inside each container's private cpuset, so a fixed
+    `taskset -c N` never contends. Local mode shares the host cpuset across
+    every scoring worker: a fixed pin stampedes one core, inflating timings
+    into timeouts and corrupting speedup ratios (observed: 26/1259 missing
+    runtimes and a 59525x mean speedup on the first H100 eval). Leasing a
+    distinct core per candidate keeps candidate and oracle on the same quiet
+    core for the whole measurement.
+    """
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._available: list[str] | None = None
+
+    def _ensure(self) -> None:
+        if self._available is None:
+            self._available = [str(c) for c in sorted(os.sched_getaffinity(0))]
+
+    @contextmanager
+    def lease(self) -> Any:
+        with self._cv:
+            self._ensure()
+            while not self._available:
+                self._cv.wait()
+            core = self._available.pop()
+        try:
+            yield core
+        finally:
+            with self._cv:
+                self._available.append(core)
+                self._cv.notify()
+
+
+_LOCAL_CORE_POOL = _LocalCorePool()
+
+
+@contextmanager
+def _sandbox_cpu(cpu: str) -> Any:
+    """Resolve the pin target for one candidate's full measurement."""
+
+    if sandbox_backend() == "local":
+        with _LOCAL_CORE_POOL.lease() as core:
+            yield core
+    else:
+        yield cpu
 
 
 def sandbox_command(
@@ -335,10 +386,11 @@ def run_runtime_preflight(
 ) -> RuntimePreflightResult:
     """Check that CPU-time runtime measurement works in Docker."""
 
-    if work_dir is None:
-        with TemporaryDirectory(prefix="w8-cpp-preflight-") as temp:
-            return _run_runtime_preflight_in_directory(Path(temp), image=image, cpu=cpu)
-    return _run_runtime_preflight_in_directory(Path(work_dir), image=image, cpu=cpu)
+    with _sandbox_cpu(cpu) as pinned:
+        if work_dir is None:
+            with TemporaryDirectory(prefix="w8-cpp-preflight-") as temp:
+                return _run_runtime_preflight_in_directory(Path(temp), image=image, cpu=pinned)
+        return _run_runtime_preflight_in_directory(Path(work_dir), image=image, cpu=pinned)
 
 
 def _run_runtime_preflight_in_directory(scratch: Path, *, image: str, cpu: str) -> RuntimePreflightResult:
@@ -402,10 +454,11 @@ def run_in_sandbox(
 ) -> HarnessResult:
     """Compile, test, sanitize, and measure one candidate in Docker."""
 
-    if work_dir is None:
-        with TemporaryDirectory(prefix="w8-cpp-") as temp:
-            return _run_in_directory(task, candidate_code, Path(temp), image=image, cpu=cpu)
-    return _run_in_directory(task, candidate_code, Path(work_dir), image=image, cpu=cpu)
+    with _sandbox_cpu(cpu) as pinned:
+        if work_dir is None:
+            with TemporaryDirectory(prefix="w8-cpp-") as temp:
+                return _run_in_directory(task, candidate_code, Path(temp), image=image, cpu=pinned)
+        return _run_in_directory(task, candidate_code, Path(work_dir), image=image, cpu=pinned)
 
 
 def _run_in_directory(task: CppTask, candidate_code: str, scratch: Path, *, image: str, cpu: str) -> HarnessResult:

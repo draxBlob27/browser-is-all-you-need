@@ -276,6 +276,31 @@ def test_local_sandbox_backend_drops_docker_and_keeps_timing_semantics(monkeypat
     assert compile_command(sample_task(), "/tmp/w8")[0] == "docker"
 
 
+def test_local_backend_leases_distinct_cores_per_candidate(monkeypatch):
+    from w8_biayn.cpp_perf import sandbox as sb
+
+    monkeypatch.setenv("W8_CPP_SANDBOX_BACKEND", "local")
+    pool = sb._LocalCorePool()
+    monkeypatch.setattr(sb, "_LOCAL_CORE_POOL", pool)
+    if not hasattr(sb.os, "sched_getaffinity"):
+        monkeypatch.setattr(pool, "_ensure", lambda: None)
+        pool._available = ["0", "1", "2"]
+
+    with sb._sandbox_cpu("3") as a:
+        with sb._sandbox_cpu("3") as b:
+            # concurrent candidates never share a core, and the caller's fixed
+            # pin is ignored in local mode
+            assert a != b
+    # released cores are reusable
+    with sb._sandbox_cpu("3") as c:
+        assert c is not None
+
+    # docker mode keeps the caller's pin untouched
+    monkeypatch.setenv("W8_CPP_SANDBOX_BACKEND", "docker")
+    with sb._sandbox_cpu("7") as d:
+        assert d == "7"
+
+
 def test_runtime_benchmark_skips_output_validation_for_reference_only():
     # The trusted reference oracle is timed without re-checking its stdout; the
     # candidate is still validated. This is what keeps a benignly-formatted oracle
