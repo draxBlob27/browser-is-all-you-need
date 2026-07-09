@@ -76,12 +76,15 @@ bash examples/miles/glm47_cpp_perf_lora_r16_h100_grpo.sh
 
 ## Modal 8x H100 Lane
 
-The next compute target for the GLM-4.7-Flash Miles lane is a single Modal
-8x H100 node running the fast profile above. The plan, the carry-over list,
-and the open design items (reward sandbox without docker-in-docker, Modal
-Volumes, staged pipeline discipline) live in `examples/modal/README.md`.
-The SkyPilot/GCP lane on the `slime-sss` branch is kept as reference; it is
-not merged, ported, or deleted.
+The Modal lane is operational: exact-layout EP8 conversion, an end-to-end fit
+probe, a 245-step SFT run, and full H100-native base/SFT evals have completed.
+`examples/modal/modal_app.py` runs the staged workflow and
+`scripts/wandb_posttraining.py` supplies unified W&B lineage, pipeline
+milestones, PIE eval tables, curated summaries, and artifact manifests. The
+current hard gate is CPU runtime timing integrity in issue #13; correctness
+results are usable, but speed-derived claims and production GRPO wait for the
+CPU-only re-score. See `examples/modal/README.md` for receipts, serving fixes,
+the canonical W&B contract, and the remaining order.
 
 ## Goal
 
