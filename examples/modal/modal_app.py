@@ -364,7 +364,11 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
             f"--data-dir {env['MILES_CPP_DATA_DIR']} --model {model} {lora_flags}"
             f"--label {label} --output-dir {out_dir} --backend sglang "
             "--samples-per-task 1 --temperature 0.0 --top-p 1.0 --max-tokens 1536 "
-            f"--tp-size {env.get('W8_EVAL_TP', '8')} --mem-fraction-static 0.85 "
+            # TP4: GLM-4.7-Flash has 20 attention heads and MLA asserts
+            # num_heads % tp == 0, so TP8 cannot serve it (the in-training
+            # engine gets to 8 GPUs via DP attention instead). TP4 also
+            # matches the A100 anchor recipe exactly.
+            f"--tp-size {env.get('W8_EVAL_TP', '4')} --mem-fraction-static 0.85 "
             "--cuda-graph-max-bs 64 --batch-size 64 --score-workers 32 "
             "--apply-chat-template --chat-template-kwargs '{\"enable_thinking\": false}' "
             f"--wandb-project glm47-pie-cpp-posttraining --wandb-group glm47-h100-evals "
