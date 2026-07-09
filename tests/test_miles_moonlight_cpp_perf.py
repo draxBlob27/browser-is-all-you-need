@@ -582,6 +582,12 @@ def test_sft_runner_supports_raw_extra_args() -> None:
 def test_miles_runners_expose_h100_throughput_knobs() -> None:
     for script in (SFT_RUNNER, GRPO_RUNNER):
         text = script.read_text(encoding="utf-8")
+        assert 'USE_DYNAMIC_BATCH_SIZE="${MILES_USE_DYNAMIC_BATCH_SIZE:-0}"' in text
+        assert 'BALANCE_DATA="${MILES_BALANCE_DATA:-0}"' in text
+        assert 'PERF_ARGS+=(--use-dynamic-batch-size)' in text
+        assert 'PERF_ARGS+=(--balance-data)' in text
+        assert "use_dynamic_batch_size=${USE_DYNAMIC_BATCH_SIZE}" in text
+        assert "balance_data=${BALANCE_DATA}" in text
         assert 'MOE_ENABLE_DEEPEP="${MILES_MOE_ENABLE_DEEPEP:-0}"' in text
         assert 'SGLANG_MAX_RUNNING_REQUESTS="${MILES_SGLANG_MAX_RUNNING_REQUESTS:-}"' in text
         assert 'SGLANG_DP_SIZE="${MILES_SGLANG_DP_SIZE:-${GPUS_PER_NODE}}"' in text

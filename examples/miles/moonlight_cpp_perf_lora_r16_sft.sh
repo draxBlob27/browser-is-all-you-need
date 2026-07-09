@@ -46,6 +46,8 @@ ATTENTION_BACKEND="${MILES_ATTENTION_BACKEND:-}"
 SEQ_LENGTH="${MILES_SEQ_LENGTH:-2048}"
 MAX_TOKENS_PER_GPU="${MILES_MAX_TOKENS_PER_GPU:-4096}"
 MICRO_BATCH_SIZE="${MILES_MICRO_BATCH_SIZE:-1}"
+USE_DYNAMIC_BATCH_SIZE="${MILES_USE_DYNAMIC_BATCH_SIZE:-0}"
+BALANCE_DATA="${MILES_BALANCE_DATA:-0}"
 
 SFT_NUM_EPOCH="${MILES_SFT_NUM_EPOCH:-1}"
 START_ROLLOUT_ID="${MILES_START_ROLLOUT_ID:-0}"
@@ -212,6 +214,8 @@ save_dir=${SAVE_DIR}
 seq_length=${SEQ_LENGTH}
 max_tokens_per_gpu=${MAX_TOKENS_PER_GPU}
 micro_batch_size=${MICRO_BATCH_SIZE}
+use_dynamic_batch_size=${USE_DYNAMIC_BATCH_SIZE}
+balance_data=${BALANCE_DATA}
 sft_num_epoch=${SFT_NUM_EPOCH}
 rollout_batch_size=${ROLLOUT_BATCH_SIZE}
 global_batch_size=${GLOBAL_BATCH_SIZE}
@@ -359,6 +363,12 @@ PERF_ARGS=(
   --micro-batch-size "${MICRO_BATCH_SIZE}"
   --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU}"
 )
+if [ "${USE_DYNAMIC_BATCH_SIZE}" = "1" ]; then
+  PERF_ARGS+=(--use-dynamic-batch-size)
+fi
+if [ "${BALANCE_DATA}" = "1" ]; then
+  PERF_ARGS+=(--balance-data)
+fi
 # Recompute trades compute for VRAM: full pays ~30% step time and is only
 # needed on memory-tight nodes (4x A100); selective recomputes attention only;
 # none holds all activations and is fastest when they fit (8x H100 LoRA).
