@@ -20,7 +20,12 @@ from w8_biayn.integrations.wandb_posttraining import log_eval_run, resolve_exper
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate PIE C++ prompts with SGLang and an optional LoRA adapter.")
     parser.add_argument("--data-dir", required=True, help="Directory produced by slime_cpp_perf build-data.")
-    parser.add_argument("--model", required=True, help="Base HF model path.")
+    parser.add_argument("--model", default="", help="Base HF model path; required unless --generated is used.")
+    parser.add_argument(
+        "--generated",
+        default="",
+        help="Replay a preserved generated JSONL through scoring instead of running model generation.",
+    )
     parser.add_argument("--adapter", default=None, help="LoRA adapter directory to apply during generation.")
     parser.add_argument("--lora-target-modules", default="gate_proj,up_proj,down_proj")
     parser.add_argument(
@@ -97,12 +102,25 @@ def main() -> None:
     receipt_path = output_dir / f"{args.label}.receipt.json"
 
     started_at = time.time()
-    print(
-        f"PIE eval generation start: backend={args.backend} label={args.label} tasks={len(rows)} "
-        f"samples_per_task={args.samples_per_task}",
-        flush=True,
-    )
-    generations = generate_rows(args, rows)
+    source_generated_path = Path(args.generated) if args.generated else None
+    if source_generated_path is not None:
+        generations = read_jsonl(source_generated_path)
+        if not generations:
+            raise ValueError(f"No generated rows found in {source_generated_path}")
+        print(
+            f"PIE eval generation reused: label={args.label} samples={len(generations)} "
+            f"source={source_generated_path}",
+            flush=True,
+        )
+    else:
+        if not args.model:
+            raise ValueError("--model is required unless --generated is used")
+        print(
+            f"PIE eval generation start: backend={args.backend} label={args.label} tasks={len(rows)} "
+            f"samples_per_task={args.samples_per_task}",
+            flush=True,
+        )
+        generations = generate_rows(args, rows)
     write_jsonl(generated_path, generations)
     generation_summary = summarize_generations(generations, max_tokens=args.max_tokens)
     write_json(generation_summary_path, generation_summary)
@@ -172,6 +190,7 @@ def main() -> None:
         "generation_summary_path": str(generation_summary_path),
         "records_path": str(records_path),
         "generated_path": str(generated_path),
+        "source_generated_path": str(source_generated_path) if source_generated_path is not None else "",
     }
     write_json(receipt_path, receipt)
     log_wandb(

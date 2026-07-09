@@ -145,6 +145,27 @@ def test_shared_outer_lora_serving_flags_parse_and_default_off(monkeypatch) -> N
     assert args.lora_use_virtual_experts is True
 
 
+def test_preserved_generations_can_be_replayed_without_model(monkeypatch) -> None:
+    module = _load_eval_module()
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "eval_sglang_lora_cpp_perf.py",
+            "--data-dir",
+            "data",
+            "--generated",
+            "preserved.generated.jsonl",
+            "--output-dir",
+            "out",
+        ],
+    )
+
+    args = module.parse_args()
+
+    assert args.model == ""
+    assert args.generated == "preserved.generated.jsonl"
+
+
 def test_wandb_lineage_and_timing_flags_parse(monkeypatch) -> None:
     module = _load_eval_module()
     monkeypatch.setattr(
