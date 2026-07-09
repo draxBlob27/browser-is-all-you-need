@@ -823,7 +823,7 @@ def _raise_for_docker_infrastructure(
         return
     logs = _combined_logs(proc)
     normalized = logs.lower()
-    if proc.returncode >= 125 or any(marker in normalized for marker in DOCKER_INFRASTRUCTURE_ERROR_MARKERS):
+    if proc.returncode == 125 or any(marker in normalized for marker in DOCKER_INFRASTRUCTURE_ERROR_MARKERS):
         raise SandboxInfrastructureError(
             f"Docker sandbox infrastructure failed (exit {proc.returncode}): {logs[-2000:]}"
         )

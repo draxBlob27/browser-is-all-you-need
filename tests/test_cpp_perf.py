@@ -383,6 +383,10 @@ def test_docker_infrastructure_failures_raise_instead_of_scoring_candidates():
         subprocess.CompletedProcess(["docker", "run"], 1, "", "candidate.cpp: error: bad code"),
     )
     sb._raise_for_docker_infrastructure(
+        ["docker", "run"],
+        subprocess.CompletedProcess(["docker", "run"], 139, "", "candidate dumped core"),
+    )
+    sb._raise_for_docker_infrastructure(
         ["bash", "-lc", "g++"],
         subprocess.CompletedProcess(["bash"], 125, "", ""),
     )
