@@ -581,6 +581,18 @@ def test_miles_runners_gate_recompute_behind_env() -> None:
         assert "  --recompute-granularity full\n" not in text
 
 
+def test_runners_gate_docker_preflight_on_sandbox_backend() -> None:
+    for script in (SFT_RUNNER, GRPO_RUNNER):
+        text = script.read_text(encoding="utf-8")
+        assert 'if [ "${W8_CPP_SANDBOX_BACKEND:-docker}" != "local" ]; then' in text
+        # the docker checks live inside the backend gate, not at top level
+        gate = text.index('if [ "${W8_CPP_SANDBOX_BACKEND:-docker}" != "local" ]; then')
+        docker_check = text.index("Missing docker CLI inside container")
+        assert gate < docker_check
+    grpo_text = GRPO_RUNNER.read_text(encoding="utf-8")
+    assert "W8_CPP_SANDBOX_BACKEND=local but g++ is missing" in grpo_text
+
+
 def test_grpo_runner_prefers_mini_eval_when_present() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert '[ -f "${DATA_DIR}/eval/validation_mini126.jsonl" ]' in text

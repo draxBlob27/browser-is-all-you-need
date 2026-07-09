@@ -134,6 +134,42 @@ def _reward_preflight() -> None:
         raise RuntimeError(f"local reward preflight failed: {payload.get('reason')}")
     print(f"reward_preflight_ok cpu_ns={payload['runtime_cpu_ns']}", flush=True)
 
+    # Granularity check: the canonical preflight binary is ~0.1ms and can
+    # legitimately measure ~0 under coarse clocks. Real PIE benchmarks run for
+    # milliseconds-to-seconds, so what matters is that a ~200ms busy loop
+    # measures within a sane band — a clamped-zero clock here would corrupt
+    # every speedup reward.
+    check = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "cd $(mktemp -d) && cat > busy.cpp <<'CPP'\n"
+            "#include <cstdio>\n"
+            "int main(){volatile unsigned long long s=0;"
+            "for(unsigned long long i=0;i<400000000ULL;i++) s+=i;"
+            "printf(\"%llu\\n\", s); return 0;}\n"
+            "CPP\n"
+            "g++ -O0 busy.cpp -o busy && "
+            "python3 -c \"import os,time,subprocess;"
+            "t=time.monotonic(); r=subprocess.run(['./busy'],capture_output=True);"
+            "u=os.times(); wall=time.monotonic()-t;"
+            "print(f'child_cpu_s={u.children_user+u.children_system:.4f} wall_s={wall:.4f}')\"",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    print(f"timing_granularity: {check.stdout.strip()}", flush=True)
+    fields = dict(kv.split("=") for kv in check.stdout.split())
+    child_cpu = float(fields["child_cpu_s"])
+    wall = float(fields["wall_s"])
+    if not (0.25 * wall <= child_cpu <= 2.0 * wall) or child_cpu < 0.05:
+        raise RuntimeError(
+            f"child CPU-time accounting looks broken (cpu={child_cpu}s wall={wall}s); "
+            "rewards would be garbage — stop before GRPO"
+        )
+    print("timing_granularity_ok", flush=True)
+
 
 def _receipt(stage: str, run_id: str, extra: dict) -> None:
     receipt_dir = Path(RUNS_DIR, "receipts")

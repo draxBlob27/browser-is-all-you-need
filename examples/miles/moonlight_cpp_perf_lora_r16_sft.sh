@@ -124,9 +124,13 @@ if ! command -v ray >/dev/null 2>&1; then
   echo "Missing ray CLI. Run inside the Miles runtime container." >&2
   exit 2
 fi
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Missing docker CLI inside container. Mount it with -v /usr/bin/docker:/usr/bin/docker:ro." >&2
-  exit 2
+# The docker preflight only applies to the docker sandbox backend; the local
+# backend compiles and benchmarks in-process (gVisor hosts have no daemon).
+if [ "${W8_CPP_SANDBOX_BACKEND:-docker}" != "local" ]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Missing docker CLI inside container. Mount it with -v /usr/bin/docker:/usr/bin/docker:ro." >&2
+    exit 2
+  fi
 fi
 
 prepare_data() {

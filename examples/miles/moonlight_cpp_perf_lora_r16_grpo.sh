@@ -122,12 +122,21 @@ if [ ! -f "${MODEL_ARGS_PATH}" ]; then
   echo "Missing model args: ${MODEL_ARGS_PATH}" >&2
   exit 2
 fi
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Missing docker CLI inside container. Mount it with -v /usr/bin/docker:/usr/bin/docker:ro." >&2
-  exit 2
+# The docker preflights only apply to the docker sandbox backend; the local
+# backend compiles and benchmarks in-process (gVisor hosts have no daemon).
+if [ "${W8_CPP_SANDBOX_BACKEND:-docker}" != "local" ]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Missing docker CLI inside container. Mount it with -v /usr/bin/docker:/usr/bin/docker:ro." >&2
+    exit 2
+  fi
+  if ! docker image inspect "${W8_CPP_SANDBOX_IMAGE:-w8-biayn-cpp-perf:latest}" >/dev/null 2>&1; then
+    echo "Missing PIE C++ sandbox image: ${W8_CPP_SANDBOX_IMAGE:-w8-biayn-cpp-perf:latest}" >&2
+    exit 2
+  fi
 fi
-if ! docker image inspect "${W8_CPP_SANDBOX_IMAGE:-w8-biayn-cpp-perf:latest}" >/dev/null 2>&1; then
-  echo "Missing PIE C++ sandbox image: ${W8_CPP_SANDBOX_IMAGE:-w8-biayn-cpp-perf:latest}" >&2
+# Local backend needs a working compiler toolchain instead.
+if [ "${W8_CPP_SANDBOX_BACKEND:-docker}" = "local" ] && ! command -v g++ >/dev/null 2>&1; then
+  echo "W8_CPP_SANDBOX_BACKEND=local but g++ is missing in this container." >&2
   exit 2
 fi
 
