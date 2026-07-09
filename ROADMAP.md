@@ -153,7 +153,9 @@ uv run w8-biayn cpp harness preflight --dry-run
 ```
 
 Decision gate: do not start paid or long GPU work until SLIME setup and C++
-harness preflight are clean.
+harness preflight are clean. Use the generated `.w8-biayn/slime/run-container.sh`
+for SLIME entry; it owns the host-visible short temp mount needed by nested
+Docker rewards and Ray.
 
 ## Stage 1: Build Admitted PIE Tasks
 

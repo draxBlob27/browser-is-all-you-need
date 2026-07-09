@@ -64,7 +64,16 @@ def _launcher_contents(plan: SlimeSetupPlan) -> str:
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
+DOCKER_CLI="${{SLIME_DOCKER_CLI:-$(command -v docker)}}"
+if [[ -z "${{DOCKER_CLI}}" || ! -x "${{DOCKER_CLI}}" ]]; then
+  echo "docker CLI is required on the host; set SLIME_DOCKER_CLI to its path" >&2
+  exit 2
+fi
+
 docker pull {image}
+
+SLIME_HOST_TMPDIR="${{SLIME_HOST_TMPDIR:-/tmp/w8-biayn-slime-${{USER:-user}}}}"
+mkdir -p "${{SLIME_HOST_TMPDIR}}" "${{SLIME_HOST_TMPDIR}}/ray"
 
 DOCKER_ULIMIT_ARGS=()
 if [[ "${{SLIME_DOCKER_STACK_ULIMIT:-1}}" != "0" ]]; then
@@ -78,11 +87,16 @@ exec docker run --rm --gpus all --ipc=host --shm-size=16g \\
   "${{DOCKER_ULIMIT_ARGS[@]}}" \\
   --name {container_name} \\
   -v {repo_root}:{repo_mount} \\
+  -v "${{SLIME_HOST_TMPDIR}}":"${{SLIME_HOST_TMPDIR}}" \\
   -v "${{HOST_MODELS_DIR:-$HOME/models}}":/root/models \\
+  -v "${{DOCKER_CLI}}":/usr/local/bin/docker:ro \\
   -v /var/run/docker.sock:/var/run/docker.sock \\
   -e HOST_REPO_ROOT={repo_mount} \\
+  -e TMPDIR="${{SLIME_HOST_TMPDIR}}" \\
+  -e RAY_TMPDIR="${{SLIME_HOST_TMPDIR}}/ray" \\
+  -e DOCKER_HOST=unix:///var/run/docker.sock \\
   -e SLIME_NOFILE_SOFT_LIMIT="${{SLIME_NOFILE_SOFT_LIMIT:-65536}}" \\
-  -it {image} /bin/bash -lc "ulimit -Sn ${{SLIME_NOFILE_SOFT_LIMIT:-65536}} 2>/dev/null || true; echo nofile_soft=\\$(ulimit -Sn); echo repo_mount={repo_mount}; echo bootstrap={bootstrap_target}; bash {bootstrap_target}; exec /bin/bash"
+  -it {image} /bin/bash -lc "ulimit -Sn ${{SLIME_NOFILE_SOFT_LIMIT:-65536}} 2>/dev/null || true; echo nofile_soft=\\$(ulimit -Sn); echo repo_mount={repo_mount}; echo docker_cli=/usr/local/bin/docker; echo tmpdir=\\${{TMPDIR}}; echo ray_tmpdir=\\${{RAY_TMPDIR}}; echo bootstrap={bootstrap_target}; bash {bootstrap_target}; exec /bin/bash"
 """
 
 

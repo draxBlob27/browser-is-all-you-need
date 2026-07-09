@@ -192,6 +192,12 @@ uv run w8-biayn slime setup
 .w8-biayn/slime/run-container.sh
 ```
 
+Use the generated launcher rather than ad hoc `docker run` commands. It mounts
+the repo, `/var/run/docker.sock`, the host Docker CLI, model cache, and a
+short host-visible temp root (`SLIME_HOST_TMPDIR`, default `/tmp/w8-biayn-slime-${USER:-user}`) that is
+exported as `TMPDIR` and `RAY_TMPDIR` inside the container so nested Docker
+reward bind mounts and Ray sockets both work.
+
 Moonlight C++ lane:
 
 ```bash

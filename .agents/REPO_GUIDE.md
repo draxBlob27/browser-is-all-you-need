@@ -166,7 +166,12 @@ the active reward path.
 
 ## Training Rules
 
-Active training runs through the repo-owned SLIME lane wrappers.
+Active training runs through the repo-owned SLIME lane wrappers. Enter the
+SLIME runtime through the generated `.w8-biayn/slime/run-container.sh`, not an
+ad hoc `docker run`; the launcher owns the repo mount, docker socket, host
+Docker CLI, model cache, and short shared `SLIME_HOST_TMPDIR` exported as
+`TMPDIR`/`RAY_TMPDIR`
+for nested Docker rewards and Ray.
 
 Moonlight C++ lane:
 

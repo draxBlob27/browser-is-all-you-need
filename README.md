@@ -270,8 +270,14 @@ uv run w8-biayn slime setup
 ```
 
 The generated launcher starts the SLIME container with this repository mounted,
-mounts `/var/run/docker.sock` for the Docker reward backend, and bootstraps
-SLIME with `/root/Megatron-LM` on `PYTHONPATH`.
+mounts `/var/run/docker.sock` plus the host Docker CLI (override path with
+`SLIME_DOCKER_CLI`) for the Docker reward backend, and bootstraps SLIME with
+`/root/Megatron-LM` on `PYTHONPATH`. It also creates a short
+host-visible temp root (`SLIME_HOST_TMPDIR`, default
+`/tmp/w8-biayn-slime-${USER:-user}`), mounts it at the same absolute path, and
+exports `TMPDIR` plus `RAY_TMPDIR` inside the container. This keeps nested
+Docker reward bind mounts visible to the host daemon while avoiding Ray's
+Unix-socket path-length limit.
 
 The generated Docker launcher keeps `--ulimit stack=67108864` enabled by
 default. It leaves `--ulimit memlock=-1` off because some managed GPU hosts
@@ -610,7 +616,9 @@ that matter; the googleapis probes are only relevant with GCP.
 
 3. Enter the training container. It mounts the repo at
    `/workspace/<repo-name>`, `$HOME/models` at `/root/models` (override with
-   `HOST_MODELS_DIR`), and the host docker socket (for the grader):
+   `HOST_MODELS_DIR`), the host docker socket and CLI (for the grader), and a
+   short shared temp root for nested Docker and Ray (override with
+   `SLIME_HOST_TMPDIR`; override Docker CLI path with `SLIME_DOCKER_CLI`):
 
    ```bash
    bash .w8-biayn/slime/run-container.sh
