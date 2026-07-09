@@ -207,6 +207,7 @@ def test_miles_h100_wandb_lineage_reaches_ray_workers_and_receipts() -> None:
         assert "WANDB_JOB_TYPE" in text
         assert "WANDB_RUN_GROUP" in text
         assert "WANDB_TAGS" in text
+        assert "WANDB_RUN_ID" in text
         assert '"${REPO_ROOT}/scripts/wandb_posttraining.py" finalize-stage' in text
         assert '--timing-status "${W8_TIMING_STATUS:-unverified}"' in text
         assert "wall_s=$((SECONDS - STAGE_STARTED_AT))" in text

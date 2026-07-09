@@ -481,6 +481,7 @@ env = {
     "W8_CPP_SANDBOX_CPU": os.environ.get("W8_CPP_SANDBOX_CPU", "1"),
     "W8_CPP_REWARD_WORKERS": os.environ.get("W8_CPP_REWARD_WORKERS", "8"),
     "NVSHMEM_DISABLE_NCCL": os.environ.get("NVSHMEM_DISABLE_NCCL", ""),
+    "WANDB_RUN_ID": "${WANDB_RUN_ID}",
 }
 for key in (
     "CUDA_HOME",
