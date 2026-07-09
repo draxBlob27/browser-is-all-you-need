@@ -93,8 +93,13 @@ export W8_CPP_SANDBOX_CPU="${W8_CPP_SANDBOX_CPU:-1}"
 # sandbox; override with W8_CPP_SANDBOX_BACKEND=docker only on hosts that mount it.
 export W8_CPP_SANDBOX_BACKEND="${W8_CPP_SANDBOX_BACKEND:-local}"
 
+export W8_EXPERIMENT_ID="${W8_EXPERIMENT_ID:-${RUN_ID}}"
 export MILES_WANDB_PROJECT="${MILES_WANDB_PROJECT:-glm47-pie-cpp-posttraining}"
-export MILES_WANDB_GROUP="${MILES_WANDB_GROUP:-glm47-h100-pie-cpp-lora-r16}"
+export MILES_WANDB_GROUP="${MILES_WANDB_GROUP:-${W8_EXPERIMENT_ID}}"
 export MILES_WANDB_RUN_ID="${MILES_WANDB_RUN_ID:-${RUN_ID}}"
+export MILES_WANDB_JOB_TYPE="${MILES_WANDB_JOB_TYPE:-grpo}"
+export WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-${W8_EXPERIMENT_ID}}"
+export WANDB_JOB_TYPE="${WANDB_JOB_TYPE:-grpo}"
+export WANDB_TAGS="${WANDB_TAGS:-canonical,pie-cpp,grpo}"
 
 exec "${SCRIPT_DIR}/moonlight_cpp_perf_lora_r16_grpo.sh" "$@"

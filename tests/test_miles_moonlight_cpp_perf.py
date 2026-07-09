@@ -183,6 +183,33 @@ def test_miles_glm47_h100_wrappers_select_fast_8x_h100_defaults() -> None:
     assert 'MILES_SGLANG_MAX_RUNNING_REQUESTS="${MILES_SGLANG_MAX_RUNNING_REQUESTS:-64}"' in sft_text
 
 
+def test_miles_h100_wandb_lineage_reaches_ray_workers_and_receipts() -> None:
+    expected_job_types = {
+        GLM47_H100_SFT_RUNNER: "sft",
+        GLM47_H100_GRPO_RUNNER: "grpo",
+    }
+    for script, job_type in expected_job_types.items():
+        text = script.read_text(encoding="utf-8")
+        assert 'W8_EXPERIMENT_ID="${W8_EXPERIMENT_ID:-${RUN_ID}}"' in text
+        assert 'MILES_WANDB_GROUP="${MILES_WANDB_GROUP:-${W8_EXPERIMENT_ID}}"' in text
+        assert f'MILES_WANDB_JOB_TYPE="${{MILES_WANDB_JOB_TYPE:-{job_type}}}"' in text
+        assert 'WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-${W8_EXPERIMENT_ID}}"' in text
+        assert f'WANDB_JOB_TYPE="${{WANDB_JOB_TYPE:-{job_type}}}"' in text
+
+    for runner in (SFT_RUNNER, GRPO_RUNNER):
+        text = runner.read_text(encoding="utf-8")
+        assert "wandb_job_type=${WANDB_JOB_TYPE}" in text
+        assert "experiment_id=${EXPERIMENT_ID}" in text
+        assert "W8_EXPERIMENT_ID" in text
+        assert "WANDB_JOB_TYPE" in text
+        assert "WANDB_RUN_GROUP" in text
+        assert "WANDB_TAGS" in text
+        assert '"${REPO_ROOT}/scripts/wandb_posttraining.py" finalize-stage' in text
+        assert '--timing-status "${W8_TIMING_STATUS:-unverified}"' in text
+        assert "wall_s=$((SECONDS - STAGE_STARTED_AT))" in text
+        assert 'finalize_wandb "${STAGE_STATUS}"' in text
+
+
 def test_miles_glm47_h100_converter_matches_runner_layout() -> None:
     text = GLM47_H100_CONVERTER.read_text(encoding="utf-8")
     assert 'MODEL_ARGS_FILE="${MILES_MODEL_ARGS_FILE:-glm4.7-flash.sh}"' in text

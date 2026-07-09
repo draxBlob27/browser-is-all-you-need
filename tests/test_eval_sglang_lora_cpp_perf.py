@@ -143,3 +143,31 @@ def test_shared_outer_lora_serving_flags_parse_and_default_off(monkeypatch) -> N
     args = module.parse_args()
     assert args.experts_shared_outer_loras is True
     assert args.lora_use_virtual_experts is True
+
+
+def test_wandb_lineage_and_timing_flags_parse(monkeypatch) -> None:
+    module = _load_eval_module()
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "eval_sglang_lora_cpp_perf.py",
+            "--data-dir",
+            "data",
+            "--model",
+            "model",
+            "--output-dir",
+            "out",
+            "--wandb-experiment-id",
+            "experiment-1",
+            "--wandb-job-type",
+            "heldout-eval",
+            "--wandb-timing-status",
+            "blocked_issue_13",
+        ],
+    )
+
+    args = module.parse_args()
+
+    assert args.wandb_experiment_id == "experiment-1"
+    assert args.wandb_job_type == "heldout-eval"
+    assert args.wandb_timing_status == "blocked_issue_13"

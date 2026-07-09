@@ -19,6 +19,7 @@ data/
 datasets/
 artifacts/
 outputs/
+wandb/
 checkpoints/
 task-pools/
 gem5-results/

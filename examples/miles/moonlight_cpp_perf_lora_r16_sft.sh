@@ -16,6 +16,7 @@ MODEL_ARGS_FILE="${MILES_MODEL_ARGS_FILE:-moonlight.sh}"
 MODEL_ARGS_PATH="${MILES_MODEL_ARGS_PATH:-${MILES_ROOT}/scripts/models/${MODEL_ARGS_FILE}}"
 
 RUN_ID="${MILES_RUN_ID:-moonlight_pie_cpp_lora_r16_sft_$(date +%Y%m%d_%H%M%S)}"
+STAGE_STARTED_AT="${SECONDS}"
 RUN_ROOT="${MILES_RUN_ROOT:-${REPO_ROOT}/.w8-biayn/miles/moonlight-cpp-perf/runs/${RUN_ID}}"
 DATA_DIR="${MILES_CPP_DATA_DIR:-${RUN_ROOT}/data}"
 TASKS_DIR="${MILES_CPP_TASKS_DIR:-${REPO_ROOT}/.w8-biayn/data/tasks-small}"
@@ -79,6 +80,8 @@ SGLANG_DISABLE_CUSTOM_ALL_REDUCE="${MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE:-0}"
 WANDB_PROJECT="${MILES_WANDB_PROJECT:-miles-moonlight-cpp-sft}"
 WANDB_GROUP="${MILES_WANDB_GROUP:-moonlight-pie-cpp-lora-r16-sft}"
 WANDB_RUN_ID="${MILES_WANDB_RUN_ID:-${RUN_ID}}"
+WANDB_JOB_TYPE="${MILES_WANDB_JOB_TYPE:-${WANDB_JOB_TYPE:-sft}}"
+EXPERIMENT_ID="${W8_EXPERIMENT_ID:-${WANDB_GROUP}}"
 
 STAGE_ROOT="${RUN_ROOT}/sft_lora_r16"
 LOG_FILE="${STAGE_ROOT}/run.log"
@@ -192,6 +195,7 @@ write_receipt() {
   cat >"${RUN_RECEIPT}" <<EOF
 status=${status}
 ray_status=${ray_status}
+wall_s=$((SECONDS - STAGE_STARTED_AT))
 run_id=${RUN_ID}
 run_root=${RUN_ROOT}
 stage_root=${STAGE_ROOT}
@@ -229,14 +233,39 @@ sglang_speculative=${SGLANG_SPECULATIVE}
 wandb_project=${WANDB_PROJECT}
 wandb_group=${WANDB_GROUP}
 wandb_run_id=${WANDB_RUN_ID}
+wandb_job_type=${WANDB_JOB_TYPE}
+experiment_id=${EXPERIMENT_ID}
+timing_status=${W8_TIMING_STATUS:-unverified}
 EOF
   cat "${RUN_RECEIPT}"
+}
+
+finalize_wandb() {
+  local status="$1"
+  PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" \
+    "${REPO_ROOT}/scripts/wandb_posttraining.py" finalize-stage \
+    --project "${WANDB_PROJECT}" \
+    --experiment-id "${EXPERIMENT_ID}" \
+    --run-id "${WANDB_RUN_ID}" \
+    --group "${WANDB_GROUP}" \
+    --stage "${WANDB_JOB_TYPE}" \
+    --status "${status}" \
+    --receipt "${RUN_RECEIPT}" \
+    --artifact-path "${LOG_FILE}" \
+    --artifact-path "${VRAM_LOG}" \
+    --artifact-path "${VRAM_PEAK_FILE}" \
+    --timing-status "${W8_TIMING_STATUS:-unverified}" \
+    --output-dir "${STAGE_ROOT}"
 }
 
 monitor_vram &
 VRAM_MONITOR_PID=$!
 cleanup() {
-  kill "${VRAM_MONITOR_PID}" >/dev/null 2>&1 || true
+  if [ -n "${VRAM_MONITOR_PID:-}" ]; then
+    kill "${VRAM_MONITOR_PID}" >/dev/null 2>&1 || true
+    wait "${VRAM_MONITOR_PID}" >/dev/null 2>&1 || true
+    VRAM_MONITOR_PID=""
+  fi
 }
 trap cleanup EXIT
 
@@ -441,6 +470,11 @@ for key in (
     "WANDB_API_KEY",
     "WANDB_ENTITY",
     "WANDB_BASE_URL",
+    "WANDB_JOB_TYPE",
+    "WANDB_RUN_GROUP",
+    "WANDB_TAGS",
+    "W8_EXPERIMENT_ID",
+    "W8_TIMING_STATUS",
     "W8_REGISTER_GLM47_BRIDGE",
     "W8_GLM47_SURFACE_PROBE",
     "W8_GLM47_PROBE_OUT",
@@ -475,9 +509,18 @@ ray job submit --address="http://${RAY_DASHBOARD_HOST}:${RAY_DASHBOARD_PORT}" \
 RAY_STATUS=$?
 set -e
 
+cleanup
 if [ "${RAY_STATUS}" -eq 0 ]; then
-  write_receipt "success" "${RAY_STATUS}"
+  STAGE_STATUS="success"
 else
-  write_receipt "failed" "${RAY_STATUS}"
+  STAGE_STATUS="failed"
 fi
-exit "${RAY_STATUS}"
+write_receipt "${STAGE_STATUS}" "${RAY_STATUS}"
+set +e
+finalize_wandb "${STAGE_STATUS}"
+FINALIZE_STATUS=$?
+set -e
+if [ "${RAY_STATUS}" -ne 0 ]; then
+  exit "${RAY_STATUS}"
+fi
+exit "${FINALIZE_STATUS}"

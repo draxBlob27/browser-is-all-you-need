@@ -14,6 +14,7 @@ from typing import Any
 from w8_biayn.cpp_perf.eval import aggregate_eval_records, write_json
 from w8_biayn.cpp_perf.schema import CppTask
 from w8_biayn.integrations.cpp_eval_main import score_generation
+from w8_biayn.integrations.wandb_posttraining import log_eval_run, resolve_experiment_id
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,6 +65,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb-tags", default="")
     parser.add_argument("--wandb-mode", default=os.environ.get("WANDB_MODE", "online"))
     parser.add_argument("--wandb-notes", default="")
+    parser.add_argument("--wandb-experiment-id", default=os.environ.get("W8_EXPERIMENT_ID", ""))
+    parser.add_argument("--wandb-job-type", default=os.environ.get("WANDB_JOB_TYPE", "eval"))
+    parser.add_argument(
+        "--wandb-timing-status",
+        default=os.environ.get("W8_TIMING_STATUS", "unverified"),
+        help="Trust marker for timing-derived metrics, e.g. verified or blocked_issue_13.",
+    )
     parser.add_argument("--wandb-log-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-truncated-ratio", type=float, default=None)
     parser.add_argument("--min-valid-format-rate", type=float, default=None)
@@ -116,38 +124,62 @@ def main() -> None:
     summary.pop("best_records", None)
     summary.update(generation_summary)
     summary["valid_format_rate"] = 1.0 - float(summary.get("invalid_format_rate", 0.0))
-    write_json(summary_path, summary)
-    write_json(
-        receipt_path,
-        {
-            "label": args.label,
-            "data_dir": str(data_dir),
-            "model": args.model,
-            "adapter": args.adapter,
-            "lora_target_modules": parse_lora_target_modules(args.lora_target_modules),
-            "backend": args.backend,
-            "output_dir": str(output_dir),
-            "task_count": len(rows),
-            "sample_count": len(generations),
-            "samples_per_task": args.samples_per_task,
-            "temperature": args.temperature,
-            "top_p": args.top_p,
-            "max_tokens": args.max_tokens,
-            "tp_size": args.tp_size,
-            "apply_chat_template": args.apply_chat_template,
-            "chat_template_kwargs": parse_chat_template_kwargs(args.chat_template_kwargs),
-            "elapsed_seconds": time.time() - started_at,
-            "summary_path": str(summary_path),
-            "generation_summary_path": str(generation_summary_path),
-            "records_path": str(records_path),
-            "generated_path": str(generated_path),
-        },
+    experiment_id = resolve_experiment_id(
+        explicit=args.wandb_experiment_id,
+        run_id=args.wandb_run_id,
+        label=args.label,
     )
-    wandb_run = init_wandb(args)
+    elapsed_seconds = time.time() - started_at
+    gate_failures = eval_gate_failures(args, summary)
+    summary.update(
+        {
+            "experiment_id": experiment_id,
+            "stage": "eval",
+            "status": "quality_gate_failed" if gate_failures else "success",
+            "quality_gate_status": "failed" if gate_failures else "passed",
+            "quality_gate_failures": gate_failures,
+            "timing_status": args.wandb_timing_status,
+            "timing_trustworthy": args.wandb_timing_status == "verified",
+            "elapsed_seconds": elapsed_seconds,
+        }
+    )
+    write_json(summary_path, summary)
+    receipt = {
+        "label": args.label,
+        "experiment_id": experiment_id,
+        "stage": "eval",
+        "status": summary["status"],
+        "quality_gate_status": summary["quality_gate_status"],
+        "quality_gate_failures": gate_failures,
+        "timing_status": args.wandb_timing_status,
+        "data_dir": str(data_dir),
+        "model": args.model,
+        "adapter": args.adapter,
+        "lora_target_modules": parse_lora_target_modules(args.lora_target_modules),
+        "backend": args.backend,
+        "output_dir": str(output_dir),
+        "task_count": len(rows),
+        "sample_count": len(generations),
+        "samples_per_task": args.samples_per_task,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "max_tokens": args.max_tokens,
+        "tp_size": args.tp_size,
+        "apply_chat_template": args.apply_chat_template,
+        "chat_template_kwargs": parse_chat_template_kwargs(args.chat_template_kwargs),
+        "elapsed_seconds": elapsed_seconds,
+        "summary_path": str(summary_path),
+        "generation_summary_path": str(generation_summary_path),
+        "records_path": str(records_path),
+        "generated_path": str(generated_path),
+    }
+    write_json(receipt_path, receipt)
     log_wandb(
-        wandb_run,
         args,
         summary=summary,
+        records=records,
+        generations=generations,
+        receipt=receipt,
         artifact_paths=[generated_path, records_path, summary_path, generation_summary_path, receipt_path],
     )
     enforce_eval_gates(args, summary)
@@ -502,82 +534,75 @@ def _mean_float(values: list[int]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
-def init_wandb(args: argparse.Namespace):
+def log_wandb(
+    args: argparse.Namespace,
+    *,
+    summary: dict[str, Any],
+    records: list[dict[str, Any]],
+    generations: list[dict[str, Any]],
+    receipt: dict[str, Any],
+    artifact_paths: list[Path],
+) -> None:
     if not args.wandb_project:
-        return None
+        return
     try:
         import wandb
     except ImportError:
         print("W&B logging requested but wandb is not installed; continuing without W&B.", flush=True)
-        return None
+        return
     tags = [tag.strip() for tag in args.wandb_tags.split(",") if tag.strip()]
-    return wandb.init(
+    experiment_id = resolve_experiment_id(
+        explicit=args.wandb_experiment_id,
+        run_id=args.wandb_run_id,
+        label=args.label,
+    )
+    result = log_eval_run(
+        wandb,
         project=args.wandb_project,
         entity=args.wandb_entity or None,
-        group=args.wandb_group or None,
-        id=args.wandb_run_id or None,
-        name=args.wandb_name or args.wandb_run_id or None,
+        experiment_id=experiment_id,
+        run_id=args.wandb_run_id or f"{experiment_id}-{args.label}-eval",
+        name=args.wandb_name or args.wandb_run_id or f"{experiment_id}-{args.label}-eval",
+        group=args.wandb_group or experiment_id,
+        job_type=args.wandb_job_type,
         mode=args.wandb_mode,
-        notes=args.wandb_notes or None,
-        tags=tags or None,
+        timing_status=args.wandb_timing_status,
+        summary=summary,
+        records=records,
+        generations=generations,
         config={
-            "label": args.label,
-            "model": args.model,
-            "adapter": args.adapter,
-            "lora_target_modules": parse_lora_target_modules(args.lora_target_modules),
-            "backend": args.backend,
+            **receipt,
+            "notes": args.wandb_notes,
             "max_tasks": args.max_tasks,
-            "samples_per_task": args.samples_per_task,
             "batch_size": args.batch_size,
-            "temperature": args.temperature,
-            "top_p": args.top_p,
-            "max_tokens": args.max_tokens,
-            "tp_size": args.tp_size,
             "mem_fraction_static": args.mem_fraction_static,
             "cuda_graph_max_bs": args.cuda_graph_max_bs,
-            "apply_chat_template": args.apply_chat_template,
-            "chat_template_kwargs": parse_chat_template_kwargs(args.chat_template_kwargs),
             "system_prompt": args.system_prompt,
         },
+        artifact_paths=artifact_paths if args.wandb_log_artifacts else [],
+        manifest_dir=args.output_dir,
+        tags=tags,
     )
-
-
-def log_wandb(
-    wandb_run: Any,
-    args: argparse.Namespace,
-    *,
-    summary: dict[str, Any],
-    artifact_paths: list[Path],
-) -> None:
-    if wandb_run is None:
-        return
-    import wandb
-
-    scalar_metrics = {
-        key: value
-        for key, value in summary.items()
-        if isinstance(value, int | float) and not isinstance(value, bool)
-    }
-    wandb.log(scalar_metrics)
-    for key, value in summary.items():
-        wandb_run.summary[key] = value
-    if args.wandb_log_artifacts:
-        artifact = wandb.Artifact(f"pie-cpp-eval-{args.label}", type="eval")
-        for path in artifact_paths:
-            artifact.add_file(str(path))
-        wandb_run.log_artifact(artifact)
-    wandb_run.finish()
+    print(f"wandb_proof_run id={result['run_id']} url={result['url']}", flush=True)
 
 
 def enforce_eval_gates(args: argparse.Namespace, summary: dict[str, Any]) -> None:
+    failures = eval_gate_failures(args, summary)
+    if failures:
+        raise SystemExit("; ".join(failures))
+
+
+def eval_gate_failures(args: argparse.Namespace, summary: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
     if args.max_truncated_ratio is not None and float(summary["truncated_ratio"]) > args.max_truncated_ratio:
-        raise SystemExit(
+        failures.append(
             f"truncated_ratio {summary['truncated_ratio']:.4f} exceeds gate {args.max_truncated_ratio:.4f}"
         )
     if args.min_valid_format_rate is not None and float(summary["valid_format_rate"]) < args.min_valid_format_rate:
-        raise SystemExit(
+        failures.append(
             f"valid_format_rate {summary['valid_format_rate']:.4f} below gate {args.min_valid_format_rate:.4f}"
         )
+    return failures
 
 
 def score_rows(args: argparse.Namespace, data_dir: Path, generations: list[dict[str, Any]]) -> list[dict[str, Any]]:

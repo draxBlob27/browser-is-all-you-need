@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -194,25 +195,57 @@ def _reward_preflight() -> None:
     print("timing_granularity_ok", flush=True)
 
 
-def _receipt(stage: str, run_id: str, extra: dict) -> None:
+def _receipt(
+    stage: str,
+    run_id: str,
+    extra: dict,
+    *,
+    env: dict[str, str] | None = None,
+) -> Path:
     receipt_dir = Path(RUNS_DIR, "receipts")
     receipt_dir.mkdir(parents=True, exist_ok=True)
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=REPO_DIR, capture_output=True, text=True
     ).stdout.strip()
+    captured_env = {**os.environ, **(env or {})}
+    safe_wandb_keys = {
+        "WANDB_BASE_URL",
+        "WANDB_ENTITY",
+        "WANDB_JOB_TYPE",
+        "WANDB_MODE",
+        "WANDB_PROJECT",
+        "WANDB_RUN_GROUP",
+        "WANDB_TAGS",
+    }
     body = {
         "stage": stage,
         "run_id": run_id,
+        "experiment_id": captured_env.get("W8_EXPERIMENT_ID", run_id),
         "repo_sha": sha,
         "image": MILES_IMAGE,
-        "env": {k: v for k, v in os.environ.items() if k.startswith(("MILES_", "W8_"))},
+        "env": {
+            key: value
+            for key, value in captured_env.items()
+            if (key.startswith(("MILES_", "W8_")) or key in safe_wandb_keys)
+            and not _is_sensitive_env_key(key)
+        },
         **extra,
     }
-    (receipt_dir / f"{run_id}.{stage}.json").write_text(json.dumps(body, indent=2))
+    path = receipt_dir / f"{run_id}.{stage}.json"
+    path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n")
     runs_vol.commit()
+    return path
 
 
-def _base_env(run_id: str) -> dict[str, str]:
+def _is_sensitive_env_key(key: str) -> bool:
+    upper = key.upper()
+    parts = upper.replace("-", "_").split("_")
+    return any(part in {"TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "CREDENTIALS"} for part in parts) or any(
+        phrase in upper for phrase in ("API_KEY", "PRIVATE_KEY", "SSH_KEY")
+    )
+
+
+def _base_env(run_id: str, experiment_id: str, stage: str) -> dict[str, str]:
     return {
         "MILES_RUN_ID": run_id,
         "MILES_RUN_ROOT": f"{RUNS_DIR}/issue10-miles/{run_id}",
@@ -222,10 +255,67 @@ def _base_env(run_id: str) -> dict[str, str]:
         "MILES_CPP_TASKS_DIR": f"{DATA_DIR}/pie-tasks-full-20260706",
         "W8_CPP_SANDBOX_BACKEND": "local",
         "W8_CPP_REWARD_WORKERS": "32",
+        "W8_EXPERIMENT_ID": experiment_id,
+        "W8_TIMING_STATUS": os.environ.get("W8_TIMING_STATUS", "blocked_issue_13"),
+        "MILES_WANDB_PROJECT": "glm47-pie-cpp-posttraining",
+        "MILES_WANDB_GROUP": experiment_id,
+        "MILES_WANDB_RUN_ID": run_id,
+        "MILES_WANDB_JOB_TYPE": stage,
         "WANDB_MODE": os.environ.get("WANDB_MODE", "online"),
         "WANDB_DIR": f"{RUNS_DIR}/wandb",
+        "WANDB_PROJECT": "glm47-pie-cpp-posttraining",
+        "WANDB_RUN_GROUP": experiment_id,
+        "WANDB_JOB_TYPE": stage,
+        "WANDB_TAGS": f"canonical,pie-cpp,{stage}",
         "PYTHONUNBUFFERED": "1",
     }
+
+
+def _wandb_milestone(
+    *,
+    stage: str,
+    event: str,
+    status: str,
+    env: dict[str, str],
+    wall_s: float | None = None,
+    receipt: Path | None = None,
+    error: str = "",
+) -> None:
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_DIR, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    command = [
+        "python3",
+        "scripts/wandb_posttraining.py",
+        "milestone",
+        "--project",
+        env["MILES_WANDB_PROJECT"],
+        "--experiment-id",
+        env["W8_EXPERIMENT_ID"],
+        "--mode",
+        env.get("WANDB_MODE", "online"),
+        "--stage",
+        stage,
+        "--event",
+        event,
+        "--status",
+        status,
+        "--repo-sha",
+        sha,
+        "--image",
+        MILES_IMAGE,
+    ]
+    if wall_s is not None:
+        command.extend(("--wall-s", str(round(wall_s, 1))))
+    if receipt is not None:
+        command.extend(("--receipt", str(receipt)))
+    if error:
+        command.extend(("--error", error[:1000]))
+    _sh(
+        f"PYTHONPATH={REPO_DIR}/src {shlex.join(command)}",
+        cwd=REPO_DIR,
+        env=env,
+    )
 
 
 def _ckpt_meta_path(ref: Path) -> Path:
@@ -256,7 +346,6 @@ def _require_ref_checkpoint(env: dict[str, str]) -> None:
 
 
 def _run_stage(script: str, run_id: str, env: dict[str, str], stage: str) -> None:
-    _wandb_check()
     _require_ref_checkpoint(env)
     started = time.time()
     Path(RUNS_DIR, "wandb").mkdir(parents=True, exist_ok=True)
@@ -267,7 +356,12 @@ def _run_stage(script: str, run_id: str, env: dict[str, str], stage: str) -> Non
         env=env,
         log=f"{RUNS_DIR}/receipts/{run_id}.{stage}.log",
     )
-    _receipt(stage, run_id, {"wall_s": round(time.time() - started, 1), "script": script})
+    _receipt(
+        stage,
+        run_id,
+        {"status": "success", "wall_s": round(time.time() - started, 1), "script": script},
+        env=env,
+    )
 
 
 slim_image = (
@@ -286,15 +380,7 @@ def download_weights() -> None:
     hf_vol.commit()
 
 
-@app.function(**GPU_KW)
-def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") -> str:
-    """Run one lane stage on the 8x H100 container."""
-    _checkout(sha)
-    _sh("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | sort | uniq -c")
-    rid = run_id or f"glm47_h100_{stage}_{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-    env = _base_env(rid)
-    env.update(json.loads(env_overrides))
-
+def _execute_stage(stage: str, rid: str, env: dict[str, str]) -> None:
     if stage == "convert":
         started = time.time()
         _sh(
@@ -318,7 +404,12 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
         else:
             raise RuntimeError(f"conversion save never finalized: {meta} missing after 300s")
         models_vol.commit()
-        _receipt(stage, rid, {"wall_s": round(time.time() - started, 1)})
+        _receipt(
+            stage,
+            rid,
+            {"status": "success", "wall_s": round(time.time() - started, 1)},
+            env=env,
+        )
     elif stage == "probe":
         # Short SFT over the 64 longest rows: fit + DeepEP-under-gVisor check.
         # Separate data dir so the runner's build-data step constructs the
@@ -340,7 +431,6 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
         adapter = env.get("W8_EVAL_ADAPTER", "")
         label = env.get("W8_EVAL_LABEL", "base_h100_spec")
         out_dir = f"{RUNS_DIR}/issue10-miles/{rid}/eval"
-        _wandb_check()
         _reward_preflight()
         started = time.time()
         if adapter and env.get("W8_EVAL_STRIP_MTP", "1") == "1":
@@ -374,12 +464,26 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
             f"--attention-backend {env.get('W8_EVAL_ATTN_BACKEND', 'flashinfer')} "
             "--cuda-graph-max-bs 64 --batch-size 64 --score-workers 32 "
             "--apply-chat-template --chat-template-kwargs '{\"enable_thinking\": false}' "
-            f"--wandb-project glm47-pie-cpp-posttraining --wandb-group glm47-h100-evals "
-            f"--wandb-run-id {rid}",
+            f"--wandb-project {env['MILES_WANDB_PROJECT']} "
+            f"--wandb-group {env['W8_EXPERIMENT_ID']} --wandb-run-id {rid} "
+            f"--wandb-experiment-id {env['W8_EXPERIMENT_ID']} "
+            "--wandb-job-type eval "
+            f"--wandb-timing-status {env['W8_TIMING_STATUS']}",
             env=env,
             log=f"{RUNS_DIR}/receipts/{rid}.eval.log",
         )
-        _receipt(stage, rid, {"wall_s": round(time.time() - started, 1), "label": label, "model": model, "adapter": adapter})
+        _receipt(
+            stage,
+            rid,
+            {
+                "status": "success",
+                "wall_s": round(time.time() - started, 1),
+                "label": label,
+                "model": model,
+                "adapter": adapter,
+            },
+            env=env,
+        )
     elif stage == "grpo":
         env.setdefault("MILES_LORA_ADAPTER_PATH", f"{DATA_DIR}/adapter_warmstart_iter_0000244")
         _reward_preflight()
@@ -388,29 +492,125 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
         raise ValueError(f"unknown stage: {stage}")
 
     runs_vol.commit()
+
+
+@app.function(**GPU_KW)
+def run(
+    stage: str,
+    sha: str = "",
+    run_id: str = "",
+    experiment_id: str = "",
+    env_overrides: str = "{}",
+) -> str:
+    """Run one canonical pipeline stage on the 8x H100 container."""
+    valid_stages = {"convert", "probe", "sft", "eval", "grpo"}
+    if stage not in valid_stages:
+        raise ValueError(f"unknown stage: {stage}")
+    _checkout(sha)
+    _sh("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | sort | uniq -c")
+    rid = run_id or f"glm47_h100_{stage}_{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    overrides = json.loads(env_overrides)
+    resolved_experiment = (
+        experiment_id
+        or str(overrides.get("W8_EXPERIMENT_ID") or "")
+        or os.environ.get("W8_EXPERIMENT_ID", "")
+        or rid
+    )
+    env = _base_env(rid, resolved_experiment, stage)
+    env.update(overrides)
+    env["W8_EXPERIMENT_ID"] = resolved_experiment
+    started = time.time()
+
+    _wandb_check()
+    _wandb_milestone(stage=stage, event="started", status="started", env=env)
+    try:
+        _execute_stage(stage, rid, env)
+    except Exception as exc:
+        wall_s = time.time() - started
+        receipt = _receipt(
+            stage,
+            rid,
+            {
+                "status": "failed",
+                "wall_s": round(wall_s, 1),
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:1000],
+            },
+            env=env,
+        )
+        try:
+            _wandb_milestone(
+                stage=stage,
+                event="failed",
+                status="failed",
+                env=env,
+                wall_s=wall_s,
+                receipt=receipt,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception as milestone_exc:
+            print(f"wandb_failure_milestone_error {milestone_exc}", flush=True)
+        raise
+
+    receipt = Path(RUNS_DIR, "receipts", f"{rid}.{stage}.json")
+    _wandb_milestone(
+        stage=stage,
+        event="completed",
+        status="success",
+        env=env,
+        wall_s=time.time() - started,
+        receipt=receipt,
+    )
+    runs_vol.commit()
     return rid
 
 
 @app.local_entrypoint()
-def convert(sha: str = ""):
-    print(run.remote("convert", sha=sha))
+def convert(sha: str = "", experiment_id: str = ""):
+    print(run.remote("convert", sha=sha, experiment_id=experiment_id))
 
 
 @app.local_entrypoint()
-def probe(sha: str = ""):
-    print(run.remote("probe", sha=sha))
+def probe(sha: str = "", experiment_id: str = ""):
+    print(run.remote("probe", sha=sha, experiment_id=experiment_id))
 
 
 @app.local_entrypoint()
-def sft(sha: str = "", run_id: str = ""):
-    print(run.remote("sft", sha=sha, run_id=run_id))
+def sft(sha: str = "", run_id: str = "", experiment_id: str = ""):
+    print(run.remote("sft", sha=sha, run_id=run_id, experiment_id=experiment_id))
 
 
 @app.local_entrypoint()
-def grpo(sha: str = "", run_id: str = "", env_overrides: str = "{}"):
-    print(run.remote("grpo", sha=sha, run_id=run_id, env_overrides=env_overrides))
+def grpo(
+    sha: str = "",
+    run_id: str = "",
+    experiment_id: str = "",
+    env_overrides: str = "{}",
+):
+    print(
+        run.remote(
+            "grpo",
+            sha=sha,
+            run_id=run_id,
+            experiment_id=experiment_id,
+            env_overrides=env_overrides,
+        )
+    )
 
 
 @app.local_entrypoint()
-def evaluate(sha: str = "", run_id: str = "", env_overrides: str = "{}"):
-    print(run.remote("eval", sha=sha, run_id=run_id, env_overrides=env_overrides))
+def evaluate(
+    sha: str = "",
+    run_id: str = "",
+    experiment_id: str = "",
+    env_overrides: str = "{}",
+):
+    print(
+        run.remote(
+            "eval",
+            sha=sha,
+            run_id=run_id,
+            experiment_id=experiment_id,
+            env_overrides=env_overrides,
+        )
+    )
