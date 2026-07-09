@@ -216,7 +216,13 @@ def compile_command(task: CppTask, scratch: str | Path, *, image: str = DEFAULT_
 
 
 def reference_compile_command(task: CppTask, scratch: str | Path, *, image: str = DEFAULT_DOCKER_IMAGE) -> list[str]:
-    script = f"timeout {task.build.timeout_s}s g++ {task.reference.compiler_flags} reference.cpp -o reference"
+    # Some accepted PIE references rely on fixed-width integer limit macros
+    # arriving transitively under their original compiler. Make that legacy
+    # compatibility explicit without weakening model-candidate compilation.
+    script = (
+        f"timeout {task.build.timeout_s}s g++ {task.reference.compiler_flags} "
+        "-include cstdint reference.cpp -o reference"
+    )
     return sandbox_command(scratch, script, image=image)
 
 
