@@ -85,6 +85,9 @@ export W8_REGISTER_GLM47_BRIDGE="${W8_REGISTER_GLM47_BRIDGE:-1}"
 # so parallel benchmarking does not corrupt the timing signal.
 export W8_CPP_REWARD_WORKERS="${W8_CPP_REWARD_WORKERS:-32}"
 export W8_CPP_SANDBOX_CPU="${W8_CPP_SANDBOX_CPU:-1}"
+# Modal 8x H100 has no docker daemon (gVisor). Default the local in-process
+# sandbox; override with W8_CPP_SANDBOX_BACKEND=docker only on hosts that mount it.
+export W8_CPP_SANDBOX_BACKEND="${W8_CPP_SANDBOX_BACKEND:-local}"
 
 export MILES_WANDB_PROJECT="${MILES_WANDB_PROJECT:-glm47-pie-cpp-posttraining}"
 export MILES_WANDB_GROUP="${MILES_WANDB_GROUP:-glm47-h100-pie-cpp-lora-r16}"

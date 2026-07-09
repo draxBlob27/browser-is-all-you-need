@@ -129,6 +129,7 @@ fi
 if [ "${W8_CPP_SANDBOX_BACKEND:-docker}" != "local" ]; then
   if ! command -v docker >/dev/null 2>&1; then
     echo "Missing docker CLI inside container. Mount it with -v /usr/bin/docker:/usr/bin/docker:ro." >&2
+    echo "W8_CPP_SANDBOX_BACKEND=${W8_CPP_SANDBOX_BACKEND:-<unset>} (set to 'local' for gVisor/no-daemon hosts)." >&2
     exit 2
   fi
 fi

@@ -149,6 +149,8 @@ def test_miles_glm47_h100_wrappers_select_fast_8x_h100_defaults() -> None:
         assert 'MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE="${MILES_SGLANG_DISABLE_CUSTOM_ALL_REDUCE:-0}"' in text
         assert 'MILES_EXPERTS_SHARED_OUTER_LORAS="${MILES_EXPERTS_SHARED_OUTER_LORAS:-1}"' in text
         assert 'MILES_TRAIN_MODULE="${MILES_TRAIN_MODULE:-w8_biayn.integrations.miles_train_with_glm47_bridge}"' in text
+        # Modal gVisor has no docker daemon; H100 wrappers default local sandbox.
+        assert 'W8_CPP_SANDBOX_BACKEND="${W8_CPP_SANDBOX_BACKEND:-local}"' in text
 
     grpo_text = GLM47_H100_GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'MILES_NUM_ROLLOUT="${MILES_NUM_ROLLOUT:-100}"' in grpo_text

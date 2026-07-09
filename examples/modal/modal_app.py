@@ -80,14 +80,20 @@ def _sh(
     log: str | None = None,
 ) -> None:
     """Run a shell command; with log=, tee output to a durable file on the runs
-    volume so failures survive Modal's log retention window."""
+    volume so failures survive Modal's log retention window.
+
+    Uses bash -c (not -lc): login shells on some images re-source profiles that
+    drop non-standard env vars, which broke W8_CPP_SANDBOX_BACKEND=local on the
+    first probe and fell through to the docker CLI preflight.
+    """
     if log:
         Path(log).parent.mkdir(parents=True, exist_ok=True)
         cmd = f"set -o pipefail; ({cmd}) 2>&1 | tee {log}"
     print(f"+ {cmd}", flush=True)
-    merged = {**os.environ, **(env or {})}
+    # subprocess requires str values; filter None that can appear from os.environ edge cases
+    merged = {k: str(v) for k, v in {**os.environ, **(env or {})}.items() if v is not None}
     try:
-        subprocess.run(["bash", "-lc", cmd], cwd=cwd, env=merged, check=True)
+        subprocess.run(["bash", "-c", cmd], cwd=cwd, env=merged, check=True)
     except subprocess.CalledProcessError:
         if log:
             runs_vol.commit()
