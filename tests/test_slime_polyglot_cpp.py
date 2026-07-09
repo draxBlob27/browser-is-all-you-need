@@ -63,6 +63,21 @@ std::string two_fer();
 """
 
 
+def recoverable_unlabeled_response() -> str:
+    return """Here is the complete solution.
+
+```cpp
+std::string two_fer() { return "One for you, one for me."; }
+```
+
+```hpp
+#pragma once
+std::string two_fer();
+```
+<|im_end|>
+"""
+
+
 def test_build_slime_polyglot_cpp_dataset_writes_eval_rows_and_manifest(tmp_path: Path) -> None:
     source = make_polyglot_tree(tmp_path)
     out = tmp_path / "out"
@@ -113,6 +128,43 @@ ok
         )
 
 
+def test_recover_replacements_diagnoses_unlabeled_code_blocks_without_changing_strict_parser() -> None:
+    response = recoverable_unlabeled_response()
+
+    with pytest.raises(polyglot.PolyglotResponseError, match="unexpected prose"):
+        polyglot.parse_replacements(response, ["two_fer.cpp", "two_fer.h"])
+
+    recovered = polyglot.recover_replacements(response, ["two_fer.cpp", "two_fer.h"])
+
+    assert recovered["two_fer.cpp"].startswith("std::string two_fer")
+    assert recovered["two_fer.h"].startswith("#pragma once")
+
+
+def test_recover_replacements_can_use_markdown_headings_but_not_forbidden_files() -> None:
+    response = """### `two_fer.h`
+
+```hpp
+#pragma once
+std::string two_fer();
+```
+
+### `two_fer.cpp`
+
+```cpp
+std::string two_fer() { return "One for you, one for me."; }
+```
+"""
+
+    recovered = polyglot.recover_replacements(response, ["two_fer.cpp", "two_fer.h"])
+
+    assert recovered["two_fer.cpp"].startswith("std::string two_fer")
+    assert recovered["two_fer.h"].startswith("#pragma once")
+
+    forbidden = response.replace("two_fer.h", "two_fer_test.cpp", 1)
+    with pytest.raises(polyglot.PolyglotResponseError, match="unknown or forbidden"):
+        polyglot.recover_replacements(forbidden, ["two_fer.cpp", "two_fer.h"])
+
+
 def test_reward_func_scores_invalid_format_without_running_tests() -> None:
     sample = {
         "metadata": {
@@ -132,6 +184,51 @@ def test_reward_func_scores_invalid_format_without_running_tests() -> None:
     assert record["categories"] == ["strings", "conditionals"]
     assert record["all_tests_pass"] is False
     assert record["tests_total"] == 0
+
+
+def test_reward_func_records_recovered_diagnostics_without_awarding_strict_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = make_polyglot_tree(tmp_path)
+    exercise = source / "cpp" / "exercises" / "practice" / "two-fer"
+    calls: list[Path] = []
+
+    def fake_runner(path: str | Path) -> polyglot.PolyglotTestResult:
+        path = Path(path)
+        calls.append(path)
+        assert (path / "two_fer.cpp").read_text(encoding="utf-8").startswith("std::string two_fer")
+        assert (path / "two_fer.h").read_text(encoding="utf-8").startswith("#pragma once")
+        return polyglot.PolyglotTestResult(returncode=0, logs="passed")
+
+    monkeypatch.setattr(polyglot, "run_polyglot_tests", fake_runner)
+
+    sample = {
+        "metadata": {
+            "task_id": "cpp/two-fer",
+            "problem_id": "two-fer",
+            "split": "eval",
+            "exercise": "two-fer",
+            "exercise_path": str(exercise),
+            "solution_files": ["two_fer.cpp", "two_fer.h"],
+        },
+        "response": recoverable_unlabeled_response(),
+    }
+
+    record = asyncio.run(polyglot.reward_func(None, sample))
+
+    assert calls
+    assert record["score"] == -1.0
+    assert record["reason"] == "invalid_format"
+    assert record["format_valid"] is False
+    assert record["all_tests_pass"] is False
+    assert record["tests_total"] == 0
+    assert record["candidate_bytes"] == 0
+    assert record["recovered_format"] is True
+    assert record["recovered_reason"] == "passed"
+    assert record["recovered_all_tests_pass"] is True
+    assert record["recovered_tests_passed"] == 1
+    assert record["recovered_tests_total"] == 1
+    assert record["recovered_candidate_bytes"] > 0
 
 
 def test_reward_func_applies_replacements_and_records_test_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,6 +309,40 @@ def test_score_debug_dump_writes_polyglot_summary_without_speed_metrics(tmp_path
     assert "missing_runtime_rate" not in summary
 
 
+def test_aggregate_reports_recovery_diagnostics_without_changing_strict_pass_rate() -> None:
+    records = [
+        {
+            "score": -1.0,
+            "reward": -1.0,
+            "reason": "invalid_format",
+            "task_id": "cpp/two-fer",
+            "problem_id": "two-fer",
+            "split": "eval",
+            "all_tests_pass": False,
+            "compile_error": False,
+            "timeout": False,
+            "category": "strings",
+            "categories": ["strings", "conditionals"],
+            "recovered_format": True,
+            "recovered_reason": "passed",
+            "recovered_all_tests_pass": True,
+            "recovered_compile_error": False,
+            "recovered_timeout": False,
+        }
+    ]
+
+    summary = polyglot.aggregate_polyglot_records(records, label="base")
+
+    assert summary["pass_rate"] == 0.0
+    assert summary["invalid_format_rate"] == 1.0
+    assert summary["recovered_format_rate"] == 1.0
+    assert summary["recovered_pass_rate"] == 1.0
+    assert summary["recovered_task_pass_rate"] == 1.0
+    assert summary["category_summary"]["strings"]["pass_rate"] == 0.0
+    assert summary["category_summary"]["strings"]["recovered_pass_rate"] == 1.0
+    assert summary["category_summary"]["conditionals"]["recovered_task_pass_rate"] == 1.0
+
+
 def test_polyglot_sandbox_image_plan_installs_cmake_and_make() -> None:
     plan = polyglot.polyglot_sandbox_image_build_plan()
     assert "docker build -t w8-biayn-polyglot-cpp:latest -" in plan
@@ -259,5 +390,6 @@ def test_moonlight_polyglot_cpp_readme_documents_operator_flow() -> None:
     assert "bash examples/slime/moonlight_polyglot_cpp/eval_base.sh" in text
     assert "base.records.jsonl" in text
     assert "base.summary.json" in text
+    assert "recovered_pass_rate" in text
     assert "correct_and_faster_rate" in text
 

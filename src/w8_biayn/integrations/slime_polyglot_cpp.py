@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -32,6 +33,9 @@ DEFAULT_TEST_TIMEOUT_SECONDS = 180
 DEFAULT_EVAL_LIMIT = 4
 ALLOWED_CODE_FENCE_LANGS = {"", "cpp", "c++", "cc", "cxx", "h", "hh", "hpp", "hxx"}
 UNCATEGORIZED_CATEGORY = "uncategorized"
+_PATH_MENTION_RE = re.compile(
+    r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx)\b"
+)
 
 # Aider Polyglot ships a curated Exercism subset without the C++ track-level
 # concept graph. Keep this map deterministic so eval summaries can drive
@@ -347,6 +351,73 @@ def parse_replacements(
     return replacements
 
 
+def recover_replacements(
+    response: str,
+    allowed_files: Sequence[str],
+    *,
+    require_all: bool = True,
+) -> dict[str, str]:
+    """Best-effort parser for diagnostic-only format recovery.
+
+    This must not feed strict pass/fail scoring. It exists to identify samples
+    where useful code is present but the model missed the requested path fences.
+    """
+
+    allowed_order = tuple(dict.fromkeys(_normalize_relative_path(path) for path in allowed_files))
+    allowed = set(allowed_order)
+    if not response.strip():
+        raise PolyglotResponseError("invalid_format", "empty response")
+
+    blocks = [
+        block
+        for block in _iter_fenced_blocks(response)
+        if block["info"].strip().lower() in ALLOWED_CODE_FENCE_LANGS
+    ]
+    if not blocks:
+        raise PolyglotResponseError("invalid_format", "no recoverable code blocks")
+
+    replacements: dict[str, str] = {}
+    previous_end = 0
+    can_map_by_order = len(blocks) == len(allowed_order)
+    for index, block in enumerate(blocks):
+        context = response[previous_end : block["start"]]
+        previous_end = block["end"]
+        rel_path = _recover_path_from_context(context, allowed_order)
+        if rel_path is None:
+            if not can_map_by_order:
+                raise PolyglotResponseError("invalid_format", "could not infer replacement file")
+            rel_path = allowed_order[index]
+        if rel_path in replacements:
+            raise PolyglotResponseError("invalid_files", f"duplicate replacement for: {rel_path}")
+        replacements[rel_path] = block["body"].rstrip() + "\n"
+
+    if require_all:
+        missing = sorted(allowed - set(replacements))
+        if missing:
+            raise PolyglotResponseError("invalid_files", f"missing replacement files: {', '.join(missing)}")
+    return replacements
+
+
+def _recover_path_from_context(context: str, allowed_order: Sequence[str]) -> str | None:
+    last_line = ""
+    for line in reversed(context.splitlines()):
+        if line.strip():
+            last_line = line.strip()
+            break
+    if not last_line:
+        return None
+    mentions = [_normalize_relative_path(match.group(0)) for match in _PATH_MENTION_RE.finditer(last_line)]
+    if not mentions:
+        return None
+    token = mentions[-1]
+    if token in allowed_order:
+        return token
+    basename_matches = [path for path in allowed_order if PurePosixPath(path).name == PurePosixPath(token).name]
+    if len(basename_matches) == 1:
+        return basename_matches[0]
+    raise PolyglotResponseError("invalid_files", f"unknown or forbidden file: {token}")
+
+
 def _iter_fenced_blocks(text: str) -> Iterable[dict[str, Any]]:
     cursor = 0
     while True:
@@ -380,33 +451,142 @@ def _score_sample(sample: Any) -> dict[str, Any]:
     metadata = _sample_metadata(sample)
     allowed_files = metadata.get("solution_files")
     if not isinstance(allowed_files, list) or not allowed_files:
-        return _record(sample, metadata, score=-1.0, reason="missing_solution_files", exception="metadata.solution_files is required")
+        return _record(
+            sample,
+            metadata,
+            score=-1.0,
+            reason="missing_solution_files",
+            exception="metadata.solution_files is required",
+        )
 
+    allowed_file_names = [str(path) for path in allowed_files]
     response = _sample_response(sample)
     try:
-        replacements = parse_replacements(response, [str(path) for path in allowed_files])
+        replacements = parse_replacements(response, allowed_file_names)
     except PolyglotResponseError as exc:
-        return _record(sample, metadata, score=-1.0, reason=exc.reason, exception=str(exc), format_valid=False)
+        record = _record(
+            sample,
+            metadata,
+            score=-1.0,
+            reason=exc.reason,
+            exception=str(exc),
+            format_valid=False,
+        )
+        if exc.reason == "invalid_format":
+            return _attach_recovery_diagnostics(
+                record, metadata, response=response, allowed_files=allowed_file_names
+            )
+        return record
     except Exception as exc:  # noqa: BLE001 - protects rollout workers from parser bugs
-        return _record(sample, metadata, score=-1.0, reason="invalid_format", exception=str(exc), format_valid=False)
-
-    exercise_path = metadata.get("exercise_path")
-    if not exercise_path:
-        return _record(sample, metadata, score=-1.0, reason="missing_exercise_path", exception="metadata.exercise_path is required")
+        record = _record(
+            sample,
+            metadata,
+            score=-1.0,
+            reason="invalid_format",
+            exception=str(exc),
+            format_valid=False,
+        )
+        return _attach_recovery_diagnostics(
+            record, metadata, response=response, allowed_files=allowed_file_names
+        )
 
     try:
-        source_exercise = _resolve_exercise_path(str(exercise_path), metadata=metadata)
-        with TemporaryDirectory(prefix="w8-polyglot-cpp-") as scratch_dir:
-            scratch = Path(scratch_dir) / "exercise"
-            shutil.copytree(source_exercise, scratch)
-            for rel_path, content in replacements.items():
-                target = scratch / rel_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
-            result = run_polyglot_tests(scratch)
-        return _record_from_test_result(sample, metadata, result, candidate_bytes=sum(len(value.encode("utf-8")) for value in replacements.values()))
+        result, candidate_bytes = _run_replacements(metadata, replacements)
+        return _record_from_test_result(sample, metadata, result, candidate_bytes=candidate_bytes)
+    except PolyglotResponseError as exc:
+        return _record(sample, metadata, score=-1.0, reason=exc.reason, exception=str(exc))
     except Exception as exc:  # pragma: no cover - guards real rollout workers
         return _record(sample, metadata, score=-1.0, reason="reward_exception", exception=str(exc))
+
+
+def _attach_recovery_diagnostics(
+    record: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    response: str,
+    allowed_files: Sequence[str],
+) -> dict[str, Any]:
+    try:
+        recovered = recover_replacements(response, allowed_files)
+    except PolyglotResponseError as exc:
+        record["recovered_reason"] = exc.reason
+        record["recovered_exception"] = str(exc)
+        return record
+    except Exception as exc:  # noqa: BLE001 - diagnostic path must not fail rollout workers
+        record["recovered_reason"] = "invalid_format"
+        record["recovered_exception"] = str(exc)
+        return record
+
+    record["recovered_format"] = True
+    try:
+        result, candidate_bytes = _run_replacements(metadata, recovered)
+    except PolyglotResponseError as exc:
+        record["recovered_reason"] = exc.reason
+        record["recovered_exception"] = str(exc)
+        record["recovered_candidate_bytes"] = _replacement_bytes(recovered)
+        return record
+    except Exception as exc:  # pragma: no cover - guards real rollout workers
+        record["recovered_reason"] = "reward_exception"
+        record["recovered_exception"] = str(exc)
+        record["recovered_candidate_bytes"] = _replacement_bytes(recovered)
+        return record
+
+    record.update(_recovered_fields_from_test_result(result, candidate_bytes=candidate_bytes))
+    return record
+
+
+def _run_replacements(metadata: dict[str, Any], replacements: dict[str, str]) -> tuple[PolyglotTestResult, int]:
+    exercise_path = metadata.get("exercise_path")
+    if not exercise_path:
+        raise PolyglotResponseError("missing_exercise_path", "metadata.exercise_path is required")
+
+    source_exercise = _resolve_exercise_path(str(exercise_path), metadata=metadata)
+    with TemporaryDirectory(prefix="w8-polyglot-cpp-") as scratch_dir:
+        scratch = Path(scratch_dir) / "exercise"
+        shutil.copytree(source_exercise, scratch)
+        for rel_path, content in replacements.items():
+            target = scratch / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        result = run_polyglot_tests(scratch)
+    candidate_bytes = _replacement_bytes(replacements)
+    return result, candidate_bytes
+
+
+def _replacement_bytes(replacements: dict[str, str]) -> int:
+    return sum(len(value.encode("utf-8")) for value in replacements.values())
+
+
+def _recovered_fields_from_test_result(
+    result: PolyglotTestResult, *, candidate_bytes: int
+) -> dict[str, Any]:
+    if result.passed:
+        fields = {
+            "recovered_reason": "passed",
+            "recovered_tests_passed": 1,
+            "recovered_tests_total": 1,
+        }
+    elif result.timeout:
+        fields = {"recovered_reason": "timeout", "recovered_timeout": True}
+    elif _looks_like_compile_error(result.logs):
+        fields = {"recovered_reason": "compile_error", "recovered_compile_error": True}
+    else:
+        fields = {
+            "recovered_reason": "tests_failed",
+            "recovered_tests_passed": 0,
+            "recovered_tests_total": 1,
+        }
+    recovered_tests_total = fields.get("recovered_tests_total", 0)
+    fields["recovered_all_tests_pass"] = (
+        recovered_tests_total > 0
+        and fields.get("recovered_tests_passed", 0) == recovered_tests_total
+    )
+    fields["recovered_candidate_bytes"] = candidate_bytes
+    if _include_logs() and result.logs:
+        fields["recovered_logs"] = result.logs
+    elif result.logs:
+        fields["recovered_log_excerpt"] = result.logs[-2000:]
+    return fields
 
 
 def run_polyglot_tests(exercise_dir: str | Path) -> PolyglotTestResult:
@@ -508,6 +688,14 @@ def _record(
         "format_valid": format_valid,
         "invalid_format": reason == "invalid_format",
         "invalid_files": reason == "invalid_files",
+        "recovered_format": False,
+        "recovered_reason": None,
+        "recovered_compile_error": False,
+        "recovered_timeout": False,
+        "recovered_tests_passed": 0,
+        "recovered_tests_total": 0,
+        "recovered_all_tests_pass": False,
+        "recovered_candidate_bytes": 0,
     }
     if exception:
         record["exception"] = exception
@@ -625,6 +813,14 @@ def record_from_debug_sample(sample: dict[str, Any], *, label: str | None = None
     record.setdefault("categories", _record_categories(metadata))
     record.setdefault("category", metadata.get("category") or _first_category(record.get("categories")))
     record.setdefault("all_tests_pass", bool(record.get("tests_total")) and record.get("tests_passed") == record.get("tests_total"))
+    record.setdefault("recovered_format", False)
+    record.setdefault("recovered_reason", None)
+    record.setdefault("recovered_compile_error", False)
+    record.setdefault("recovered_timeout", False)
+    record.setdefault("recovered_tests_passed", 0)
+    record.setdefault("recovered_tests_total", 0)
+    record.setdefault("recovered_all_tests_pass", False)
+    record.setdefault("recovered_candidate_bytes", 0)
     if label is not None:
         record["label"] = label
     return record
@@ -657,6 +853,11 @@ def aggregate_polyglot_records(records: Iterable[dict[str, Any]], *, label: str)
         "invalid_format_rate": _reason_rate(rows, "invalid_format"),
         "invalid_files_rate": _reason_rate(rows, "invalid_files"),
         "tests_failed_rate": _reason_rate(rows, "tests_failed"),
+        "recovered_format_rate": _rate(rows, "recovered_format"),
+        "recovered_pass_rate": _rate(rows, "recovered_all_tests_pass"),
+        "recovered_task_pass_rate": _task_any_rate(by_task, "recovered_all_tests_pass"),
+        "recovered_compile_error_rate": _rate(rows, "recovered_compile_error"),
+        "recovered_timeout_rate": _rate(rows, "recovered_timeout"),
         "mean_best_reward": _mean(best_rewards),
         "mean_sample_reward": _mean(sample_rewards),
         "reason_counts": dict(sorted(reason_counts.items())),
@@ -683,6 +884,9 @@ def _category_summary(rows: list[dict[str, Any]], best_rows: list[dict[str, Any]
         best_rewards = [float(row.get("reward", 0.0)) for row in category_best]
         sample_rewards = [float(row.get("reward", 0.0)) for row in category_samples]
         passed = [row for row in category_best if row.get("all_tests_pass") is True]
+        category_by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in category_samples:
+            category_by_task[str(row.get("task_id"))].append(row)
         summary[category] = {
             "task_count": len(category_best),
             "sample_count": len(category_samples),
@@ -692,6 +896,11 @@ def _category_summary(rows: list[dict[str, Any]], best_rows: list[dict[str, Any]
             "invalid_format_rate": _reason_rate(category_samples, "invalid_format"),
             "invalid_files_rate": _reason_rate(category_samples, "invalid_files"),
             "tests_failed_rate": _reason_rate(category_samples, "tests_failed"),
+            "recovered_format_rate": _rate(category_samples, "recovered_format"),
+            "recovered_pass_rate": _rate(category_samples, "recovered_all_tests_pass"),
+            "recovered_task_pass_rate": _task_any_rate(category_by_task, "recovered_all_tests_pass"),
+            "recovered_compile_error_rate": _rate(category_samples, "recovered_compile_error"),
+            "recovered_timeout_rate": _rate(category_samples, "recovered_timeout"),
             "mean_best_reward": _mean(best_rewards),
             "mean_sample_reward": _mean(sample_rewards),
             "reason_counts": dict(sorted(reason_counts.items())),
@@ -720,6 +929,15 @@ def _best_record(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _rate(rows: list[dict[str, Any]], key: str) -> float:
     return sum(1 for row in rows if row.get(key) is True) / len(rows) if rows else 0.0
+
+
+def _task_any_rate(by_task: dict[str, list[dict[str, Any]]], key: str) -> float:
+    if not by_task:
+        return 0.0
+    matching_tasks = sum(
+        1 for task_rows in by_task.values() if any(row.get(key) is True for row in task_rows)
+    )
+    return matching_tasks / len(by_task)
 
 
 def _reason_rate(rows: list[dict[str, Any]], reason: str) -> float:

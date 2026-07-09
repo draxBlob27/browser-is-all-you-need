@@ -272,9 +272,11 @@ bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 Inspect `eval/base.records.jsonl`, `eval/base.summary.json`, and
 `stages/base-eval/run_receipt.txt`. The eval rows and reward records include a
 primary `category` plus multi-label `categories`; `base.summary.json` includes
-`category_summary` for heatmaps of pass/error rates by exercise concept. Do not
-compare these results directly with Aider leaderboard numbers; use Aider's
-benchmark harness for that.
+`category_summary` for heatmaps of pass/error rates by exercise concept and
+`recovered_*` diagnostic rates for invalid-format responses that were
+best-effort parsed and tested without changing strict scores. Do not compare
+these results directly with Aider leaderboard numbers; use Aider's benchmark
+harness for that.
 
 ## Stage 4: Run SFT
 

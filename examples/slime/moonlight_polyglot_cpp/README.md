@@ -111,11 +111,15 @@ The lane writes:
     base.summary.json
 ```
 
-The summary reports pass rate, mean reward, invalid-format rate, invalid-file
-rate, compile-error rate, timeout rate, tests-failed rate, and
+The summary reports strict pass rate, mean reward, invalid-format rate,
+invalid-file rate, compile-error rate, timeout rate, tests-failed rate, and
 `category_summary` for heatmaps over the multi-label exercise categories. It
-deliberately does not report PIE speed metrics such as
-`correct_and_faster_rate`.
+also reports diagnostic `recovered_format_rate`, `recovered_pass_rate`, and
+`recovered_task_pass_rate` for invalid-format responses that can be
+best-effort parsed and tested. Those recovered fields do not change strict
+`score`, `pass_rate`, or `all_tests_pass`; they identify format-teachable
+failures for later SFT data review. The lane deliberately does not report PIE
+speed metrics such as `correct_and_faster_rate`.
 
 ## Response Contract
 
@@ -133,7 +137,9 @@ complete replacement file contents
 
 Any prose outside these path/code pairs is invalid. The grader rejects edits to
 tests, examples, docs, metadata, build files, duplicate paths, and missing
-solution files.
+solution files. Invalid-format responses may still be best-effort parsed into
+`recovered_*` diagnostics, but that path never changes strict reward or pass
+fields.
 
 ## Failure Checks
 

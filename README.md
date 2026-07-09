@@ -71,7 +71,9 @@ C++ subset of `Aider-AI/polyglot-benchmark`. It is not an official Aider
 leaderboard run and is not part of the PIE training proof. It uses
 `src/w8_biayn/integrations/slime_polyglot_cpp.py` to build whole-file C++
 exercise prompts, run SLIME rollout-only eval, and grade replacements with
-Exercism C++ tests in a dedicated Docker sandbox.
+Exercism C++ tests in a dedicated Docker sandbox. Invalid-format outputs can
+be parsed and tested as `recovered_*` diagnostics, but strict pass/rate fields
+remain failed.
 
 The GLM agentic SWE-agent lane grades the final edited FILE instead of model
 text: SWE-agent edits `candidate.cpp` over many turns, the hardened Docker
@@ -340,7 +342,9 @@ Artifacts are written under
 `eval/base.records.jsonl`, `eval/base.summary.json`, and
 `stages/base-eval/run_receipt.txt`. Eval rows and reward records include a
 primary `category` plus multi-label `categories`; `base.summary.json` includes
-`category_summary` for heatmaps of pass/error rates by exercise concept.
+`category_summary` for heatmaps of pass/error rates by exercise concept, plus
+`recovered_*` diagnostic rates for invalid-format responses that were
+best-effort parsed and tested without changing strict scores.
 
 For the lighter Moonlight MoE smoke, use:
 
