@@ -321,6 +321,38 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
         _run_stage("examples/miles/glm47_cpp_perf_lora_r16_h100_sft.sh", rid, env, stage)
     elif stage == "sft":
         _run_stage("examples/miles/glm47_cpp_perf_lora_r16_h100_sft.sh", rid, env, stage)
+    elif stage == "eval":
+        # Standalone eval, flag-identical to the A100 anchor recipe
+        # (base_spec.receipt.json): greedy, 1536-token budget, vendor no-think
+        # template, 1 sample/task. Uses HF weights directly — no ref checkpoint.
+        model = env.get("W8_EVAL_MODEL", f"{HF_DIR}/GLM-4.7-Flash")
+        adapter = env.get("W8_EVAL_ADAPTER", "")
+        label = env.get("W8_EVAL_LABEL", "base_h100_spec")
+        out_dir = f"{RUNS_DIR}/issue10-miles/{rid}/eval"
+        _wandb_check()
+        _reward_preflight()
+        started = time.time()
+        lora_flags = ""
+        if adapter:
+            lora_flags = (
+                f"--adapter {adapter} "
+                "--lora-target-modules q_a_proj,kv_a_proj_with_mqa,o_proj,gate_proj,up_proj,down_proj "
+                "--experts-shared-outer-loras --lora-use-virtual-experts "
+            )
+        _sh(
+            f"cd {REPO_DIR} && PYTHONPATH={REPO_DIR}/src python3 scripts/eval_sglang_lora_cpp_perf.py "
+            f"--data-dir {env['MILES_CPP_DATA_DIR']} --model {model} {lora_flags}"
+            f"--label {label} --output-dir {out_dir} --backend sglang "
+            "--samples-per-task 1 --temperature 0.0 --top-p 1.0 --max-tokens 1536 "
+            f"--tp-size {env.get('W8_EVAL_TP', '8')} --mem-fraction-static 0.85 "
+            "--cuda-graph-max-bs 64 --batch-size 64 --score-workers 32 "
+            "--apply-chat-template --chat-template-kwargs '{\"enable_thinking\": false}' "
+            f"--wandb-project glm47-pie-cpp-posttraining --wandb-group glm47-h100-evals "
+            f"--wandb-run-id {rid}",
+            env=env,
+            log=f"{RUNS_DIR}/receipts/{rid}.eval.log",
+        )
+        _receipt(stage, rid, {"wall_s": round(time.time() - started, 1), "label": label, "model": model, "adapter": adapter})
     elif stage == "grpo":
         env.setdefault("MILES_LORA_ADAPTER_PATH", f"{DATA_DIR}/adapter_warmstart_iter_0000244")
         _reward_preflight()
@@ -350,3 +382,8 @@ def sft(sha: str = "", run_id: str = ""):
 @app.local_entrypoint()
 def grpo(sha: str = "", run_id: str = "", env_overrides: str = "{}"):
     print(run.remote("grpo", sha=sha, run_id=run_id, env_overrides=env_overrides))
+
+
+@app.local_entrypoint()
+def evaluate(sha: str = "", run_id: str = "", env_overrides: str = "{}"):
+    print(run.remote("eval", sha=sha, run_id=run_id, env_overrides=env_overrides))
