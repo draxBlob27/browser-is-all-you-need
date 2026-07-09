@@ -343,6 +343,15 @@ def run(stage: str, sha: str = "", run_id: str = "", env_overrides: str = "{}") 
         _wandb_check()
         _reward_preflight()
         started = time.time()
+        if adapter and env.get("W8_EVAL_STRIP_MTP", "1") == "1":
+            # Trainer-saved adapters carry MTP (layer-47) tensors SGLang cannot
+            # serve from disk; strip into a serve copy first.
+            serve = f"{RUNS_DIR}/issue10-miles/{rid}/adapter_serve"
+            _sh(
+                f"cd {REPO_DIR} && PYTHONPATH={REPO_DIR}/src "
+                f"python3 scripts/strip_mtp_adapter.py {adapter} {serve}"
+            )
+            adapter = serve
         lora_flags = ""
         if adapter:
             lora_flags = (
