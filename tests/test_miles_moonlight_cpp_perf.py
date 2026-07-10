@@ -522,6 +522,7 @@ def test_h100_runtime_aligns_all_flashinfer_packages() -> None:
     text = GLM47_H100_RUNTIME.read_text(encoding="utf-8")
     assert "FLASHINFER_VERSION=0.6.12" in text
     assert "FLASHINFER_CUDA_INDEX=129" in text
+    assert "ENV FLASHINFER_VERSION=${FLASHINFER_VERSION}" in text
     for package in ("flashinfer-python", "flashinfer-cubin", "flashinfer-jit-cache"):
         assert package in text
 
