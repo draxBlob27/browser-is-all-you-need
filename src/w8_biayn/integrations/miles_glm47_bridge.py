@@ -374,8 +374,8 @@ def _apply_colocate_lora_tms_region_patch(module) -> None:
 
         def __init__(self, *args, **kwargs):
             # Null out Megatron's nested region contexts. The surrounding model
-            # build remains in TMS' default region, so also suspend tracking for
-            # the duration of this adapter-buffer allocation.
+            # build remains in TMS' default pool, so allocate these resident
+            # adapter buffers in TMS' separate non-pauseable pool.
             kwargs["disable_param_buffers_cpu_backup"] = False
             kwargs["disable_grad_buffers_cpu_backup"] = False
 
@@ -385,12 +385,10 @@ def _apply_colocate_lora_tms_region_patch(module) -> None:
             cdll = getattr(getattr(impl, "_binary_wrapper", None), "cdll", None)
             was_interesting = bool(cdll and cdll.tms_get_interesting_region())
             if was_interesting:
-                cdll.tms_set_interesting_region(False)
-            try:
+                with memory_saver.disable():
+                    original_init(self, *args, **kwargs)
+            else:
                 original_init(self, *args, **kwargs)
-            finally:
-                if was_interesting:
-                    cdll.tms_set_interesting_region(True)
 
         buffer_cls.__init__ = __init__
         lora_utils._param_grad_buffer_patched = True

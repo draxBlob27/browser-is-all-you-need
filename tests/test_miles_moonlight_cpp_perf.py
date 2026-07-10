@@ -5,6 +5,7 @@ import runpy
 import subprocess
 import sys
 import types
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -839,8 +840,17 @@ def test_colocate_lora_buffers_suspend_outer_tms_region(monkeypatch) -> None:
             transitions.append(self.interesting)
 
     cdll = FakeCDLL()
+    @contextmanager
+    def disable():
+        cdll.tms_set_interesting_region(False)
+        try:
+            yield
+        finally:
+            cdll.tms_set_interesting_region(True)
+
     memory_saver = types.SimpleNamespace(
-        _impl=types.SimpleNamespace(_binary_wrapper=types.SimpleNamespace(cdll=cdll))
+        _impl=types.SimpleNamespace(_binary_wrapper=types.SimpleNamespace(cdll=cdll)),
+        disable=disable,
     )
     tms_module = types.ModuleType("torch_memory_saver")
     tms_module.torch_memory_saver = memory_saver
