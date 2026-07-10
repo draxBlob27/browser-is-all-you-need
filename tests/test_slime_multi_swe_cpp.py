@@ -101,7 +101,16 @@ def test_build_slime_multi_swe_cpp_dataset_filters_cpp_rows_and_hides_oracles(
     manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
     assert [row["task_id"] for row in rows] == ["catchorg__Catch2__44", "fmtlib__fmt__123"]
     assert manifest["kind"] == "slime-multi-swe-cpp-dataset"
-    assert manifest["counts"] == {"eval": 2, "task_json": 2}
+    assert manifest["schema_version"] == 2
+    assert manifest["admitted"] is False
+    assert manifest["counts"] == {
+        "eval": 2,
+        "task_json": 2,
+        "oracle_checked": 0,
+        "oracle_passed": 0,
+    }
+    assert manifest["sandbox_image_mode"] == "official-per-task"
+    assert "mswebench/catchorg_m_catch2:pr-44" in manifest["sandbox_images"]
     assert "fmtlib/fmt" in manifest["allowed_repos"]
 
     row = rows[1]
@@ -115,6 +124,7 @@ def test_build_slime_multi_swe_cpp_dataset_filters_cpp_rows_and_hides_oracles(
     task = json.loads((out / row["metadata"]["task_path"]).read_text(encoding="utf-8"))
     assert task["fix_patch"] == "ORACLE_FIX_SHOULD_NOT_APPEAR"
     assert task["base_ref"] == "abc123"
+    assert task["sandbox_image"] == "mswebench/fmtlib_m_fmt:pr-123"
 
 
 def test_parse_patch_response_accepts_single_diff_block_and_rejects_prose() -> None:
@@ -211,7 +221,7 @@ def test_reward_func_runs_fake_harness_and_records_success(
         calls.append((task, patch))
         assert task["fix_patch"] == "ORACLE_FIX_SHOULD_NOT_APPEAR"
         assert patch.startswith("diff --git")
-        return multi_swe.MultiSweTestResult(returncode=0, logs="passed")
+        return multi_swe.MultiSweTestResult(returncode=0, logs="passed", tests_collected=1)
 
     monkeypatch.setattr(multi_swe, "run_multi_swe_tests", fake_runner)
     sample = {"metadata": row["metadata"], "response": valid_diff_response()}
@@ -238,7 +248,7 @@ def test_reward_func_records_recovery_diagnostics_without_awarding_strict_pass(
     monkeypatch.setenv(multi_swe.DEFAULT_DATA_ROOT_ENV, str(out))
 
     def fake_runner(_task: dict[str, object], _patch: str) -> multi_swe.MultiSweTestResult:
-        return multi_swe.MultiSweTestResult(returncode=0, logs="passed")
+        return multi_swe.MultiSweTestResult(returncode=0, logs="passed", tests_collected=1)
 
     monkeypatch.setattr(multi_swe, "run_multi_swe_tests", fake_runner)
     sample = {"metadata": row["metadata"], "response": raw_recoverable_diff()}
@@ -352,7 +362,13 @@ def test_score_debug_dump_runs_oracle_setup_check_with_fix_patch(
     def fake_runner(task: dict[str, object], patch: str) -> multi_swe.MultiSweTestResult:
         calls.append((task, patch))
         assert patch == task["fix_patch"]
-        return multi_swe.MultiSweTestResult(returncode=0, logs="oracle passed")
+        return multi_swe.MultiSweTestResult(
+            returncode=0,
+            logs="oracle passed",
+            tests_collected=7,
+            sandbox_image="mswebench/catchorg_m_catch2@sha256:abc",
+            sandbox_image_id="sha256:abc",
+        )
 
     monkeypatch.setattr(multi_swe, "run_multi_swe_tests", fake_runner)
 
@@ -367,6 +383,8 @@ def test_score_debug_dump_runs_oracle_setup_check_with_fix_patch(
     assert aggregate_paths["oracle_records"].exists()
     assert summary["oracle_setup_check"] == {
         "enabled": True,
+        "blocking": True,
+        "phase": "data_preflight",
         "correct_answer_source": "fix_patch",
         "records_file": "base.oracle.records.jsonl",
         "task_count": 1,
@@ -395,8 +413,175 @@ def test_score_debug_dump_runs_oracle_setup_check_with_fix_patch(
     assert oracle["correct_answer_source"] == "fix_patch"
     assert oracle["setup_valid"] is True
     assert oracle["reason"] == "passed"
+    assert oracle["tests_collected"] == 7
+    assert oracle["sandbox_image"] == "mswebench/catchorg_m_catch2@sha256:abc"
     assert oracle["fix_patch_bytes"] > 0
     assert oracle["log_excerpt"] == "oracle passed"
+
+
+def test_official_multi_swe_image_reference_is_lowercase_and_pr_specific() -> None:
+    assert (
+        multi_swe.official_multi_swe_sandbox_image("catchorg", "Catch2", 1608)
+        == "mswebench/catchorg_m_catch2:pr-1608"
+    )
+    with pytest.raises(ValueError, match="invalid pull-request number"):
+        multi_swe.official_multi_swe_sandbox_image("catchorg", "Catch2", None)
+
+
+def test_all_repository_harnesses_run_ctest_from_the_build_directory() -> None:
+    for harness in multi_swe.REPO_HARNESSES.values():
+        assert "cd build && ctest --output-on-failure" in harness.test_command
+        assert "ctest --test-dir" not in harness.test_command
+
+
+def test_run_repository_tests_rejects_zero_test_false_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = {
+        "sandbox_image": "mswebench/catchorg_m_catch2:pr-1608",
+        "sandbox_image_digest": "mswebench/catchorg_m_catch2@sha256:abc",
+        "sandbox_image_id": "sha256:abc",
+    }
+    captured: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "Test project /work/repo\nNo tests were found!!!\n",
+            "",
+        )
+
+    monkeypatch.delenv(multi_swe.SANDBOX_IMAGE_ENV, raising=False)
+    monkeypatch.setattr(multi_swe.subprocess, "run", fake_run)
+    result = multi_swe.run_repository_tests(
+        tmp_path,
+        multi_swe.REPO_HARNESSES[("catchorg", "catch2")],
+        task=task,
+    )
+
+    assert result.passed is False
+    assert result.no_tests_collected is True
+    assert result.harness_error is True
+    assert result.tests_collected is None
+    assert "mswebench/catchorg_m_catch2@sha256:abc" in captured[0]
+
+
+def test_run_repository_tests_requires_and_records_positive_ctest_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = {"sandbox_image": "mswebench/fmtlib_m_fmt:pr-123"}
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "100% tests passed, 0 tests failed out of 12\n",
+            "",
+        )
+
+    monkeypatch.delenv(multi_swe.SANDBOX_IMAGE_ENV, raising=False)
+    monkeypatch.setattr(multi_swe.subprocess, "run", fake_run)
+    result = multi_swe.run_repository_tests(
+        tmp_path,
+        multi_swe.REPO_HARNESSES[("fmtlib", "fmt")],
+        task=task,
+    )
+
+    assert result.passed is True
+    assert result.no_tests_collected is False
+    assert result.tests_collected == 12
+
+
+def test_preflight_stamps_image_digests_and_admits_only_passing_oracles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = make_dataset(tmp_path)
+    out = tmp_path / "out"
+    multi_swe.build_slime_multi_swe_cpp_dataset(source, out, eval_limit=2, force=True)
+    pulled: list[str] = []
+
+    monkeypatch.delenv(multi_swe.SANDBOX_IMAGE_ENV, raising=False)
+    monkeypatch.setattr(multi_swe, "_pull_docker_image", pulled.append)
+    monkeypatch.setattr(
+        multi_swe,
+        "_inspect_docker_image",
+        lambda image: {
+            "image": image,
+            "resolved_image": f"{image.rsplit(':', 1)[0]}@sha256:abc",
+            "image_id": "sha256:abc",
+            "repo_digests": [f"{image.rsplit(':', 1)[0]}@sha256:abc"],
+        },
+    )
+
+    def fake_oracles(data_root: str | Path) -> list[dict[str, object]]:
+        return [
+            {
+                "setup_valid": True,
+                "passed": True,
+                "reason": "passed",
+                "repo_full_name": task["repo_full_name"],
+                "instance_id": task["instance_id"],
+            }
+            for _path, task in multi_swe.load_prepared_multi_swe_tasks(data_root)
+        ]
+
+    monkeypatch.setattr(multi_swe, "oracle_setup_records_from_prepared_tasks", fake_oracles)
+    paths, summary = multi_swe.run_multi_swe_oracle_preflight(out)
+
+    assert summary["all_passed"] is True
+    assert summary["blocking"] is True
+    assert len(pulled) == 2
+    assert paths["sandbox_images"].exists()
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    assert manifest["admitted"] is True
+    assert manifest["counts"]["oracle_checked"] == 2
+    for task_path, task in multi_swe.load_prepared_multi_swe_tasks(out):
+        assert task["sandbox_image"].startswith("mswebench/")
+        assert task["sandbox_image_digest"].endswith("@sha256:abc"), task_path
+    assert multi_swe.verify_multi_swe_dataset(out)["all_passed"] is True
+
+
+def test_preflight_failure_remains_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = make_dataset(tmp_path)
+    out = tmp_path / "out"
+    multi_swe.build_slime_multi_swe_cpp_dataset(source, out, eval_limit=1, force=True)
+    monkeypatch.setattr(multi_swe, "_pull_docker_image", lambda _image: None)
+    monkeypatch.setattr(
+        multi_swe,
+        "_inspect_docker_image",
+        lambda image: {
+            "image": image,
+            "resolved_image": f"{image.rsplit(':', 1)[0]}@sha256:def",
+            "image_id": "sha256:def",
+            "repo_digests": [],
+        },
+    )
+    monkeypatch.setattr(
+        multi_swe,
+        "oracle_setup_records_from_prepared_tasks",
+        lambda _root: [
+            {
+                "setup_valid": False,
+                "passed": False,
+                "reason": "no_tests_collected",
+                "repo_full_name": "catchorg/Catch2",
+            }
+        ],
+    )
+
+    _paths, summary = multi_swe.run_multi_swe_oracle_preflight(out)
+
+    assert summary["all_passed"] is False
+    with pytest.raises(ValueError, match="has not passed blocking admission"):
+        multi_swe.verify_multi_swe_dataset(out)
 
 
 def test_multi_swe_sandbox_image_plan_installs_cmake_git_and_make() -> None:
@@ -429,9 +614,13 @@ def test_moonlight_multi_swe_cpp_runner_is_base_eval_only() -> None:
     assert ".w8-biayn/data/multi-swe-bench-mini" in text
     assert 'EVAL_MAX_RESPONSE_LEN="${SLIME_EVAL_MAX_RESPONSE_LEN:-16384}"' in text
     assert "w8_biayn.integrations.slime_multi_swe_cpp build-data" in text
+    assert "w8_biayn.integrations.slime_multi_swe_cpp preflight" in text
+    assert "w8_biayn.integrations.slime_multi_swe_cpp verify-data" in text
     assert "--eval-prompt-data multi_swe_cpp" in text
     assert "--custom-rm-path w8_biayn.integrations.slime_multi_swe_cpp.reward_func" in text
-    assert "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE" in text
+    assert 'MULTI_SWE_SANDBOX_IMAGE_OVERRIDE="${W8_SLIME_MULTI_SWE_SANDBOX_IMAGE:-}"' in text
+    assert "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE:-w8-biayn-multi-swe-cpp" not in text
+    assert "sandbox-images.json" in text
     assert "W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK" in text
     assert '--data-root "${DATA_DIR}"' in text
     assert "SLIME_MULTI_SWE_SKIP_ORACLE_CHECK" in text

@@ -229,13 +229,16 @@ bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned
 SLIME rollout-only eval of base Moonlight on C++ issue-resolution tasks from
-`ByteDance-Seed/Multi-SWE-bench_mini`. Aggregation runs the dataset
-`fix_patch` as a default oracle setup check and stores the proof in
-`eval/base.oracle.records.jsonl` plus `oracle_setup_check` in
-`eval/base.summary.json`. Keep detailed setup, response contract, artifact
-fields, repo summaries, oracle setup proof, and `recovered_*` diagnostics in
-`examples/slime/moonlight_multi_swe_cpp/README.md` instead of duplicating them
-across repo-wide docs:
+`ByteDance-Seed/Multi-SWE-bench_mini`. Preparation is a blocking admission
+gate: select the official lowercase per-instance `mswebench` image, pin its
+immutable identity, run every dataset `fix_patch`, and require a positive CTest
+count. The proof lives in `data/oracle.records.jsonl`,
+`data/oracle.summary.json`, `data/sandbox-images.json`, and the schema-v2
+manifest; aggregation copies it into `eval/base.oracle.records.jsonl` plus
+`oracle_setup_check` in `eval/base.summary.json`. Keep detailed setup, response
+contract, artifact fields, repo summaries, oracle proof, and `recovered_*`
+diagnostics in `examples/slime/moonlight_multi_swe_cpp/README.md` instead of
+duplicating them across repo-wide docs:
 
 ```bash
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh

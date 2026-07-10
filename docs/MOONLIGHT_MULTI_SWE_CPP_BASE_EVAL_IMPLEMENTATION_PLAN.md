@@ -10,6 +10,26 @@ subset of `ByteDance-Seed/Multi-SWE-bench_mini`, analogous to the existing
 Moonlight Polyglot C++ base-eval lane. Keep it separate from active PIE
 performance RL and do not report PIE speed metrics for it.
 
+## Compiler-Image Hardening Checklist
+
+Completed for the setup-side failure found on Catch2 PR 1608:
+
+- [x] Replace the generic GCC 13/glibc 2.36 default with official, lowercase,
+      per-instance `mswebench/<org>_m_<repo>:pr-<number>` images.
+- [x] Resolve and record an immutable image digest/ID for each prepared task.
+- [x] Move the full `fix_patch` oracle run into blocking data preparation.
+- [x] Keep schema-v2 manifests provisional until every oracle passes.
+- [x] Run CTest from `build/` for compatibility with CMake 3.13.
+- [x] Require a positive parsed CTest count; classify zero-test exit-0 runs as
+      `no_tests_collected`, never `passed`.
+- [x] Verify admission artifacts before model download, Ray, or GPU rollout.
+- [x] Copy the prepared oracle proof into eval artifacts instead of rerunning it.
+- [x] Retain the generic image only as an explicit debugging override.
+- [x] Add unit regressions for image casing/selection, immutable receipts,
+      admission blocking, CTest working directory, and zero-test false passes.
+- [x] Update the canonical runbook, README, roadmap, repository guide, skill,
+      and this implementation record.
+
 ## Source Dataset Facts
 
 Use the Hugging Face dataset:
@@ -122,7 +142,9 @@ DATA_SOURCE = "ByteDance-Seed/Multi-SWE-bench_mini"
 BENCHMARK = "multi-swe-bench-mini"
 LANGUAGE = "cpp"
 DATASET_KIND = "slime-multi-swe-cpp-dataset"
-DEFAULT_SANDBOX_IMAGE = "w8-biayn-multi-swe-cpp:latest"
+SCHEMA_VERSION = 2
+OFFICIAL_SANDBOX_IMAGE = "mswebench/<org>_m_<lowercase-repo>:pr-<number>"
+DEBUG_SANDBOX_IMAGE = "w8-biayn-multi-swe-cpp:latest"
 ```
 
 Suggested environment variables:
@@ -132,7 +154,8 @@ SLIME_MULTI_SWE_SOURCE
 SLIME_MULTI_SWE_JSONL
 SLIME_MULTI_SWE_EVAL_LIMIT
 SLIME_MULTI_SWE_PROFILE
-W8_SLIME_MULTI_SWE_SANDBOX_IMAGE
+SLIME_MULTI_SWE_PULL_IMAGES
+W8_SLIME_MULTI_SWE_SANDBOX_IMAGE  # explicit debug override only
 W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS
 W8_SLIME_MULTI_SWE_INCLUDE_LOGS
 W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK
@@ -178,11 +201,13 @@ Required behavior:
    ${RUN_ROOT}/data/tasks/<instance_id>/task.json
    ```
 
-6. Write a manifest:
-
-   ```text
-   ${RUN_ROOT}/data/manifest.json
-   ```
+6. Write a provisional schema-v2 manifest with `admitted: false`.
+7. Pull and inspect each official per-task image and stamp its immutable
+   digest/ID in task JSON plus `sandbox-images.json`.
+8. Run every task's `fix_patch` through the real harness, writing
+   `oracle.records.jsonl` and `oracle.summary.json`.
+9. Set `manifest.json.admitted: true` only when every oracle passes with a
+   positive test count.
 
 Each SLIME row should look like this:
 
@@ -278,8 +303,13 @@ The reward flow:
 5. Reject forbidden paths before applying.
 6. Run `git apply --check` for the model patch.
 7. Apply the model patch.
-8. Run the repo harness tests.
-9. Return a strict correctness record.
+8. Run the repo harness tests in the task's digest-pinned official image.
+9. Execute `cd build && ctest --output-on-failure`; do not use the CMake
+   3.20-only `ctest --test-dir` flag.
+10. Parse the CTest total and reject zero/unreported tests even when exit code is
+    zero.
+11. Return a strict correctness record including image identity and collected
+    test count.
 
 The implementation can cache source checkouts under `.w8-biayn/cache/` or
 inside the run data directory, but it must keep cache keys explicit:
@@ -314,6 +344,7 @@ Use correctness-only scoring:
 | Forbidden file edit | `-1.0` | `invalid_files` |
 | Patch does not apply | `-0.75` | `patch_apply_error` |
 | Checkout, setup, or harness error | `-0.5` | `harness_error` |
+| CTest collected zero/no tests | `-0.5` | `no_tests_collected` |
 | Compile failure | `-0.5` | `compile_error` |
 | Test timeout | `-0.5` | `timeout` |
 | Tests run but fail | `0.0` | `tests_failed` |
@@ -342,30 +373,35 @@ timeout
 tests_failed
 tests_passed_count
 tests_failed_count
-wall_time_s
-logs_truncated
+tests_collected
+no_tests_collected
+sandbox_image
+sandbox_image_id
+logs_or_log_excerpt
 ```
 
 Include raw logs only when `W8_SLIME_MULTI_SWE_INCLUDE_LOGS=1`; otherwise keep
 short error excerpts to avoid huge JSONL records.
 
-## Oracle Calibration Gate
+## Blocking Oracle Admission Gate
 
-Before enabling full eval, prove the harness on every admitted C++ instance:
+`prepare_data.sh` must finish this gate before any base-model work:
 
-1. Base checkout plus `test_patch` should fail at least one expected test when
-   the dataset says it should.
-2. Base checkout plus `test_patch` plus `fix_patch` should pass the required
-   tests.
-3. A no-op model patch should not pass issue-fixing tests.
-4. An invalid patch should return `patch_apply_error`.
-5. A patch that edits tests should return `invalid_files`.
+1. Derive the official image tag from `org`, `repo`, and PR number. Repository
+   names are lowercased; Catch2 PR 1608 is
+   `mswebench/catchorg_m_catch2:pr-1608`.
+2. Pull the image (unless the operator explicitly requests a cache-only run),
+   inspect it, and record its digest/ID.
+3. Apply `test_patch`, then the dataset `fix_patch`.
+4. Run the repository harness and require return code zero plus
+   `tests_collected > 0`.
+5. Write task-level proof to `data/oracle.records.jsonl`, aggregate proof to
+   `data/oracle.summary.json`, and image proof to `data/sandbox-images.json`.
+6. Admit the schema-v2 manifest only if every selected task passes.
 
-Write a local calibration report under the run data or eval directory. Do not
-commit generated calibration output.
-
-If a repo has flaky or expensive tests, gate that repo behind an explicit
-allowlist entry in the harness registry and record the reason in the manifest.
+The base-eval entrypoint runs `verify-data` before checkpoint download and Ray.
+A missing, stale, failed, mismatched, or override-incompatible proof is fatal.
+Generated admission artifacts remain local and must not be committed.
 
 ## SLIME Runner Shape
 
@@ -412,8 +448,7 @@ uv run w8-biayn slime setup
 git lfs install
 git clone https://huggingface.co/datasets/ByteDance-Seed/Multi-SWE-bench_mini \
   .w8-biayn/data/multi-swe-bench-mini
-
-uv run python -m w8_biayn.integrations.slime_multi_swe_cpp sandbox-image
+git -C .w8-biayn/data/multi-swe-bench-mini lfs pull
 ```
 
 Inside the SLIME container:
@@ -425,15 +460,17 @@ export SLIME_RUN_ID="moonlight_multi_swe_cpp_$(date -u +%Y%m%d%H%M%S)"
 export SLIME_MULTI_SWE_SOURCE=/workspace/browser-is-all-you-need/.w8-biayn/data/multi-swe-bench-mini
 export SLIME_MULTI_SWE_EVAL_LIMIT=3
 export SLIME_EVAL_MAX_RESPONSE_LEN=16384
-export W8_SLIME_MULTI_SWE_SANDBOX_IMAGE=w8-biayn-multi-swe-cpp:latest
+unset W8_SLIME_MULTI_SWE_SANDBOX_IMAGE
 
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
 bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh
 ```
 
-Start with `SLIME_MULTI_SWE_EVAL_LIMIT=1` or `3`. Raise it only after the data
-manifest, calibration report, rollout dump, records JSONL, and summary JSON are
-clean.
+Start with `SLIME_MULTI_SWE_EVAL_LIMIT=1` or `3`. Raise it only after
+`manifest.json.admitted` and `oracle.summary.json.all_passed` are true and every
+oracle record reports a positive test count. The generic image can be selected
+with `W8_SLIME_MULTI_SWE_SANDBOX_IMAGE` only for an explicitly labeled debug
+run; the same override must be present during preparation and evaluation.
 
 ## Artifact Layout
 
@@ -443,10 +480,11 @@ Expected run layout:
 .w8-biayn/slime/moonlight-multi-swe-cpp/runs/${SLIME_RUN_ID}/
   data/
     manifest.json
+    oracle.records.jsonl
+    oracle.summary.json
+    sandbox-images.json
     eval/cpp.jsonl
     tasks/<instance_id>/task.json
-    calibration.records.jsonl
-    calibration.summary.json
   stages/base-eval/
     run.log
     run_receipt.txt
@@ -460,11 +498,11 @@ Expected run layout:
     base.summary.json
 ```
 
-`base.oracle.records.jsonl` and `base.summary.json.oracle_setup_check` are
-written by default during aggregation. They apply each task's grading-only
-`fix_patch` after the dataset `test_patch` and run the same repository harness
-used for model patches. This is the setup-side proof that the local checkout,
-Docker image, timeout, and harness can pass the known correct answer.
+`data/oracle.records.jsonl` and `data/oracle.summary.json` are written during
+blocking preparation. Aggregation copies that proof to
+`base.oracle.records.jsonl` and `base.summary.json.oracle_setup_check`. The
+proof establishes that the local checkout, task-specific immutable image,
+timeout, CTest discovery, and harness accept the dataset's known correct patch.
 
 `base.summary.json` should include:
 
@@ -475,6 +513,7 @@ Docker image, timeout, and harness can pass the known correct answer.
 - `invalid_files_rate`
 - `patch_apply_error_rate`
 - `harness_error_rate`
+- `no_tests_collected_rate`
 - `compile_error_rate`
 - `timeout_rate`
 - `tests_failed_rate`
@@ -502,7 +541,12 @@ Add focused unit tests before live GPU work:
 - Reward can be tested with a fake harness that returns pass, fail, compile
   error, timeout, and harness error.
 - Aggregation writes records and summary without PIE speed metrics.
-- Aggregation runs the default oracle setup check with a fake harness and writes
+- Official image selection lowercases Catch2 and uses the PR-specific tag.
+- Image preparation pulls/inspects each selected image and stamps immutable IDs.
+- Blocking preflight admits only all-passing `fix_patch` records.
+- All harnesses run CTest from `build/` for old-CMake compatibility.
+- Exit-zero `No tests were found!!!` is `no_tests_collected`, not a pass.
+- Aggregation copies the prepared oracle proof into
   `base.oracle.records.jsonl`.
 - Example scripts exist and pass `bash -n`.
 - Lane runner is base-eval only; no SFT or GRPO wrappers.
@@ -528,7 +572,8 @@ For a live smoke, use a tiny `SLIME_MULTI_SWE_EVAL_LIMIT` and inspect:
 
 ```text
 data/manifest.json
-data/calibration.summary.json
+data/oracle.summary.json
+data/sandbox-images.json
 rollout_dumps/base_eval_0.pt
 eval/base.records.jsonl
 eval/base.oracle.records.jsonl

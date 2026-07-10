@@ -24,7 +24,8 @@ DATA_SOURCE = "ByteDance-Seed/Multi-SWE-bench_mini"
 BENCHMARK = "multi-swe-bench-mini"
 LANGUAGE = "cpp"
 DATASET_KIND = "slime-multi-swe-cpp-dataset"
-SCHEMA_VERSION = 1
+SANDBOX_IMAGE_RECEIPT_KIND = "multi-swe-sandbox-images"
+SCHEMA_VERSION = 2
 DEFAULT_DATA_ROOT_ENV = "W8_BIAYN_DATA_DIR"
 SANDBOX_IMAGE_ENV = "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE"
 INCLUDE_LOGS_ENV = "W8_SLIME_MULTI_SWE_INCLUDE_LOGS"
@@ -34,11 +35,19 @@ ORACLE_SETUP_CHECK_ENV = "W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK"
 DEFAULT_MULTI_SWE_SANDBOX_IMAGE = "w8-biayn-multi-swe-cpp:latest"
 DEFAULT_TEST_TIMEOUT_SECONDS = 600
 DEFAULT_EVAL_LIMIT = 4
+OFFICIAL_SANDBOX_NAMESPACE = "mswebench"
+ORACLE_RECORDS_FILENAME = "oracle.records.jsonl"
+ORACLE_SUMMARY_FILENAME = "oracle.summary.json"
+SANDBOX_IMAGES_FILENAME = "sandbox-images.json"
 ALLOWED_DIFF_FENCE_LANGS = {"diff", "patch"}
 RECOVERABLE_DIFF_FENCE_LANGS = {"", "diff", "patch"}
 
 _DIFF_GIT_RE = re.compile(r"^diff --git\s+(.+?)\s+(.+?)$", re.MULTILINE)
 _DIFF_FILE_RE = re.compile(r"^(?:---|\+\+\+)\s+([^\t\n\r]+)", re.MULTILINE)
+_CTEST_TOTAL_RE = re.compile(
+    r"(?:Total Tests:\s*|tests failed out of\s+)(\d+)",
+    re.IGNORECASE,
+)
 _COMPILE_ERROR_NEEDLES = (
     "cmake error",
     "compiler error",
@@ -127,10 +136,20 @@ class MultiSweTestResult:
     timeout: bool = False
     harness_error: bool = False
     patch_apply_error: bool = False
+    no_tests_collected: bool = False
+    tests_collected: int | None = None
+    sandbox_image: str | None = None
+    sandbox_image_id: str | None = None
 
     @property
     def passed(self) -> bool:
-        return self.returncode == 0 and not self.timeout and not self.harness_error
+        return (
+            self.returncode == 0
+            and not self.timeout
+            and not self.harness_error
+            and not self.no_tests_collected
+            and bool(self.tests_collected)
+        )
 
 
 class MultiSweResponseError(ValueError):
@@ -150,7 +169,7 @@ REPO_HARNESSES: dict[tuple[str, str], MultiSweRepoHarness] = {
                 "cmake -S . -B build -DCATCH_BUILD_TESTING=ON "
                 "-DCATCH_BUILD_EXAMPLES=OFF && "
                 "cmake --build build --parallel 2 && "
-                "ctest --test-dir build --output-on-failure"
+                "cd build && ctest --output-on-failure"
             ),
         ),
         MultiSweRepoHarness(
@@ -160,7 +179,7 @@ REPO_HARNESSES: dict[tuple[str, str], MultiSweRepoHarness] = {
             test_command=(
                 "cmake -S . -B build -DFMT_TEST=ON -DFMT_DOC=OFF && "
                 "cmake --build build --parallel 2 && "
-                "ctest --test-dir build --output-on-failure"
+                "cd build && ctest --output-on-failure"
             ),
         ),
         MultiSweRepoHarness(
@@ -170,7 +189,7 @@ REPO_HARNESSES: dict[tuple[str, str], MultiSweRepoHarness] = {
             test_command=(
                 "cmake -S . -B build -DJSON_BuildTests=ON && "
                 "cmake --build build --parallel 2 && "
-                "ctest --test-dir build --output-on-failure"
+                "cd build && ctest --output-on-failure"
             ),
         ),
         MultiSweRepoHarness(
@@ -180,7 +199,7 @@ REPO_HARNESSES: dict[tuple[str, str], MultiSweRepoHarness] = {
             test_command=(
                 "cmake -S . -B build -DSIMDJSON_BUILD_TESTS=ON && "
                 "cmake --build build --parallel 2 && "
-                "ctest --test-dir build --output-on-failure"
+                "cd build && ctest --output-on-failure"
             ),
         ),
         MultiSweRepoHarness(
@@ -190,11 +209,25 @@ REPO_HARNESSES: dict[tuple[str, str], MultiSweRepoHarness] = {
             test_command=(
                 "cmake -S . -B build -DHTTPLIB_TEST=ON && "
                 "cmake --build build --parallel 2 && "
-                "ctest --test-dir build --output-on-failure"
+                "cd build && ctest --output-on-failure"
             ),
         ),
     )
 }
+
+
+def official_multi_swe_sandbox_image(org: object, repo: object, number: object) -> str:
+    """Return the official per-instance Multi-SWE image reference."""
+
+    normalized_org = str(org or "").strip()
+    normalized_repo = str(repo or "").strip()
+    normalized_number = str(number or "").strip()
+    if not normalized_org or not normalized_repo:
+        raise ValueError("Multi-SWE task is missing org/repo for sandbox image selection")
+    if not normalized_number.isdigit() or int(normalized_number) <= 0:
+        raise ValueError(f"Multi-SWE task has invalid pull-request number: {number!r}")
+    repository = f"{OFFICIAL_SANDBOX_NAMESPACE}/{normalized_org}_m_{normalized_repo}".lower()
+    return f"{repository}:pr-{int(normalized_number)}"
 
 
 def build_slime_multi_swe_cpp_dataset(
@@ -226,6 +259,7 @@ def build_slime_multi_swe_cpp_dataset(
 
     eval_rows = []
     task_paths = []
+    sandbox_images: set[str] = set()
     tasks_root = output / "tasks"
     for row in rows:
         harness = repo_harness_for_row(row)
@@ -234,7 +268,9 @@ def build_slime_multi_swe_cpp_dataset(
         instance_id = instance_id_for_row(row, harness=harness)
         task_path = tasks_root / safe_task_dir(instance_id) / "task.json"
         task_path.parent.mkdir(parents=True, exist_ok=True)
-        write_json(task_path, normalized_task(row, harness=harness, instance_id=instance_id))
+        task = normalized_task(row, harness=harness, instance_id=instance_id)
+        write_json(task_path, task)
+        sandbox_images.add(str(task["sandbox_image"]))
         task_rel = task_path.relative_to(output).as_posix()
         eval_rows.append(_eval_row(row, harness=harness, instance_id=instance_id, task_path=task_rel))
         task_paths.append(task_rel)
@@ -242,6 +278,9 @@ def build_slime_multi_swe_cpp_dataset(
     paths = {
         "eval": output / "eval" / "cpp.jsonl",
         "manifest": output / "manifest.json",
+        "oracle_records": output / ORACLE_RECORDS_FILENAME,
+        "oracle_summary": output / ORACLE_SUMMARY_FILENAME,
+        "sandbox_images": output / SANDBOX_IMAGES_FILENAME,
     }
     _write_jsonl(paths["eval"], eval_rows)
     write_json(
@@ -257,14 +296,30 @@ def build_slime_multi_swe_cpp_dataset(
             "source_root": str(source),
             "jsonl_path": str(data_path),
             "output_dir": str(output),
+            "admitted": False,
+            "sandbox_image_mode": "official-per-task",
+            "sandbox_images": sorted(sandbox_images),
             "allowed_repos": sorted(harness.repo_full_name for harness in REPO_HARNESSES.values()),
             "counts": {
                 "eval": len(eval_rows),
                 "task_json": len(task_paths),
+                "oracle_checked": 0,
+                "oracle_passed": 0,
             },
             "files": {
                 "eval": paths["eval"].relative_to(output).as_posix(),
                 "tasks": task_paths,
+                "oracle_records": paths["oracle_records"].relative_to(output).as_posix(),
+                "oracle_summary": paths["oracle_summary"].relative_to(output).as_posix(),
+                "sandbox_images": paths["sandbox_images"].relative_to(output).as_posix(),
+            },
+            "oracle_setup_check": {
+                "enabled": True,
+                "blocking": True,
+                "phase": "data_preflight",
+                "correct_answer_source": "fix_patch",
+                "all_passed": False,
+                "reason": "not_run",
             },
         },
     )
@@ -330,6 +385,9 @@ def normalized_task(
         "git_url": harness.git_url,
         "instance_id": instance_id,
         "number": row.get("number"),
+        "sandbox_image": official_multi_swe_sandbox_image(
+            harness.org, harness.repo, row.get("number")
+        ),
         "state": row.get("state"),
         "title": row.get("title"),
         "body": row.get("body"),
@@ -369,6 +427,314 @@ def base_ref_from_base(base: object) -> str | None:
     return None
 
 
+def load_prepared_multi_swe_tasks(
+    data_root: str | Path,
+) -> list[tuple[Path, dict[str, Any]]]:
+    root = Path(data_root)
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"missing Multi-SWE data manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("kind") != DATASET_KIND:
+        raise ValueError(f"unexpected Multi-SWE dataset kind in {manifest_path}")
+    files = manifest.get("files") if isinstance(manifest.get("files"), dict) else {}
+    task_paths = files.get("tasks")
+    if not isinstance(task_paths, list) or not task_paths:
+        raise ValueError(f"Multi-SWE manifest has no prepared tasks: {manifest_path}")
+
+    tasks: list[tuple[Path, dict[str, Any]]] = []
+    for relative_path in task_paths:
+        if not isinstance(relative_path, str):
+            raise ValueError(f"invalid Multi-SWE task path in {manifest_path}: {relative_path!r}")
+        task_path = root / relative_path
+        if not task_path.is_file():
+            raise ValueError(f"missing Multi-SWE task JSON: {task_path}")
+        task = json.loads(task_path.read_text(encoding="utf-8"))
+        if not isinstance(task, dict):
+            raise ValueError(f"invalid Multi-SWE task JSON: {task_path}")
+        tasks.append((task_path, task))
+    return tasks
+
+
+def sandbox_image_tag_for_task(task: dict[str, Any]) -> str:
+    override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
+    if override:
+        return override
+    value = task.get("sandbox_image")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    try:
+        return official_multi_swe_sandbox_image(
+            task.get("org"),
+            task.get("repo"),
+            task.get("number"),
+        )
+    except ValueError as exc:
+        raise MultiSweResponseError("sandbox_image_error", str(exc)) from exc
+
+
+def sandbox_image_reference_for_task(task: dict[str, Any]) -> str:
+    override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
+    if override:
+        return override
+    resolved = task.get("sandbox_image_digest")
+    if isinstance(resolved, str) and resolved.strip():
+        return resolved.strip()
+    return sandbox_image_tag_for_task(task)
+
+
+def selected_multi_swe_sandbox_images(data_root: str | Path) -> list[str]:
+    return sorted(
+        {
+            sandbox_image_tag_for_task(task)
+            for _task_path, task in load_prepared_multi_swe_tasks(data_root)
+        }
+    )
+
+
+def _pull_docker_image(image: str) -> None:
+    result = subprocess.run(
+        ["docker", "pull", image],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        details = _logs(result).strip()
+        raise RuntimeError(f"failed to pull Multi-SWE sandbox image {image}: {details}")
+
+
+def _inspect_docker_image(image: str) -> dict[str, Any]:
+    result = subprocess.run(
+        ["docker", "image", "inspect", image],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        details = _logs(result).strip()
+        raise RuntimeError(f"failed to inspect Multi-SWE sandbox image {image}: {details}")
+    try:
+        payload = json.loads(result.stdout)
+        inspected = payload[0]
+    except (IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid docker image inspection payload for {image}") from exc
+    if not isinstance(inspected, dict):
+        raise RuntimeError(f"invalid docker image inspection payload for {image}")
+
+    image_id = str(inspected.get("Id") or "").strip()
+    repo_digests = [
+        str(value)
+        for value in inspected.get("RepoDigests") or []
+        if isinstance(value, str) and value
+    ]
+    repository = image.rsplit(":", 1)[0]
+    resolved_image = next(
+        (digest for digest in repo_digests if digest.startswith(f"{repository}@")),
+        image_id or image,
+    )
+    return {
+        "image": image,
+        "resolved_image": resolved_image,
+        "image_id": image_id or None,
+        "repo_digests": sorted(repo_digests),
+    }
+
+
+def prepare_multi_swe_sandbox_images(
+    data_root: str | Path,
+    *,
+    pull: bool = True,
+) -> tuple[dict[str, Any], Path]:
+    """Pull selected task images, resolve immutable identities, and stamp tasks."""
+
+    root = Path(data_root)
+    prepared_tasks = load_prepared_multi_swe_tasks(root)
+    override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
+    selected_by_task = {
+        str(task.get("instance_id") or task_path.parent.name): sandbox_image_tag_for_task(task)
+        for task_path, task in prepared_tasks
+    }
+    image_details: dict[str, dict[str, Any]] = {}
+    for image in sorted(set(selected_by_task.values())):
+        if pull:
+            _pull_docker_image(image)
+        image_details[image] = _inspect_docker_image(image)
+
+    task_receipts: dict[str, dict[str, Any]] = {}
+    for task_path, task in prepared_tasks:
+        instance_id = str(task.get("instance_id") or task_path.parent.name)
+        selected_image = selected_by_task[instance_id]
+        details = image_details[selected_image]
+        task_receipts[instance_id] = {
+            "image": selected_image,
+            "resolved_image": details["resolved_image"],
+            "image_id": details["image_id"],
+            "source": "override" if override else "official-per-task",
+        }
+        if not override:
+            task["sandbox_image"] = selected_image
+            task["sandbox_image_digest"] = details["resolved_image"]
+            task["sandbox_image_id"] = details["image_id"]
+            write_json(task_path, task)
+
+    receipt = {
+        "kind": SANDBOX_IMAGE_RECEIPT_KIND,
+        "schema_version": 1,
+        "benchmark": BENCHMARK,
+        "mode": "override" if override else "official-per-task",
+        "override": override or None,
+        "pull_performed": pull,
+        "images": [image_details[image] for image in sorted(image_details)],
+        "tasks": task_receipts,
+    }
+    receipt_path = root / SANDBOX_IMAGES_FILENAME
+    write_json(receipt_path, receipt)
+    return receipt, receipt_path
+
+
+def oracle_setup_records_from_prepared_tasks(
+    data_root: str | Path,
+) -> list[dict[str, Any]]:
+    root = Path(data_root)
+    records = []
+    for task_path, task in load_prepared_multi_swe_tasks(root):
+        metadata = {
+            "task_id": task.get("instance_id"),
+            "problem_id": task.get("instance_id"),
+            "instance_id": task.get("instance_id"),
+            "org": task.get("org"),
+            "repo": task.get("repo"),
+            "repo_full_name": task.get("repo_full_name"),
+            "task_path": task_path.relative_to(root).as_posix(),
+            "task_root": str(root),
+        }
+        records.append(oracle_setup_record_from_metadata(metadata))
+    return records
+
+
+def run_multi_swe_oracle_preflight(
+    data_root: str | Path,
+    *,
+    pull_images: bool = True,
+) -> tuple[dict[str, Path], dict[str, Any]]:
+    """Resolve task images and block admission unless every fix patch passes."""
+
+    root = Path(data_root)
+    image_receipt, image_receipt_path = prepare_multi_swe_sandbox_images(
+        root,
+        pull=pull_images,
+    )
+    records = oracle_setup_records_from_prepared_tasks(root)
+    records_path = root / ORACLE_RECORDS_FILENAME
+    summary_path = root / ORACLE_SUMMARY_FILENAME
+    summary = aggregate_oracle_setup_records(
+        records,
+        records_file=records_path.name,
+    )
+    summary.update(
+        {
+            "summary_file": summary_path.name,
+            "sandbox_images_file": image_receipt_path.name,
+            "sandbox_image_mode": image_receipt["mode"],
+        }
+    )
+    _write_jsonl(records_path, records)
+    write_json(summary_path, summary)
+
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["admitted"] = summary["all_passed"]
+    manifest["sandbox_image_mode"] = image_receipt["mode"]
+    manifest["sandbox_images"] = [
+        str(item["image"]) for item in image_receipt["images"]
+    ]
+    counts = manifest.setdefault("counts", {})
+    counts["oracle_checked"] = summary["task_count"]
+    counts["oracle_passed"] = summary["passed_count"]
+    files = manifest.setdefault("files", {})
+    files["oracle_records"] = records_path.relative_to(root).as_posix()
+    files["oracle_summary"] = summary_path.relative_to(root).as_posix()
+    files["sandbox_images"] = image_receipt_path.relative_to(root).as_posix()
+    manifest["oracle_setup_check"] = summary
+    write_json(manifest_path, manifest)
+
+    paths = {
+        "manifest": manifest_path,
+        "oracle_records": records_path,
+        "oracle_summary": summary_path,
+        "sandbox_images": image_receipt_path,
+    }
+    return paths, summary
+
+
+def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
+    """Require admitted data, immutable task images, and a passing oracle proof."""
+
+    root = Path(data_root)
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"missing Multi-SWE data manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("kind") != DATASET_KIND:
+        raise ValueError(f"unexpected Multi-SWE dataset kind in {manifest_path}")
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"unsupported Multi-SWE dataset schema in {manifest_path}")
+    if manifest.get("admitted") is not True:
+        raise ValueError(f"Multi-SWE dataset has not passed blocking admission: {manifest_path}")
+
+    oracle_check = manifest.get("oracle_setup_check")
+    if not isinstance(oracle_check, dict) or oracle_check.get("all_passed") is not True:
+        raise ValueError(f"Multi-SWE dataset is missing a passing oracle proof: {manifest_path}")
+    if oracle_check.get("correct_answer_source") != "fix_patch":
+        raise ValueError(f"unexpected Multi-SWE correct-answer source in {manifest_path}")
+
+    files = manifest.get("files") if isinstance(manifest.get("files"), dict) else {}
+    for key in ("eval", "oracle_records", "oracle_summary", "sandbox_images"):
+        relative_path = files.get(key)
+        if not isinstance(relative_path, str) or not (root / relative_path).is_file():
+            raise ValueError(f"missing Multi-SWE dataset artifact {key!r} under {root}")
+
+    oracle_summary = json.loads((root / files["oracle_summary"]).read_text(encoding="utf-8"))
+    for key in ("all_passed", "task_count", "passed_count", "correct_answer_source"):
+        if oracle_summary.get(key) != oracle_check.get(key):
+            raise ValueError(f"Multi-SWE oracle summary mismatch for {key!r} in {manifest_path}")
+    oracle_records = _read_jsonl(root / files["oracle_records"])
+    if len(oracle_records) != oracle_check.get("task_count") or not all(
+        record.get("setup_valid") is True for record in oracle_records
+    ):
+        raise ValueError(f"Multi-SWE oracle records do not prove admission in {manifest_path}")
+
+    image_receipt = json.loads((root / files["sandbox_images"]).read_text(encoding="utf-8"))
+    if image_receipt.get("kind") != SANDBOX_IMAGE_RECEIPT_KIND:
+        raise ValueError(f"invalid Multi-SWE sandbox-image receipt under {root}")
+
+    tasks = load_prepared_multi_swe_tasks(root)
+    if oracle_check.get("task_count") != len(tasks):
+        raise ValueError(f"Multi-SWE oracle/task-count mismatch in {manifest_path}")
+    override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
+    if override:
+        if image_receipt.get("mode") != "override" or image_receipt.get("override") != override:
+            raise ValueError(f"Multi-SWE sandbox-image override does not match admission in {manifest_path}")
+    else:
+        if image_receipt.get("mode") != "official-per-task":
+            raise ValueError(f"Multi-SWE data was admitted with a debug image override: {manifest_path}")
+        for task_path, task in tasks:
+            expected_image = official_multi_swe_sandbox_image(
+                task.get("org"), task.get("repo"), task.get("number")
+            )
+            if task.get("schema_version") != SCHEMA_VERSION:
+                raise ValueError(f"unsupported Multi-SWE task schema in {task_path}")
+            if task.get("sandbox_image") != expected_image:
+                raise ValueError(f"unexpected Multi-SWE sandbox image in {task_path}")
+            resolved_image = task.get("sandbox_image_digest")
+            if not isinstance(resolved_image, str) or not (
+                "@sha256:" in resolved_image or resolved_image.startswith("sha256:")
+            ):
+                raise ValueError(f"missing immutable Multi-SWE sandbox image in {task_path}")
+    return dict(oracle_check)
+
+
 def _eval_row(
     row: dict[str, Any],
     *,
@@ -391,6 +757,9 @@ def _eval_row(
             "repo_full_name": harness.repo_full_name,
             "instance_id": instance_id,
             "number": row.get("number"),
+            "sandbox_image": official_multi_swe_sandbox_image(
+                harness.org, harness.repo, row.get("number")
+            ),
             "base_ref": base_ref_from_row(row),
             "task_path": task_path,
         },
@@ -728,7 +1097,12 @@ def run_multi_swe_tests(task: dict[str, Any], patch: str) -> MultiSweTestResult:
                 patch_apply_error=True,
             )
         remaining_timeout = max(30, int(timeout_s - (time.monotonic() - started)))
-        return run_repository_tests(repo_dir, harness, timeout_s=remaining_timeout)
+        return run_repository_tests(
+            repo_dir,
+            harness,
+            task=task,
+            timeout_s=remaining_timeout,
+        )
 
 
 def clone_repository(
@@ -785,10 +1159,12 @@ def run_repository_tests(
     repo_dir: str | Path,
     harness: MultiSweRepoHarness,
     *,
+    task: dict[str, Any],
     timeout_s: int | None = None,
 ) -> MultiSweTestResult:
     timeout = timeout_s or int(os.environ.get(TEST_TIMEOUT_ENV, str(DEFAULT_TEST_TIMEOUT_SECONDS)))
-    image = os.environ.get(SANDBOX_IMAGE_ENV, DEFAULT_MULTI_SWE_SANDBOX_IMAGE)
+    image = sandbox_image_reference_for_task(task)
+    image_id = str(task.get("sandbox_image_id") or "").strip() or None
     repo_path = Path(repo_dir).resolve()
     workdir = PurePosixPath("/work") / repo_path.name
     command = _multi_swe_docker_args(repo_path.parent, workdir=workdir.as_posix(), image=image) + [
@@ -800,9 +1176,47 @@ def run_repository_tests(
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout + 30, check=False)
     except subprocess.TimeoutExpired as exc:
         logs = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()
-        return MultiSweTestResult(returncode=None, logs=logs, timeout=True)
+        return MultiSweTestResult(
+            returncode=None,
+            logs=logs,
+            timeout=True,
+            sandbox_image=image,
+            sandbox_image_id=image_id,
+        )
     logs = "\n".join(part for part in (result.stdout, result.stderr) if part)
-    return MultiSweTestResult(returncode=result.returncode, logs=logs, timeout=result.returncode == 124)
+    tests_collected = _ctest_tests_collected(logs)
+    no_tests_collected = _ctest_collected_no_tests(
+        logs,
+        returncode=result.returncode,
+        tests_collected=tests_collected,
+    )
+    return MultiSweTestResult(
+        returncode=result.returncode,
+        logs=logs,
+        timeout=result.returncode == 124,
+        harness_error=no_tests_collected,
+        no_tests_collected=no_tests_collected,
+        tests_collected=tests_collected,
+        sandbox_image=image,
+        sandbox_image_id=image_id,
+    )
+
+
+def _ctest_tests_collected(logs: str) -> int | None:
+    matches = _CTEST_TOTAL_RE.findall(logs)
+    return int(matches[-1]) if matches else None
+
+
+def _ctest_collected_no_tests(
+    logs: str,
+    *,
+    returncode: int,
+    tests_collected: int | None,
+) -> bool:
+    lowered = logs.lower()
+    if "no tests were found" in lowered or tests_collected == 0:
+        return True
+    return returncode == 0 and tests_collected is None
 
 
 def _multi_swe_docker_args(
@@ -860,11 +1274,13 @@ def _record_from_test_result(
             task=task,
             score=1.0,
             reason="passed",
-            tests_passed_count=1,
+            tests_passed_count=result.tests_collected or 1,
             tests_failed_count=0,
         )
     elif result.patch_apply_error:
         record = _record(sample, metadata, task=task, score=-0.75, reason="patch_apply_error")
+    elif result.no_tests_collected:
+        record = _record(sample, metadata, task=task, score=-0.5, reason="no_tests_collected")
     elif result.harness_error:
         record = _record(sample, metadata, task=task, score=-0.5, reason="harness_error")
     elif result.timeout:
@@ -881,7 +1297,15 @@ def _record_from_test_result(
             tests_passed_count=0,
             tests_failed_count=1,
         )
-    record["patch_bytes"] = patch_bytes
+    record.update(
+        {
+            "patch_bytes": patch_bytes,
+            "tests_collected": result.tests_collected,
+            "no_tests_collected": result.no_tests_collected,
+            "sandbox_image": result.sandbox_image,
+            "sandbox_image_id": result.sandbox_image_id,
+        }
+    )
     if _include_logs() and result.logs:
         record["logs"] = result.logs
     elif result.logs:
@@ -893,11 +1317,13 @@ def _recovered_fields_from_test_result(result: MultiSweTestResult, *, patch_byte
     if result.passed:
         fields = {
             "recovered_reason": "passed",
-            "recovered_tests_passed_count": 1,
+            "recovered_tests_passed_count": result.tests_collected or 1,
             "recovered_tests_failed_count": 0,
         }
     elif result.patch_apply_error:
         fields = {"recovered_reason": "patch_apply_error"}
+    elif result.no_tests_collected:
+        fields = {"recovered_reason": "no_tests_collected"}
     elif result.harness_error:
         fields = {"recovered_reason": "harness_error"}
     elif result.timeout:
@@ -912,6 +1338,9 @@ def _recovered_fields_from_test_result(result: MultiSweTestResult, *, patch_byte
         }
     fields["recovered_all_tests_pass"] = fields.get("recovered_reason") == "passed"
     fields["recovered_patch_bytes"] = patch_bytes
+    fields["recovered_tests_collected"] = result.tests_collected
+    fields["recovered_no_tests_collected"] = result.no_tests_collected
+    fields["recovered_sandbox_image"] = result.sandbox_image
     if _include_logs() and result.logs:
         fields["recovered_logs"] = result.logs
     elif result.logs:
@@ -963,12 +1392,14 @@ def _record(
         "timeout": timeout,
         "tests_passed_count": tests_passed_count,
         "tests_failed_count": tests_failed_count,
+        "tests_collected": None,
+        "no_tests_collected": reason == "no_tests_collected",
         "all_tests_pass": tests_passed_count > 0 and tests_failed_count == 0,
         "format_valid": format_valid,
         "invalid_format": reason == "invalid_format",
         "invalid_files": reason == "invalid_files",
         "patch_apply_error": reason == "patch_apply_error",
-        "harness_error": reason == "harness_error",
+        "harness_error": reason in {"harness_error", "no_tests_collected"},
         "tests_failed": reason == "tests_failed",
         "patch_bytes": 0,
         "recovered_format": False,
@@ -977,6 +1408,8 @@ def _record(
         "recovered_timeout": False,
         "recovered_tests_passed_count": 0,
         "recovered_tests_failed_count": 0,
+        "recovered_tests_collected": None,
+        "recovered_no_tests_collected": False,
         "recovered_all_tests_pass": False,
         "recovered_patch_bytes": 0,
     }
@@ -1087,9 +1520,13 @@ def _oracle_setup_base_record(metadata: dict[str, Any]) -> dict[str, Any]:
         "returncode": None,
         "timeout": False,
         "harness_error": False,
+        "no_tests_collected": False,
+        "tests_collected": None,
         "patch_apply_error": False,
         "compile_error": False,
         "tests_failed": False,
+        "sandbox_image": metadata.get("sandbox_image"),
+        "sandbox_image_id": None,
         "fix_patch_bytes": 0,
     }
 
@@ -1103,6 +1540,9 @@ def _oracle_setup_task_fields(task: dict[str, Any]) -> dict[str, Any]:
         "org": task.get("org"),
         "repo": task.get("repo"),
         "repo_full_name": task.get("repo_full_name"),
+        "sandbox_image": task.get("sandbox_image"),
+        "sandbox_image_digest": task.get("sandbox_image_digest"),
+        "sandbox_image_id": task.get("sandbox_image_id"),
     }
 
 
@@ -1114,14 +1554,22 @@ def _oracle_setup_fields_from_test_result(result: MultiSweTestResult) -> dict[st
         "returncode": result.returncode,
         "timeout": result.timeout,
         "harness_error": result.harness_error,
+        "no_tests_collected": result.no_tests_collected,
+        "tests_collected": result.tests_collected,
         "patch_apply_error": result.patch_apply_error,
         "compile_error": False,
         "tests_failed": False,
     }
+    if result.sandbox_image:
+        fields["sandbox_image"] = result.sandbox_image
+    if result.sandbox_image_id:
+        fields["sandbox_image_id"] = result.sandbox_image_id
     if result.passed:
         fields["reason"] = "passed"
     elif result.patch_apply_error:
         fields["reason"] = "patch_apply_error"
+    elif result.no_tests_collected:
+        fields["reason"] = "no_tests_collected"
     elif result.harness_error:
         fields["reason"] = "harness_error"
     elif result.timeout:
@@ -1149,6 +1597,8 @@ def aggregate_oracle_setup_records(
     reason_counts = Counter(str(row.get("reason", "unknown")) for row in rows)
     return {
         "enabled": True,
+        "blocking": True,
+        "phase": "data_preflight",
         "correct_answer_source": "fix_patch",
         "records_file": records_file,
         "task_count": len(rows),
@@ -1199,7 +1649,11 @@ def score_debug_dump(
     paths = {"records": records_path, "summary": summary_path}
     should_run_oracle_check = _oracle_setup_check_enabled() if run_oracle_check is None else run_oracle_check
     if should_run_oracle_check:
-        oracle_records = oracle_setup_records_from_debug_samples(samples, data_root=data_root)
+        prepared_records_path = Path(data_root) / ORACLE_RECORDS_FILENAME if data_root else None
+        if prepared_records_path is not None and prepared_records_path.is_file():
+            oracle_records = _read_jsonl(prepared_records_path)
+        else:
+            oracle_records = oracle_setup_records_from_debug_samples(samples, data_root=data_root)
         oracle_records_path = output / f"{label}.oracle.records.jsonl"
         _write_jsonl(oracle_records_path, oracle_records)
         paths["oracle_records"] = oracle_records_path
@@ -1255,6 +1709,8 @@ def record_from_debug_sample(sample: dict[str, Any], *, label: str | None = None
     record.setdefault("invalid_files", record.get("reason") == "invalid_files")
     record.setdefault("patch_apply_error", record.get("reason") == "patch_apply_error")
     record.setdefault("harness_error", record.get("reason") == "harness_error")
+    record.setdefault("no_tests_collected", record.get("reason") == "no_tests_collected")
+    record.setdefault("tests_collected", None)
     record.setdefault("compile_error", False)
     record.setdefault("timeout", False)
     record.setdefault("tests_failed", record.get("reason") == "tests_failed")
@@ -1262,6 +1718,8 @@ def record_from_debug_sample(sample: dict[str, Any], *, label: str | None = None
     record.setdefault("recovered_reason", None)
     record.setdefault("recovered_compile_error", False)
     record.setdefault("recovered_timeout", False)
+    record.setdefault("recovered_no_tests_collected", False)
+    record.setdefault("recovered_tests_collected", None)
     record.setdefault("recovered_all_tests_pass", False)
     if label is not None:
         record["label"] = label
@@ -1296,6 +1754,7 @@ def aggregate_multi_swe_records(records: Iterable[dict[str, Any]], *, label: str
         "invalid_files_rate": _reason_rate(rows, "invalid_files"),
         "patch_apply_error_rate": _reason_rate(rows, "patch_apply_error"),
         "harness_error_rate": _reason_rate(rows, "harness_error"),
+        "no_tests_collected_rate": _reason_rate(rows, "no_tests_collected"),
         "compile_error_rate": _rate(rows, "compile_error"),
         "timeout_rate": _rate(rows, "timeout"),
         "tests_failed_rate": _reason_rate(rows, "tests_failed"),
@@ -1333,6 +1792,7 @@ def _repo_summary(rows: list[dict[str, Any]], best_rows: list[dict[str, Any]]) -
             "invalid_files_rate": _reason_rate(repo_samples, "invalid_files"),
             "patch_apply_error_rate": _reason_rate(repo_samples, "patch_apply_error"),
             "harness_error_rate": _reason_rate(repo_samples, "harness_error"),
+            "no_tests_collected_rate": _reason_rate(repo_samples, "no_tests_collected"),
             "compile_error_rate": _rate(repo_samples, "compile_error"),
             "timeout_rate": _rate(repo_samples, "timeout"),
             "tests_failed_rate": _reason_rate(repo_samples, "tests_failed"),
@@ -1376,6 +1836,22 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> Path:
         for row in rows:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
     return path
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows = []
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"{path}:{line_number}: expected JSON object")
+            rows.append(row)
+    return rows
 
 
 def multi_swe_sandbox_image_dockerfile() -> str:
@@ -1429,6 +1905,46 @@ def _build_data_command(args: argparse.Namespace) -> None:
     print(json.dumps({key: str(path) for key, path in paths.items()}, indent=2, sort_keys=True))
 
 
+def _preflight_command(args: argparse.Namespace) -> None:
+    if args.dry_run:
+        tasks = load_prepared_multi_swe_tasks(args.data_root)
+        print(
+            json.dumps(
+                {
+                    "data_root": str(Path(args.data_root).resolve()),
+                    "task_count": len(tasks),
+                    "sandbox_images": selected_multi_swe_sandbox_images(args.data_root),
+                    "pull_images": not args.no_pull,
+                    "correct_answer_source": "fix_patch",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    paths, summary = run_multi_swe_oracle_preflight(
+        args.data_root,
+        pull_images=not args.no_pull,
+    )
+    print(
+        json.dumps(
+            {
+                "paths": {key: str(path) for key, path in paths.items()},
+                "oracle_setup_check": summary,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    if not summary["all_passed"]:
+        raise SystemExit(2)
+
+
+def _verify_data_command(args: argparse.Namespace) -> None:
+    proof = verify_multi_swe_dataset(args.data_root)
+    print(json.dumps(proof, indent=2, sort_keys=True))
+
+
 def _aggregate_command(args: argparse.Namespace) -> None:
     _records, _summary, paths = score_debug_dump(
         label=args.label,
@@ -1466,6 +1982,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     build_data.add_argument("--force", action="store_true")
     build_data.set_defaults(func=_build_data_command)
 
+    preflight = subparsers.add_parser(
+        "preflight",
+        help="Pull per-task images and require every fix-patch oracle to pass",
+    )
+    preflight.add_argument("--data-root", required=True)
+    preflight.add_argument("--no-pull", action="store_true")
+    preflight.add_argument("--dry-run", action="store_true")
+    preflight.set_defaults(func=_preflight_command)
+
+    verify_data = subparsers.add_parser(
+        "verify-data",
+        help="Verify blocking Multi-SWE data admission before launching SLIME",
+    )
+    verify_data.add_argument("--data-root", required=True)
+    verify_data.set_defaults(func=_verify_data_command)
+
     aggregate = subparsers.add_parser("aggregate-debug", help="Aggregate SLIME debug rollout samples")
     aggregate.add_argument("--label", required=True, choices=("base",))
     aggregate.add_argument("--debug-rollout", required=True)
@@ -1474,7 +2006,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--skip-oracle-check", action="store_true")
     aggregate.set_defaults(func=_aggregate_command)
 
-    sandbox_image = subparsers.add_parser("sandbox-image", help="Build or render the Multi-SWE C++ sandbox image")
+    sandbox_image = subparsers.add_parser(
+        "sandbox-image",
+        help="Build the generic debugging image (official per-task images are the default)",
+    )
     sandbox_image.add_argument("--image", default=DEFAULT_MULTI_SWE_SANDBOX_IMAGE)
     sandbox_image.add_argument("--dry-run", action="store_true")
     sandbox_image.set_defaults(func=_sandbox_image_command)

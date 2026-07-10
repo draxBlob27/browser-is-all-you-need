@@ -77,7 +77,8 @@ RAY_MEMORY_USAGE_THRESHOLD="${SLIME_RAY_MEMORY_USAGE_THRESHOLD-0.999}"
 RAY_MEMORY_MONITOR_REFRESH_MS="${SLIME_RAY_MEMORY_MONITOR_REFRESH_MS:-}"
 COLOCATE="${SLIME_COLOCATE:-1}"
 OPTIMIZER_CPU_OFFLOAD="${SLIME_OPTIMIZER_CPU_OFFLOAD:-0}"
-MULTI_SWE_SANDBOX_IMAGE="${W8_SLIME_MULTI_SWE_SANDBOX_IMAGE:-w8-biayn-multi-swe-cpp:latest}"
+MULTI_SWE_SANDBOX_IMAGE_OVERRIDE="${W8_SLIME_MULTI_SWE_SANDBOX_IMAGE:-}"
+MULTI_SWE_PULL_IMAGES="${SLIME_MULTI_SWE_PULL_IMAGES:-1}"
 MULTI_SWE_TEST_TIMEOUT_SECONDS="${W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS:-600}"
 MULTI_SWE_ORACLE_SETUP_CHECK="${W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK:-1}"
 
@@ -143,10 +144,27 @@ prepare_data() {
     BUILD_DATA_ARGS+=(--eval-limit "${EVAL_LIMIT}")
   fi
   run_repo_python "${BUILD_DATA_ARGS[@]}"
+
+  PREFLIGHT_ARGS=(
+    -m w8_biayn.integrations.slime_multi_swe_cpp preflight
+    --data-root "${DATA_DIR}"
+  )
+  if [ "${MULTI_SWE_PULL_IMAGES}" != "1" ]; then
+    PREFLIGHT_ARGS+=(--no-pull)
+  fi
+  run_repo_python "${PREFLIGHT_ARGS[@]}"
 }
 
 ensure_data() {
-  if [ ! -f "${DATA_DIR}/manifest.json" ]; then
+  local required_artifact
+  local missing_data=0
+  for required_artifact in manifest.json oracle.records.jsonl oracle.summary.json sandbox-images.json; do
+    if [ ! -f "${DATA_DIR}/${required_artifact}" ]; then
+      missing_data=1
+      break
+    fi
+  done
+  if [ "${missing_data}" = "1" ]; then
     if [ "${SLIME_MULTI_SWE_AUTO_PREPARE_DATA:-1}" != "1" ]; then
       echo "Missing Multi-SWE data manifest: ${DATA_DIR}/manifest.json" >&2
       echo "Run: bash ${SCRIPT_DIR}/prepare_data.sh" >&2
@@ -154,6 +172,8 @@ ensure_data() {
     fi
     prepare_data
   fi
+  run_repo_python -m w8_biayn.integrations.slime_multi_swe_cpp verify-data \
+    --data-root "${DATA_DIR}"
 }
 
 hf_checkpoint_is_present() {
@@ -503,7 +523,6 @@ env = {
     "CUDA_DEVICE_MAX_CONNECTIONS": "1",
     "NCCL_NVLS_ENABLE": "${HAS_NVLINK}",
     "W8_BIAYN_DATA_DIR": "${DATA_DIR}",
-    "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE": os.environ.get("W8_SLIME_MULTI_SWE_SANDBOX_IMAGE", "${MULTI_SWE_SANDBOX_IMAGE}"),
     "W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS": os.environ.get("W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS", "${MULTI_SWE_TEST_TIMEOUT_SECONDS}"),
     "W8_SLIME_MULTI_SWE_INCLUDE_LOGS": os.environ.get("W8_SLIME_MULTI_SWE_INCLUDE_LOGS", "0"),
     "W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK": os.environ.get("W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK", "${MULTI_SWE_ORACLE_SETUP_CHECK}"),
@@ -512,6 +531,12 @@ env = {
     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "${SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK}",
     "NVSHMEM_DISABLE_NCCL": "${NVSHMEM_DISABLE_NCCL}",
 }
+sandbox_image_override = os.environ.get(
+    "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE",
+    "${MULTI_SWE_SANDBOX_IMAGE_OVERRIDE}",
+).strip()
+if sandbox_image_override:
+    env["W8_SLIME_MULTI_SWE_SANDBOX_IMAGE"] = sandbox_image_override
 attention_backend = "${ATTENTION_BACKEND}".strip().lower()
 nvte_flags_by_backend = {
     "flash": {"NVTE_FLASH_ATTN": "1", "NVTE_FUSED_ATTN": "0", "NVTE_UNFUSED_ATTN": "0"},
@@ -587,7 +612,11 @@ sglang_enable_tp_memory_inbalance_check=${SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHEC
 eval_max_response_len=${EVAL_MAX_RESPONSE_LEN}
 eval_temperature=${EVAL_TEMPERATURE}
 eval_top_p=${EVAL_TOP_P}
-multi_swe_sandbox_image=${MULTI_SWE_SANDBOX_IMAGE}
+multi_swe_sandbox_image_mode=$([ -n "${MULTI_SWE_SANDBOX_IMAGE_OVERRIDE}" ] && echo debug-override || echo official-per-task)
+multi_swe_sandbox_image_override=${MULTI_SWE_SANDBOX_IMAGE_OVERRIDE}
+multi_swe_sandbox_images_file=${DATA_DIR}/sandbox-images.json
+multi_swe_oracle_preflight_summary=${DATA_DIR}/oracle.summary.json
+multi_swe_pull_images=${MULTI_SWE_PULL_IMAGES}
 multi_swe_test_timeout_seconds=${MULTI_SWE_TEST_TIMEOUT_SECONDS}
 multi_swe_oracle_setup_check=${MULTI_SWE_ORACLE_SETUP_CHECK}
 wandb_project=${SLIME_WANDB_PROJECT:-slime-moonlight-multi-swe-cpp}

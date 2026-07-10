@@ -81,9 +81,12 @@ The Moonlight Multi-SWE C++ lane is an optional rollout-only base-eval
 benchmark for the C++ subset of `ByteDance-Seed/Multi-SWE-bench_mini`. It uses
 `src/w8_biayn/integrations/slime_multi_swe_cpp.py` for single-patch prompts,
 forbidden-path preflight, dataset `test_patch` application, and
-repo-specific C++ tests in Docker. It is not part of the PIE training proof,
-does not report speed metrics, and is not an official Multi-SWE leaderboard
-run; keep detailed setup and artifact semantics in
+repo-specific C++ tests in Docker. Data preparation is blocking: it selects
+the official lowercase per-instance `mswebench` image, pins its immutable
+identity, runs every dataset `fix_patch`, and requires CTest to report a
+positive test count before admitting the manifest. It is not part of the PIE
+training proof, does not report speed metrics, and is not an official Multi-SWE
+leaderboard run; keep detailed setup and artifact semantics in
 `examples/slime/moonlight_multi_swe_cpp/README.md`.
 
 The GLM agentic SWE-agent lane grades the final edited FILE instead of model
@@ -380,7 +383,7 @@ live in `examples/slime/moonlight_multi_swe_cpp/README.md`. Quick smoke:
 git lfs install
 git clone https://huggingface.co/datasets/ByteDance-Seed/Multi-SWE-bench_mini \
   .w8-biayn/data/multi-swe-bench-mini
-uv run python -m w8_biayn.integrations.slime_multi_swe_cpp sandbox-image
+git -C .w8-biayn/data/multi-swe-bench-mini lfs pull
 ```
 
 Inside the SLIME container:
@@ -390,20 +393,23 @@ export SLIME_RUN_ID="moonlight_multi_swe_cpp_$(date -u +%Y%m%d%H%M%S)"
 export SLIME_MULTI_SWE_SOURCE=/workspace/browser-is-all-you-need/.w8-biayn/data/multi-swe-bench-mini
 export SLIME_MULTI_SWE_EVAL_LIMIT=3
 export SLIME_EVAL_MAX_RESPONSE_LEN=16384
+unset W8_SLIME_MULTI_SWE_SANDBOX_IMAGE  # use official per-task images
 
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
 bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh
 ```
 
 Artifacts are written under
-`.w8-biayn/slime/moonlight-multi-swe-cpp/runs/${SLIME_RUN_ID}/`, including
-`eval/base.records.jsonl`, `eval/base.oracle.records.jsonl`,
-`eval/base.summary.json`, and `stages/base-eval/run_receipt.txt`. The summary
-includes strict pass/fail rates, repo-level breakdowns, patch/harness failure
-rates, `recovered_*` diagnostics for format-teachable failures, and the default
-`oracle_setup_check` showing whether each task's dataset `fix_patch` passes
-through the same local harness. It deliberately omits PIE speed metrics such as
-`correct_and_faster_rate`.
+`.w8-biayn/slime/moonlight-multi-swe-cpp/runs/${SLIME_RUN_ID}/`. Blocking data
+admission is recorded in `data/oracle.records.jsonl`,
+`data/oracle.summary.json`, `data/sandbox-images.json`, and
+`data/manifest.json`; the latter must say `admitted: true` before evaluation.
+Eval artifacts include `eval/base.records.jsonl`,
+`eval/base.oracle.records.jsonl`, `eval/base.summary.json`, and
+`stages/base-eval/run_receipt.txt`. The summary includes strict pass/fail rates,
+repo-level breakdowns, patch/harness and `no_tests_collected` rates,
+`recovered_*` diagnostics, and the copied `oracle_setup_check`. It deliberately
+omits PIE speed metrics such as `correct_and_faster_rate`.
 
 For the lighter Moonlight MoE smoke, use:
 
