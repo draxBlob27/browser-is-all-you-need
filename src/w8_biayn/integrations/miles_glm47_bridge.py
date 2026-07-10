@@ -11,6 +11,7 @@ _LORA_SYNC_PATCHED = False
 _SGLANG_MEM_POOL_PATCHED = False
 _ROUTER_CB_PATCHED = False
 _WARM_START_OPT_PATCHED = False
+_LORA_TMS_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
@@ -37,6 +38,7 @@ def register_glm47_bridge() -> None:
     _patch_sglang_lora_mem_pool_ordering()
     _patch_router_circuit_breaker()
     _patch_warm_start_optimizer_reload()
+    _patch_colocate_lora_tms_regions()
     _when_imported("megatron.bridge", lambda module: _register_glm47_bridge_class())
 
 
@@ -323,6 +325,87 @@ def _apply_warm_start_optimizer_reload(module) -> None:
 
     module.load_lora_adapter = load_lora_adapter
     module._w8_opt_reload_patched = True
+
+
+def _patch_colocate_lora_tms_regions() -> None:
+    """Make Miles' resident LoRA DDP buffers compatible with TMS post1.
+
+    ``torch-memory-saver==0.0.9.post1`` rejects nested ``region()`` calls.
+    Miles' colocated LoRA patch asks Megatron to create nested ``param_buffer``
+    and ``grad_buffer`` regions while model construction is already inside the
+    default region. Intercept that patch and allocate the small adapter-only DDP
+    buffers with TMS tracking temporarily disabled instead.
+    """
+
+    global _LORA_TMS_PATCHED
+    if _LORA_TMS_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_LORA_TMS_PATCH", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    _LORA_TMS_PATCHED = True
+    _when_imported(
+        "miles.backends.megatron_utils.bridge_lora_helpers",
+        _apply_colocate_lora_tms_region_patch,
+    )
+
+
+def _apply_colocate_lora_tms_region_patch(module) -> None:
+    import importlib
+
+    original_patch = getattr(module, "patch_param_grad_buffer_for_colocate_mode_lora", None)
+    if original_patch is None or getattr(module, "_w8_tms_region_patched", False):
+        return
+
+    def patch_param_grad_buffer_for_colocate_mode_lora() -> None:
+        lora_utils = importlib.import_module("miles.backends.megatron_utils.lora_utils")
+        if getattr(lora_utils, "_param_grad_buffer_patched", False):
+            return
+
+        param_buffer_module = importlib.import_module(
+            "megatron.core.distributed.param_and_grad_buffer"
+        )
+        buffer_cls = param_buffer_module._ParamAndGradBuffer
+        original_init = buffer_cls.__init__
+
+        def __init__(self, *args, **kwargs):
+            # Null out Megatron's nested region contexts. The surrounding model
+            # build remains in TMS' default region, so also suspend tracking for
+            # the duration of this adapter-buffer allocation.
+            kwargs["disable_param_buffers_cpu_backup"] = False
+            kwargs["disable_grad_buffers_cpu_backup"] = False
+
+            tms_module = importlib.import_module("torch_memory_saver")
+            memory_saver = tms_module.torch_memory_saver
+            impl = getattr(memory_saver, "_impl", None)
+            cdll = getattr(getattr(impl, "_binary_wrapper", None), "cdll", None)
+            was_interesting = bool(cdll and cdll.tms_get_interesting_region())
+            if was_interesting:
+                cdll.tms_set_interesting_region(False)
+            try:
+                original_init(self, *args, **kwargs)
+            finally:
+                if was_interesting:
+                    cdll.tms_set_interesting_region(True)
+
+        buffer_cls.__init__ = __init__
+        lora_utils._param_grad_buffer_patched = True
+        lora_utils.patch_param_grad_buffer_for_colocate_mode_lora = (
+            patch_param_grad_buffer_for_colocate_mode_lora
+        )
+        print(
+            "w8 GLM47 colocate: resident LoRA DDP buffers use non-nested TMS allocation",
+            flush=True,
+        )
+
+    module.patch_param_grad_buffer_for_colocate_mode_lora = (
+        patch_param_grad_buffer_for_colocate_mode_lora
+    )
+    module._w8_tms_region_patched = True
 
 
 def _dump_sync_forensics(updater, hf_named_tensors, out_dir) -> None:

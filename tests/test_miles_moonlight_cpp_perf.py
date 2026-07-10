@@ -486,6 +486,7 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
     monkeypatch.setattr(miles_glm47_bridge, "_SGLANG_MEM_POOL_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_ROUTER_CB_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_WARM_START_OPT_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_LORA_TMS_PATCHED", False)
     before_meta_path = list(sys.meta_path)
     sys.meta_path.insert(0, recorder)
     try:
@@ -494,9 +495,10 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
         added = [f for f in sys.meta_path if f is not recorder and f not in before_meta_path]
         # one lazy hook per patch target: mbridge.core.bridge, miles_plugins.mbridge,
         # megatron.bridge.peft.utils, miles update_weight module, sglang mem_pool,
-        # miles router_manager, miles lora_utils (optimizer reload), and
+        # miles router_manager, miles lora_utils (optimizer reload), Miles'
+        # bridge_lora_helpers (non-nested TMS allocation), and
         # megatron.bridge for the bridge-class registration
-        assert len(added) == 8
+        assert len(added) == 9
     finally:
         sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
         sys.meta_path.remove(recorder)
@@ -802,3 +804,66 @@ def test_warm_start_reloads_optimizer_master_params() -> None:
     miles_glm47_bridge._apply_warm_start_optimizer_reload(fake_module2)
     fake_module2.load_lora_adapter([], "/x", optimizer=FakeOptimizer())
     assert calls == ["reloaded"]
+
+
+def test_colocate_lora_buffers_suspend_outer_tms_region(monkeypatch) -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    transitions: list[bool] = []
+    observations: list[tuple[bool, bool, bool]] = []
+
+    class FakeCDLL:
+        interesting = True
+
+        def tms_get_interesting_region(self):
+            return self.interesting
+
+        def tms_set_interesting_region(self, enabled):
+            self.interesting = bool(enabled)
+            transitions.append(self.interesting)
+
+    cdll = FakeCDLL()
+    memory_saver = types.SimpleNamespace(
+        _impl=types.SimpleNamespace(_binary_wrapper=types.SimpleNamespace(cdll=cdll))
+    )
+    tms_module = types.ModuleType("torch_memory_saver")
+    tms_module.torch_memory_saver = memory_saver
+
+    class FakeBuffer:
+        def __init__(self, *args, **kwargs):
+            observations.append(
+                (
+                    cdll.interesting,
+                    kwargs["disable_param_buffers_cpu_backup"],
+                    kwargs["disable_grad_buffers_cpu_backup"],
+                )
+            )
+
+    param_module = types.ModuleType("megatron.core.distributed.param_and_grad_buffer")
+    param_module._ParamAndGradBuffer = FakeBuffer
+    lora_utils = types.ModuleType("miles.backends.megatron_utils.lora_utils")
+    lora_utils._param_grad_buffer_patched = False
+    bridge_helpers = types.SimpleNamespace(
+        patch_param_grad_buffer_for_colocate_mode_lora=lambda: None
+    )
+
+    monkeypatch.setitem(sys.modules, "torch_memory_saver", tms_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "megatron.core.distributed.param_and_grad_buffer",
+        param_module,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "miles.backends.megatron_utils.lora_utils",
+        lora_utils,
+    )
+
+    miles_glm47_bridge._apply_colocate_lora_tms_region_patch(bridge_helpers)
+    bridge_helpers.patch_param_grad_buffer_for_colocate_mode_lora()
+    FakeBuffer()
+
+    assert observations == [(False, False, False)]
+    assert transitions == [False, True]
+    assert cdll.interesting is True
+    assert lora_utils._param_grad_buffer_patched is True
