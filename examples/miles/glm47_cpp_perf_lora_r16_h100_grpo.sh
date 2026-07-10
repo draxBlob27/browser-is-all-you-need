@@ -20,12 +20,13 @@ export MILES_CONTEXT_PARALLEL_SIZE="${MILES_CONTEXT_PARALLEL_SIZE:-1}"
 export MILES_EXPERT_MODEL_PARALLEL_SIZE="${MILES_EXPERT_MODEL_PARALLEL_SIZE:-8}"
 export MILES_EXPERT_TENSOR_PARALLEL_SIZE="${MILES_EXPERT_TENSOR_PARALLEL_SIZE:-1}"
 export MILES_SEQ_LENGTH="${MILES_SEQ_LENGTH:-4096}"
-# 24576 matched the validated 4x A100 packing; H100 80GB takes it with room to
-# spare once recompute drops to selective (attention-only, few percent tax vs
-# ~30% for full).
-export MILES_MAX_TOKENS_PER_GPU="${MILES_MAX_TOKENS_PER_GPU:-24576}"
+# Use the measured H100 packing boundary; the real colocated GRPO gate below
+# must still pass because the paused SGLang engine retains a small CUDA floor.
+export MILES_MAX_TOKENS_PER_GPU="${MILES_MAX_TOKENS_PER_GPU:-16384}"
 export MILES_MICRO_BATCH_SIZE="${MILES_MICRO_BATCH_SIZE:-1}"
 export MILES_RECOMPUTE_GRANULARITY="${MILES_RECOMPUTE_GRANULARITY:-selective}"
+export MILES_USE_DYNAMIC_BATCH_SIZE="${MILES_USE_DYNAMIC_BATCH_SIZE:-1}"
+export MILES_BALANCE_DATA="${MILES_BALANCE_DATA:-1}"
 
 export MILES_MOE_TOKEN_DISPATCHER_TYPE="${MILES_MOE_TOKEN_DISPATCHER_TYPE:-flex}"
 export MILES_MOE_ENABLE_DEEPEP="${MILES_MOE_ENABLE_DEEPEP:-1}"

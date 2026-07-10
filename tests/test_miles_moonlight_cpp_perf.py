@@ -138,8 +138,10 @@ def test_miles_glm47_h100_wrappers_select_fast_8x_h100_defaults() -> None:
         assert 'MILES_EXPERT_MODEL_PARALLEL_SIZE="${MILES_EXPERT_MODEL_PARALLEL_SIZE:-8}"' in text
         assert 'MILES_EXPERT_TENSOR_PARALLEL_SIZE="${MILES_EXPERT_TENSOR_PARALLEL_SIZE:-1}"' in text
         assert 'MILES_SEQ_LENGTH="${MILES_SEQ_LENGTH:-4096}"' in text
-        assert 'MILES_MAX_TOKENS_PER_GPU="${MILES_MAX_TOKENS_PER_GPU:-24576}"' in text
+        assert 'MILES_MAX_TOKENS_PER_GPU="${MILES_MAX_TOKENS_PER_GPU:-16384}"' in text
         assert 'MILES_RECOMPUTE_GRANULARITY="${MILES_RECOMPUTE_GRANULARITY:-selective}"' in text
+        assert 'MILES_USE_DYNAMIC_BATCH_SIZE="${MILES_USE_DYNAMIC_BATCH_SIZE:-1}"' in text
+        assert 'MILES_BALANCE_DATA="${MILES_BALANCE_DATA:-1}"' in text
         assert 'MILES_MOE_TOKEN_DISPATCHER_TYPE="${MILES_MOE_TOKEN_DISPATCHER_TYPE:-flex}"' in text
         assert 'MILES_MOE_ENABLE_DEEPEP="${MILES_MOE_ENABLE_DEEPEP:-1}"' in text
         assert 'NVSHMEM_DISABLE_NCCL="${NVSHMEM_DISABLE_NCCL:-1}"' in text
@@ -615,6 +617,7 @@ def test_miles_runners_expose_h100_throughput_knobs() -> None:
         assert 'SGLANG_ARGS+=(--sglang-disable-custom-all-reduce)' in text
         assert "moe_enable_deepep=${MOE_ENABLE_DEEPEP}" in text
         assert "sglang_speculative=${SGLANG_SPECULATIVE}" in text
+        assert "utilization.memory,power.draw" in text
 
     grpo_text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert '\\"NVSHMEM_DISABLE_NCCL\\": \\"${NVSHMEM_DISABLE_NCCL:-}\\"' in grpo_text

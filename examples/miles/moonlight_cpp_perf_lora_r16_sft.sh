@@ -179,9 +179,9 @@ if [ ! -f "${DATA_DIR}/sft/train.jsonl" ]; then
 fi
 
 monitor_vram() {
-  echo "timestamp,index,memory.used,memory.total,utilization.gpu" > "${VRAM_LOG}"
+  echo "timestamp,index,memory.used,memory.total,utilization.gpu,utilization.memory,power.draw" > "${VRAM_LOG}"
   while true; do
-    nvidia-smi --query-gpu=timestamp,index,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits >> "${VRAM_LOG}" || true
+    nvidia-smi --query-gpu=timestamp,index,memory.used,memory.total,utilization.gpu,utilization.memory,power.draw --format=csv,noheader,nounits >> "${VRAM_LOG}" || true
     sleep 2
   done
 }

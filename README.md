@@ -35,10 +35,11 @@ The fastest single-node GLM-4.7-Flash Miles path is explicit rather than hidden
 behind generic Moonlight defaults:
 
 - checkpoint layout: TP4 / PP1 / EP8 / ETP1
-- training node: 8x H100, 4096 sequence length, 24576 max tokens per GPU,
-  selective (attention-only) activation recompute via
+- training node: 8x H100, 4096 sequence length, 16384 max tokens per GPU,
+  dynamic batching plus cross-rank token balancing, and selective
+  (attention-only) activation recompute via
   `MILES_RECOMPUTE_GRANULARITY=selective` (`full` remains the default for
-  memory-tight A100 nodes; `none` is fastest when activations fit)
+  memory-tight generic runners)
 - MoE dispatch: Hopper `flex` with DeepEP enabled
 - serving: SGLang DP attention, DP LM head, mem fraction 0.75, 64-way CUDA
   graph capture, 256 max running requests, custom allreduce on (NVLink);
@@ -51,6 +52,14 @@ behind generic Moonlight defaults:
   `${DATA_DIR}/eval/validation_mini126.jsonl` (the stratified 1/10 subset from
   `scripts/build_eval_subset.py`) when present; the full validation set stays
   a standalone gate
+
+The default is measured on a dedicated NVLink 8x H100 80 GB Lium node, not
+inferred from free memory. On the fixed longest-128 SFT slice, the selected
+TP4/PP1/EP8 profile completed all four steps with finite loss, averaged 14.88 s
+steady actor time, and peaked at 72,397 MiB/GPU. `recompute=none` at the safer
+12,288-token cap was slower (17.90 s steady actor time). SFT keeps one optimizer
+step per rollout because multi-step rollouts currently misnumber resumable Miles
+checkpoints; see [issue #25](https://github.com/tokenbender/browser-is-all-you-need/issues/25).
 
 Build the matching Megatron checkpoint once inside the Miles runtime container:
 
