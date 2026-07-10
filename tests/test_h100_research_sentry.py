@@ -35,6 +35,7 @@ from w8_biayn.integrations.h100_research_sentry import (
     signature_domain_for_kind,
     verify_consume_and_execute,
     verify_signed_decision,
+    _validate_contract,
     _validate_runner_evidence_manifest,
     _telemetry_evidence,
 )
@@ -795,6 +796,33 @@ def _write_telemetry(stage: Path) -> None:
     for timestamp in ("2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z"):
         rows.extend(f"{timestamp},{index},1410,500,700,65,0x0000000000000000" for index in range(8))
     (stage / "gpu_telemetry.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("provider_terminal_reconciliation_lease_schema", "wrong-schema"),
+        ("initial_terminal_reservation_binds_full_pre_snapshot", False),
+        ("terminal_reconciliation_ownership", "none"),
+        ("cleanup_retry_requires_consumed_claim_within_permit", False),
+    ],
+)
+def test_contract_pins_initial_reservation_crash_recovery(
+    tmp_path: Path,
+    field: str,
+    invalid: Any,
+) -> None:
+    source = Path(__file__).parents[1] / "examples/miles/h100_fastest_acceptance.json"
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    valid_path = _json(tmp_path / "valid-contract.json", payload)
+    assert _validate_contract(valid_path, SentryPolicy())["passed"] is True
+
+    payload["authorization"][field] = invalid
+    invalid_path = _json(tmp_path / "invalid-contract.json", payload)
+    result = _validate_contract(invalid_path, SentryPolicy())
+
+    assert result["passed"] is False
+    assert "contract_provider_terminal_control_mismatch" in result["reasons"]
 
 
 def test_telemetry_rejects_an_underpowered_h100_run(tmp_path: Path) -> None:

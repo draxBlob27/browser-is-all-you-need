@@ -6,8 +6,10 @@ import json
 import os
 import pwd
 import secrets
+import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -129,7 +131,7 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "        record = {'schema':'lium-h100-allocation-reconciliation/v1',"
         "'status':status,'mode':mode,'allocation_name':name,"
         "'preexisting_exact_name_ids':ids}\n"
-        "        print(json.dumps(record, separators=(',', ':')), flush=True)\n"
+        "        print(json.dumps(record), flush=True)\n"
         "        raise SystemExit(0 if not ids else 4)\n"
         "    once_file = os.environ.get('FAKE_RECONCILIATION_FAILURE_ONCE_FILE')\n"
         "    if once_file and not os.path.exists(once_file):\n"
@@ -361,9 +363,16 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
     env["PYTHONPATH"] = str(ROOT / "src")
     driver = tmp_path / "wrapper-driver.py"
     driver.write_text(
-        "import sys\nfrom pathlib import Path\n"
+        "import os, sys\nfrom pathlib import Path\n"
         "import w8_biayn.integrations.h100_signed_approval as module\n"
         "module.GATE0_CONSUMPTION_ROOT = Path(sys.argv[1])\n"
+        "if os.environ.get('FAKE_FAIL_INITIAL_TERMINAL_REPLACE') == '1':\n"
+        "    original_replace = module._replace_reserved_terminal_reconciliation_receipt\n"
+        "    def fail_initial(path, receipt):\n"
+        "        if '.terminal-reconciliation.retry-' not in path.name:\n"
+        "            raise module.PermitVerificationError('simulated initial terminal replace failure')\n"
+        "        return original_replace(path, receipt)\n"
+        "    module._replace_reserved_terminal_reconciliation_receipt = fail_initial\n"
         "raise SystemExit(module.wrapper_main(sys.argv[2:]))\n",
         encoding="utf-8",
     )
@@ -543,6 +552,79 @@ def _seed_cleanup_unconfirmed_chain(harness: dict[str, Any]) -> tuple[Path, Path
         encoding="utf-8",
     )
     return claim_path, terminal_path
+
+
+def _initial_clear_pre_snapshot(harness: dict[str, Any]) -> dict[str, Any]:
+    record = {
+        "schema": signed_approval.PROVIDER_RECONCILIATION_SCHEMA,
+        "status": "SNAPSHOT_CLEAR",
+        "mode": "snapshot",
+        "allocation_name": harness["payload"]["allocation_name"],
+        "preexisting_exact_name_ids": [],
+    }
+    output = json.dumps(record).encode("utf-8") + b"\n"
+    return {
+        "exit_code": 0,
+        "timed_out": False,
+        "output_sha256": hashlib.sha256(output).hexdigest(),
+        "output_size_bytes": len(output),
+        "record": record,
+    }
+
+
+def _seed_initial_terminal_reservation(
+    harness: dict[str, Any],
+) -> tuple[Path, Path, dict[str, Any]]:
+    permit_sha256 = hashlib.sha256(harness["permit"].read_bytes()).hexdigest()
+    claim_material = canonical_json_bytes(
+        {
+            "nonce": harness["payload"]["nonce"],
+            "request_id": harness["payload"]["request_id"],
+        }
+    )
+    claim_id = hashlib.sha256(claim_material).hexdigest()
+    harness["ledger"].mkdir(mode=0o700, exist_ok=True)
+    harness["ledger"].chmod(0o700)
+    claim_path = harness["ledger"] / f"{claim_id}.consumed.json"
+    claim_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "key_id": harness["key_id"],
+                "nonce": harness["payload"]["nonce"],
+                "permit_sha256": permit_sha256,
+                "request_id": harness["payload"]["request_id"],
+                "consumed_at": harness["payload"]["issued_at"],
+            }
+        )
+        + b"\n"
+    )
+    pre_snapshot = _initial_clear_pre_snapshot(harness)
+    terminal_path = harness["ledger"] / f"{claim_id}.terminal-reconciliation.json"
+    terminal_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema": signed_approval.TERMINAL_RECONCILIATION_RECEIPT_SCHEMA,
+                "status": "RESERVED",
+                "permit": {
+                    "sha256": permit_sha256,
+                    "key_id": harness["key_id"],
+                    "request_id": harness["payload"]["request_id"],
+                    "nonce": harness["payload"]["nonce"],
+                },
+                "claim": {"path": str(claim_path.resolve())},
+                "allocation": {
+                    "name": harness["payload"]["allocation_name"],
+                    "preexisting_exact_name_ids": [],
+                },
+                "pre_snapshot": {
+                    "sha256": hashlib.sha256(canonical_json_bytes(pre_snapshot)).hexdigest(),
+                    "evidence": pre_snapshot,
+                },
+            }
+        )
+        + b"\n"
+    )
+    return claim_path, terminal_path, pre_snapshot
 
 
 def test_production_verifier_accepts_canonical_ed25519_permit(tmp_path: Path) -> None:
@@ -1262,6 +1344,280 @@ def test_expired_permit_cannot_launch_but_can_retry_bound_cleanup(tmp_path: Path
     assert json.loads(retry_receipts[0].read_text(encoding="utf-8"))["status"] == (
         "RETRY_RECONCILED"
     )
+
+
+def test_exact_initial_terminal_reservation_after_claim_is_cleanup_authority(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    _, terminal_path, pre_snapshot = _seed_initial_terminal_reservation(harness)
+    original_terminal = terminal_path.read_bytes()
+
+    cleanup = _run_wrapper(harness, retry_terminal_reconciliation=True)
+    retry_path = terminal_path.with_name(
+        f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+    )
+    retry = json.loads(retry_path.read_text(encoding="utf-8"))
+
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert terminal_path.read_bytes() == original_terminal
+    assert retry["status"] == "RETRY_RECONCILED"
+    assert retry["cleanup_status"] == "CONFIRMED_ABSENT"
+    assert retry["reconciliation"]["record"]["status"] == "CONFIRMED_ABSENT"
+    assert retry["allocation"] == {
+        "name": ALLOCATION_NAME,
+        "preexisting_exact_name_ids": [],
+    }
+    assert retry["initial_terminal_reservation"]["pre_snapshot"] == pre_snapshot
+    canonicalized_provider_output = canonical_json_bytes(pre_snapshot["record"]) + b"\n"
+    assert (
+        pre_snapshot["output_sha256"] != hashlib.sha256(canonicalized_provider_output).hexdigest()
+    )
+    assert retry["ownership_lease"]["mode"] == "exclusive-kernel-flock"
+    assert not harness["mutation_log"].exists()
+    assert _invocations(harness) == []
+
+
+def test_initial_reservation_recovers_interruption_after_attributable_rent(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    _, terminal_path, _ = _seed_initial_terminal_reservation(harness)
+    harness["allocation_state"].write_text(
+        json.dumps(
+            [
+                {"id": "lost-rent-a", "name": ALLOCATION_NAME},
+                {"id": "lost-rent-b", "name": ALLOCATION_NAME},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    cleanup = _run_wrapper(harness, retry_terminal_reconciliation=True)
+    retry_path = terminal_path.with_name(
+        f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+    )
+    retry = json.loads(retry_path.read_text(encoding="utf-8"))
+
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert retry["cleanup_status"] == "CONFIRMED_ABSENT"
+    assert retry["reconciliation"]["record"]["observed_attributable_ids"] == [
+        "lost-rent-a",
+        "lost-rent-b",
+    ]
+    assert retry["reconciliation"]["record"]["final_attributable_ids"] == []
+    assert not harness["allocation_state"].exists()
+    assert not harness["mutation_log"].exists()
+
+
+def test_expired_initial_reservation_retains_cleanup_only_authority(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness["payload"]["issued_at"] = "2026-07-10T00:00:00Z"
+    harness["payload"]["expires_at"] = "2026-07-10T00:10:00Z"
+    _resign(harness)
+    _, terminal_path, _ = _seed_initial_terminal_reservation(harness)
+    harness["allocation_state"].write_text(
+        json.dumps([{"id": "expired-lost-rent", "name": ALLOCATION_NAME}]),
+        encoding="utf-8",
+    )
+
+    cleanup = _run_wrapper(harness, retry_terminal_reconciliation=True)
+    retry_path = terminal_path.with_name(
+        f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+    )
+
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert json.loads(retry_path.read_text(encoding="utf-8"))["cleanup_status"] == (
+        "CONFIRMED_ABSENT"
+    )
+    assert not harness["allocation_state"].exists()
+    assert not harness["mutation_log"].exists()
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "permit",
+        "claim",
+        "allocation",
+        "pre_snapshot_hash",
+        "pre_snapshot_evidence",
+    ],
+)
+def test_tampered_initial_terminal_reservation_rejects_before_cleanup(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    harness = _make_harness(tmp_path)
+    _, terminal_path, _ = _seed_initial_terminal_reservation(harness)
+    reservation = json.loads(terminal_path.read_text(encoding="utf-8"))
+    if tamper == "permit":
+        reservation["permit"]["nonce"] = "0" * 64
+    elif tamper == "claim":
+        reservation["claim"]["path"] = str(tmp_path / "substituted-claim.json")
+    elif tamper == "allocation":
+        reservation["allocation"]["name"] = "issue-32-substituted-allocation"
+    elif tamper == "pre_snapshot_hash":
+        reservation["pre_snapshot"]["sha256"] = "f" * 64
+    else:
+        evidence = reservation["pre_snapshot"]["evidence"]
+        evidence["record"]["status"] = "ERROR"
+        reservation["pre_snapshot"]["sha256"] = hashlib.sha256(
+            canonical_json_bytes(evidence)
+        ).hexdigest()
+    terminal_path.write_text(json.dumps(reservation, sort_keys=True) + "\n", encoding="utf-8")
+    harness["allocation_state"].write_text(
+        json.dumps([{"id": "must-remain", "name": ALLOCATION_NAME}]),
+        encoding="utf-8",
+    )
+
+    rejected = _run_wrapper(harness, retry_terminal_reconciliation=True)
+
+    assert rejected.returncode == 2
+    assert "initial terminal reservation binding mismatch" in rejected.stderr
+    assert json.loads(harness["allocation_state"].read_text(encoding="utf-8")) == [
+        {"id": "must-remain", "name": ALLOCATION_NAME}
+    ]
+    assert not list(harness["ledger"].glob("*.retry-*.json"))
+    assert not harness["mutation_log"].exists()
+
+
+def test_initial_terminal_replacement_failure_is_recoverable_append_only(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    harness["env"]["FAKE_FAIL_INITIAL_TERMINAL_REPLACE"] = "1"
+
+    launch = _run_wrapper(harness)
+    terminal_path = next(harness["ledger"].glob("*.terminal-reconciliation.json"))
+    initial_reservation = terminal_path.read_bytes()
+    retry = _run_wrapper(harness, retry_terminal_reconciliation=True)
+    retry_path = terminal_path.with_name(
+        f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+    )
+
+    assert launch.returncode == 125
+    reservation = json.loads(initial_reservation)
+    assert reservation["status"] == "RESERVED"
+    assert reservation["pre_snapshot"]["evidence"] == _initial_clear_pre_snapshot(harness)
+    assert not harness["allocation_state"].exists()
+    assert retry.returncode == 0, retry.stderr
+    assert terminal_path.read_bytes() == initial_reservation
+    assert json.loads(retry_path.read_text(encoding="utf-8"))["cleanup_status"] == (
+        "CONFIRMED_ABSENT"
+    )
+    assert harness["mutation_log"].read_text(encoding="utf-8").splitlines() == ["up"]
+
+
+def test_live_wrapper_lease_excludes_concurrent_initial_cleanup_retry(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    harness["payload"]["environment"]["FAKE_LIUM_SLEEP"] = "2"
+    _resign(harness)
+    live = subprocess.Popen(
+        _wrapper_argv(harness),
+        env=harness["env"],
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert live.stdin is not None
+    live.stdin.write(harness["credential"] + "\n")
+    live.stdin.close()
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        claims = (
+            list(harness["ledger"].glob("*.consumed.json")) if harness["ledger"].exists() else []
+        )
+        terminals = (
+            list(harness["ledger"].glob("*.terminal-reconciliation.json"))
+            if harness["ledger"].exists()
+            else []
+        )
+        if claims and terminals and harness["allocation_state"].exists():
+            break
+        time.sleep(0.02)
+    else:
+        live.kill()
+        pytest.fail("live wrapper did not reach the attributable-rent window")
+
+    rejected = _run_wrapper(harness, retry_terminal_reconciliation=True)
+
+    assert rejected.returncode == 2
+    assert "owned by a live wrapper" in rejected.stderr
+    assert harness["allocation_state"].exists()
+    assert not list(harness["ledger"].glob("*.retry-*.json"))
+    assert live.wait(timeout=10) == 0
+    assert harness["mutation_log"].read_text(encoding="utf-8").splitlines() == ["up"]
+    terminal_path = next(harness["ledger"].glob("*.terminal-reconciliation.json"))
+    assert json.loads(terminal_path.read_text(encoding="utf-8"))["status"] == ("LAUNCH_COMPLETED")
+
+
+def test_post_rent_wrapper_death_releases_lease_for_cleanup_retry(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness["payload"]["environment"]["FAKE_LIUM_SLEEP"] = "5"
+    _resign(harness)
+    live = subprocess.Popen(
+        _wrapper_argv(harness),
+        env=harness["env"],
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert live.stdin is not None
+        live.stdin.write(harness["credential"] + "\n")
+        live.stdin.close()
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            claims = (
+                list(harness["ledger"].glob("*.consumed.json"))
+                if harness["ledger"].exists()
+                else []
+            )
+            terminals = (
+                list(harness["ledger"].glob("*.terminal-reconciliation.json"))
+                if harness["ledger"].exists()
+                else []
+            )
+            if claims and terminals and harness["allocation_state"].exists():
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("live wrapper did not reach the post-rent crash window")
+
+        live.kill()
+        assert live.wait(timeout=10) != 0
+        terminal_path = next(harness["ledger"].glob("*.terminal-reconciliation.json"))
+        assert json.loads(terminal_path.read_text(encoding="utf-8"))["status"] == "RESERVED"
+
+        cleanup = _run_wrapper(harness, retry_terminal_reconciliation=True)
+        retry_path = terminal_path.with_name(
+            f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+        )
+        retry = json.loads(retry_path.read_text(encoding="utf-8"))
+
+        assert cleanup.returncode == 0, cleanup.stderr
+        assert retry["cleanup_status"] == "CONFIRMED_ABSENT"
+        assert retry["reconciliation"]["record"]["observed_attributable_ids"] == ["fake-pod-123"]
+        assert not harness["allocation_state"].exists()
+        assert harness["mutation_log"].read_text(encoding="utf-8").splitlines() == ["up"]
+        assert len(_invocations(harness)) == 1
+    finally:
+        if live.poll() is None:
+            live.kill()
+            live.wait(timeout=10)
+        try:
+            os.killpg(live.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for stream in (live.stdout, live.stderr):
+            if stream is not None:
+                stream.close()
 
 
 def test_exact_reserved_cleanup_retry_is_resumable(tmp_path: Path) -> None:

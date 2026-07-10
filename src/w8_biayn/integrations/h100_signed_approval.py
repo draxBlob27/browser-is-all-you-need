@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import fcntl
 import hashlib
 import json
 import math
@@ -31,6 +32,7 @@ SIGNATURE_DOMAIN = b"w8-biayn/h100-lium-booking-permit/ed25519/v4\x00"
 LAUNCH_RECEIPT_SCHEMA = "h100-lium-launch-receipt/v2"
 TERMINAL_RECONCILIATION_RECEIPT_SCHEMA = "h100-lium-terminal-reconciliation-receipt/v1"
 TERMINAL_RECONCILIATION_RETRY_SCHEMA = "h100-lium-terminal-reconciliation-retry-receipt/v1"
+TERMINAL_RECONCILIATION_LEASE_SCHEMA = "h100-lium-terminal-reconciliation-lease/v1"
 PROVIDER_OUTPUT_SCHEMA = "lium-h100-pod-create/v2"
 PROVIDER_RECONCILIATION_SCHEMA = "lium-h100-allocation-reconciliation/v1"
 REQUIRED_STAGE = "lium-booking"
@@ -524,6 +526,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
     executable_descriptor: int | None = None
     interpreter_descriptor: int | None = None
     cli_descriptor: int | None = None
+    terminal_lease_descriptor: int | None = None
     credential: bytearray | None = None
     try:
         verification_now = (
@@ -585,6 +588,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
             ledger_dir=GATE0_CONSUMPTION_ROOT,
             pre_snapshot=pre_snapshot,
         )
+        terminal_lease_descriptor, _ = _acquire_terminal_reconciliation_lease(permit, claim_path)
         try:
             consumed_claim_path = consume_permit_once(permit, GATE0_CONSUMPTION_ROOT)
         except PermitError as exc:
@@ -598,6 +602,8 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
             raise
         claim_path = consumed_claim_path
     except PermitError as exc:
+        _release_terminal_reconciliation_lease(terminal_lease_descriptor)
+        terminal_lease_descriptor = None
         _close_descriptors(cli_descriptor, interpreter_descriptor, executable_descriptor)
         if credential is not None:
             _wipe_bytearray(credential)
@@ -788,6 +794,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
         _print_failure("WrapperInternalError", "signed launch wrapper failed closed")
         return 125
     finally:
+        _release_terminal_reconciliation_lease(terminal_lease_descriptor)
         _wipe_bytearray(credential)
         _close_descriptors(cli_descriptor, interpreter_descriptor, executable_descriptor)
 
@@ -1724,6 +1731,96 @@ def _terminal_reconciliation_retry_path(claim_path: Path, attempt: int) -> Path:
     )
 
 
+def _terminal_reconciliation_lease_path(claim_path: Path) -> Path:
+    terminal_path = _terminal_reconciliation_receipt_path(claim_path)
+    return terminal_path.with_name(f"{terminal_path.name.removesuffix('.json')}.lease.json")
+
+
+def _terminal_reconciliation_lease_record(
+    permit: VerifiedPermit, claim_path: Path
+) -> dict[str, Any]:
+    return {
+        "schema": TERMINAL_RECONCILIATION_LEASE_SCHEMA,
+        "permit_sha256": permit.permit_sha256,
+        "claim_path": str(claim_path.resolve()),
+    }
+
+
+def _acquire_terminal_reconciliation_lease(
+    permit: VerifiedPermit,
+    claim_path: Path,
+) -> tuple[int, Path]:
+    """Take the crash-released ownership lock shared by launch and cleanup."""
+
+    ledger, ledger_descriptor = _open_private_ledger(GATE0_CONSUMPTION_ROOT)
+    expected_claim_path = _permit_claim_path(permit, ledger)
+    if expected_claim_path != claim_path:
+        os.close(ledger_descriptor)
+        raise PermitVerificationError("terminal reconciliation lease claim mismatch")
+    path = _terminal_reconciliation_lease_path(claim_path)
+    flags = os.O_RDWR | os.O_CREAT
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    acquired = False
+    try:
+        descriptor = os.open(path.name, flags, 0o600, dir_fd=ledger_descriptor)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise PermitVerificationError(
+                "terminal reconciliation lease must be an owner-only regular file"
+            )
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError as exc:
+            raise PermitReplayError("terminal reconciliation is owned by a live wrapper") from exc
+        expected = (
+            canonical_json_bytes(_terminal_reconciliation_lease_record(permit, claim_path)) + b"\n"
+        )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        existing = os.read(descriptor, 16 * 1024 + 1)
+        if len(existing) > 16 * 1024:
+            raise PermitVerificationError("terminal reconciliation lease is oversized")
+        if existing:
+            if existing != expected:
+                raise PermitVerificationError("terminal reconciliation lease binding mismatch")
+        else:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            if os.write(descriptor, expected) != len(expected):
+                raise PermitVerificationError(
+                    "terminal reconciliation lease could not be fully written"
+                )
+            os.ftruncate(descriptor, len(expected))
+            os.fsync(descriptor)
+            os.fsync(ledger_descriptor)
+        return descriptor, path
+    except Exception as exc:
+        if descriptor is not None:
+            if acquired:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+        if isinstance(exc, PermitError):
+            raise
+        raise PermitVerificationError(
+            "terminal reconciliation lease could not be acquired"
+        ) from exc
+    finally:
+        os.close(ledger_descriptor)
+
+
+def _release_terminal_reconciliation_lease(descriptor: int | None) -> None:
+    if descriptor is None:
+        return
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
 def _cleanup_retry_verification_time(permit_path: Path) -> datetime:
     """Verify stale cleanup authority without reviving stale launch authority."""
 
@@ -1738,12 +1835,62 @@ def _cleanup_retry_verification_time(permit_path: Path) -> datetime:
     return issued_at
 
 
+def _validate_initial_pre_snapshot_evidence(
+    pre_snapshot: Mapping[str, Any],
+    *,
+    permit: VerifiedPermit,
+) -> Mapping[str, Any]:
+    expected_evidence_fields = {
+        "exit_code",
+        "timed_out",
+        "output_sha256",
+        "output_size_bytes",
+        "record",
+    }
+    if set(pre_snapshot) != expected_evidence_fields:
+        raise PermitVerificationError("initial terminal pre-snapshot evidence is invalid")
+    output_sha256 = pre_snapshot.get("output_sha256")
+    output_size = pre_snapshot.get("output_size_bytes")
+    record = pre_snapshot.get("record")
+    if (
+        pre_snapshot.get("exit_code") != 0
+        or type(pre_snapshot.get("exit_code")) is not int
+        or pre_snapshot.get("timed_out") is not False
+        or not isinstance(output_sha256, str)
+        or _HEX_256_RE.fullmatch(output_sha256) is None
+        or type(output_size) is not int
+        or not 0 < output_size <= MAX_RECONCILIATION_OUTPUT_BYTES
+        or not isinstance(record, Mapping)
+    ):
+        raise PermitVerificationError("initial terminal pre-snapshot evidence is invalid")
+    expected_record_fields = {
+        "schema",
+        "status",
+        "mode",
+        "allocation_name",
+        "preexisting_exact_name_ids",
+    }
+    preexisting_ids = record.get("preexisting_exact_name_ids")
+    if (
+        set(record) != expected_record_fields
+        or record.get("schema") != PROVIDER_RECONCILIATION_SCHEMA
+        or record.get("status") != "SNAPSHOT_CLEAR"
+        or record.get("mode") != "snapshot"
+        or record.get("allocation_name") != permit.payload["allocation_name"]
+        or preexisting_ids != []
+    ):
+        raise PermitVerificationError("initial terminal pre-snapshot evidence is invalid")
+    return record
+
+
 def _reserve_terminal_reconciliation_receipt(
     permit: VerifiedPermit,
     *,
     ledger_dir: str | Path,
     pre_snapshot: Mapping[str, Any],
 ) -> tuple[Path, Path]:
+    record = _validate_initial_pre_snapshot_evidence(pre_snapshot, permit=permit)
+    frozen_pre_snapshot = json.loads(canonical_json_bytes(pre_snapshot))
     ledger, ledger_descriptor = _open_private_ledger(ledger_dir)
     claim_path = _permit_claim_path(permit, ledger)
     path = _terminal_reconciliation_receipt_path(claim_path)
@@ -1752,9 +1899,21 @@ def _reserve_terminal_reconciliation_receipt(
     placeholder = {
         "schema": TERMINAL_RECONCILIATION_RECEIPT_SCHEMA,
         "status": "RESERVED",
-        "permit_sha256": permit.permit_sha256,
-        "claim_path": str(claim_path.resolve()),
-        "pre_snapshot_sha256": hashlib.sha256(canonical_json_bytes(pre_snapshot)).hexdigest(),
+        "permit": {
+            "sha256": permit.permit_sha256,
+            "key_id": permit.key_id,
+            "request_id": permit.request_id,
+            "nonce": permit.nonce,
+        },
+        "claim": {"path": str(claim_path.resolve())},
+        "allocation": {
+            "name": permit.payload["allocation_name"],
+            "preexisting_exact_name_ids": list(record["preexisting_exact_name_ids"]),
+        },
+        "pre_snapshot": {
+            "sha256": hashlib.sha256(canonical_json_bytes(frozen_pre_snapshot)).hexdigest(),
+            "evidence": frozen_pre_snapshot,
+        },
     }
     try:
         descriptor = os.open(path.name, flags, 0o600, dir_fd=ledger_descriptor)
@@ -1893,20 +2052,93 @@ def _build_terminal_reconciliation_receipt(
     }
 
 
+def _recover_initial_terminal_reservation(
+    reservation: Mapping[str, Any],
+    *,
+    permit: VerifiedPermit,
+    claim_path: Path,
+    terminal_path: Path,
+) -> dict[str, Any]:
+    expected_fields = {"schema", "status", "permit", "claim", "allocation", "pre_snapshot"}
+    permit_binding = reservation.get("permit")
+    claim_binding = reservation.get("claim")
+    allocation = reservation.get("allocation")
+    pre_snapshot_binding = reservation.get("pre_snapshot")
+    if (
+        set(reservation) != expected_fields
+        or reservation.get("schema") != TERMINAL_RECONCILIATION_RECEIPT_SCHEMA
+        or reservation.get("status") != "RESERVED"
+        or not isinstance(permit_binding, Mapping)
+        or set(permit_binding) != {"sha256", "key_id", "request_id", "nonce"}
+        or permit_binding.get("sha256") != permit.permit_sha256
+        or permit_binding.get("key_id") != permit.key_id
+        or permit_binding.get("request_id") != permit.request_id
+        or permit_binding.get("nonce") != permit.nonce
+        or not isinstance(claim_binding, Mapping)
+        or set(claim_binding) != {"path"}
+        or claim_binding.get("path") != str(claim_path.resolve())
+        or not isinstance(allocation, Mapping)
+        or set(allocation) != {"name", "preexisting_exact_name_ids"}
+        or allocation.get("name") != permit.payload["allocation_name"]
+        or allocation.get("preexisting_exact_name_ids") != []
+        or not isinstance(pre_snapshot_binding, Mapping)
+        or set(pre_snapshot_binding) != {"sha256", "evidence"}
+        or not isinstance(pre_snapshot_binding.get("evidence"), Mapping)
+    ):
+        raise PermitVerificationError("initial terminal reservation binding mismatch")
+    pre_snapshot = pre_snapshot_binding["evidence"]
+    try:
+        expected_pre_snapshot_sha256 = hashlib.sha256(
+            canonical_json_bytes(pre_snapshot)
+        ).hexdigest()
+        record = _validate_initial_pre_snapshot_evidence(pre_snapshot, permit=permit)
+    except (PermitError, TypeError, ValueError) as exc:
+        raise PermitVerificationError("initial terminal reservation binding mismatch") from exc
+    if pre_snapshot_binding.get("sha256") != expected_pre_snapshot_sha256 or record.get(
+        "preexisting_exact_name_ids"
+    ) != allocation.get("preexisting_exact_name_ids"):
+        raise PermitVerificationError("initial terminal reservation binding mismatch")
+    return {
+        "status": "CLEANUP_UNCONFIRMED",
+        "allocation": dict(allocation),
+        "initial_terminal_reservation": {
+            "path": str(terminal_path.resolve()),
+            "sha256": _sha256_bound_file(terminal_path, label="initial terminal reservation"),
+            "pre_snapshot_sha256": expected_pre_snapshot_sha256,
+            "pre_snapshot": pre_snapshot,
+        },
+    }
+
+
 def _load_terminal_retry_parent(
     permit: VerifiedPermit, claim_path: Path
 ) -> tuple[Path, dict[str, Any], int]:
     terminal_path = _terminal_reconciliation_receipt_path(claim_path)
     parent_path = terminal_path
-    parent = _load_json_object(parent_path, max_bytes=512 * 1024)
-    if (
-        parent.get("schema") != TERMINAL_RECONCILIATION_RECEIPT_SCHEMA
-        or parent.get("permit", {}).get("sha256") != permit.permit_sha256
-        or parent.get("claim", {}).get("path") != str(claim_path.resolve())
-        or parent.get("claim", {}).get("sha256")
-        != _sha256_bound_file(claim_path, label="permit claim")
-    ):
-        raise PermitVerificationError("terminal reconciliation parent binding mismatch")
+    try:
+        terminal_metadata = parent_path.lstat()
+    except OSError as exc:
+        raise PermitVerificationError("terminal reconciliation parent is unavailable") from exc
+    if stat.S_ISLNK(terminal_metadata.st_mode) or not stat.S_ISREG(terminal_metadata.st_mode):
+        raise PermitVerificationError("terminal reconciliation parent must be a regular file")
+    parent_document = _load_json_object(parent_path, max_bytes=512 * 1024)
+    if parent_document.get("status") == "RESERVED":
+        parent = _recover_initial_terminal_reservation(
+            parent_document,
+            permit=permit,
+            claim_path=claim_path,
+            terminal_path=parent_path,
+        )
+    else:
+        parent = parent_document
+        if (
+            parent.get("schema") != TERMINAL_RECONCILIATION_RECEIPT_SCHEMA
+            or parent.get("permit", {}).get("sha256") != permit.permit_sha256
+            or parent.get("claim", {}).get("path") != str(claim_path.resolve())
+            or parent.get("claim", {}).get("sha256")
+            != _sha256_bound_file(claim_path, label="permit claim")
+        ):
+            raise PermitVerificationError("terminal reconciliation parent binding mismatch")
     attempt = 1
     while True:
         candidate = _terminal_reconciliation_retry_path(claim_path, attempt)
@@ -2009,6 +2241,12 @@ def _reserve_terminal_retry_receipt(
 
 
 def _validate_consumed_claim_for_retry(permit: VerifiedPermit, claim_path: Path) -> None:
+    try:
+        metadata = claim_path.lstat()
+    except OSError as exc:
+        raise PermitVerificationError("terminal reconciliation claim is unavailable") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise PermitVerificationError("terminal reconciliation claim must be a regular file")
     claim = _load_json_object(claim_path, max_bytes=16 * 1024)
     expected = {
         "key_id": permit.key_id,
@@ -2020,7 +2258,9 @@ def _validate_consumed_claim_for_retry(permit: VerifiedPermit, claim_path: Path)
         claim.get(field) != value for field, value in expected.items()
     ):
         raise PermitVerificationError("terminal reconciliation claim binding mismatch")
-    _parse_utc(claim.get("consumed_at"), "claim consumed_at")
+    consumed_at = _parse_utc(claim.get("consumed_at"), "claim consumed_at")
+    if not permit.issued_at <= consumed_at < permit.expires_at:
+        raise PermitVerificationError("terminal reconciliation claim time is outside permit")
 
 
 def _retry_terminal_reconciliation(
@@ -2036,72 +2276,86 @@ def _retry_terminal_reconciliation(
     if not claim_path.is_file():
         raise PermitVerificationError("terminal reconciliation claim is unavailable")
     _validate_consumed_claim_for_retry(permit, claim_path)
-    parent_path, parent, attempt = _load_terminal_retry_parent(permit, claim_path)
-    allocation = parent.get("allocation")
-    if not isinstance(allocation, Mapping):
-        raise PermitVerificationError("terminal reconciliation allocation binding is missing")
-    preexisting_ids = allocation.get("preexisting_exact_name_ids")
-    if not isinstance(preexisting_ids, list) or any(
-        not isinstance(pod_id, str) for pod_id in preexisting_ids
-    ):
-        raise PermitVerificationError("terminal reconciliation pre-snapshot is invalid")
-    retry_path = _reserve_terminal_retry_receipt(
-        permit,
-        claim_path=claim_path,
-        parent_path=parent_path,
-        attempt=attempt,
-    )
+    lease_descriptor, lease_path = _acquire_terminal_reconciliation_lease(permit, claim_path)
     try:
-        reconciliation = _run_provider_control(
+        _validate_consumed_claim_for_retry(permit, claim_path)
+        parent_path, parent, attempt = _load_terminal_retry_parent(permit, claim_path)
+        allocation = parent.get("allocation")
+        if not isinstance(allocation, Mapping):
+            raise PermitVerificationError("terminal reconciliation allocation binding is missing")
+        preexisting_ids = allocation.get("preexisting_exact_name_ids")
+        if not isinstance(preexisting_ids, list) or any(
+            not isinstance(pod_id, str) for pod_id in preexisting_ids
+        ):
+            raise PermitVerificationError("terminal reconciliation pre-snapshot is invalid")
+        retry_path = _reserve_terminal_retry_receipt(
             permit,
-            mode="cleanup",
-            executable_descriptor=executable_descriptor,
-            interpreter_descriptor=interpreter_descriptor,
-            provider_environment=provider_environment,
-            credential=credential,
-            preexisting_ids=preexisting_ids,
+            claim_path=claim_path,
+            parent_path=parent_path,
+            attempt=attempt,
         )
-        record = reconciliation["record"]
-        confirmed = (
-            not reconciliation["timed_out"]
-            and reconciliation["exit_code"] == 0
-            and record.get("status") == "CONFIRMED_ABSENT"
-            and record.get("final_attributable_ids") == []
-        )
-    except PermitError as exc:
-        reconciliation = {"status": "CONTROL_FAILED", "error": type(exc).__name__}
-        confirmed = False
-    receipt = {
-        "schema": TERMINAL_RECONCILIATION_RETRY_SCHEMA,
-        "status": "RETRY_RECONCILED" if confirmed else "CLEANUP_UNCONFIRMED",
-        "attempt": attempt,
-        "written_at_utc": _utc_timestamp(),
-        "permit": {
-            "sha256": permit.permit_sha256,
-            "key_id": permit.key_id,
-            "request_id": permit.request_id,
-            "nonce": permit.nonce,
-        },
-        "claim": {
-            "path": str(claim_path.resolve()),
-            "sha256": _sha256_bound_file(claim_path, label="permit claim"),
-        },
-        "parent_receipt": {
-            "path": str(parent_path.resolve()),
-            "sha256": _sha256_bound_file(parent_path, label="terminal retry parent"),
-        },
-        "allocation": dict(allocation),
-        "reconciliation": reconciliation,
-        "retry_control": (None if confirmed else _retry_control_record(claim_path, attempt + 1)),
-    }
-    _replace_reserved_terminal_reconciliation_receipt(retry_path, receipt)
-    if not confirmed:
-        _print_failure(
-            "TerminalReconciliationUnconfirmed",
-            "attributable allocation cleanup remains unconfirmed",
-        )
-        return 125
-    return 0
+        try:
+            reconciliation = _run_provider_control(
+                permit,
+                mode="cleanup",
+                executable_descriptor=executable_descriptor,
+                interpreter_descriptor=interpreter_descriptor,
+                provider_environment=provider_environment,
+                credential=credential,
+                preexisting_ids=preexisting_ids,
+            )
+            record = reconciliation["record"]
+            confirmed = (
+                not reconciliation["timed_out"]
+                and reconciliation["exit_code"] == 0
+                and record.get("status") == "CONFIRMED_ABSENT"
+                and record.get("final_attributable_ids") == []
+            )
+        except PermitError as exc:
+            reconciliation = {"status": "CONTROL_FAILED", "error": type(exc).__name__}
+            confirmed = False
+        receipt = {
+            "schema": TERMINAL_RECONCILIATION_RETRY_SCHEMA,
+            "status": "RETRY_RECONCILED" if confirmed else "CLEANUP_UNCONFIRMED",
+            "cleanup_status": "CONFIRMED_ABSENT" if confirmed else "UNCONFIRMED",
+            "attempt": attempt,
+            "written_at_utc": _utc_timestamp(),
+            "permit": {
+                "sha256": permit.permit_sha256,
+                "key_id": permit.key_id,
+                "request_id": permit.request_id,
+                "nonce": permit.nonce,
+            },
+            "claim": {
+                "path": str(claim_path.resolve()),
+                "sha256": _sha256_bound_file(claim_path, label="permit claim"),
+            },
+            "parent_receipt": {
+                "path": str(parent_path.resolve()),
+                "sha256": _sha256_bound_file(parent_path, label="terminal retry parent"),
+            },
+            "allocation": dict(allocation),
+            "ownership_lease": {
+                "path": str(lease_path.resolve()),
+                "sha256": _sha256_bound_file(lease_path, label="terminal reconciliation lease"),
+                "mode": "exclusive-kernel-flock",
+            },
+            "initial_terminal_reservation": parent.get("initial_terminal_reservation"),
+            "reconciliation": reconciliation,
+            "retry_control": (
+                None if confirmed else _retry_control_record(claim_path, attempt + 1)
+            ),
+        }
+        _replace_reserved_terminal_reconciliation_receipt(retry_path, receipt)
+        if not confirmed:
+            _print_failure(
+                "TerminalReconciliationUnconfirmed",
+                "attributable allocation cleanup remains unconfirmed",
+            )
+            return 125
+        return 0
+    finally:
+        _release_terminal_reconciliation_lease(lease_descriptor)
 
 
 def _replace_reserved_terminal_reconciliation_receipt(
@@ -2547,6 +2801,7 @@ __all__ = [
     "SIGNATURE_DOMAIN",
     "TERMINAL_RECONCILIATION_RECEIPT_SCHEMA",
     "TERMINAL_RECONCILIATION_RETRY_SCHEMA",
+    "TERMINAL_RECONCILIATION_LEASE_SCHEMA",
     "LoadedPublicKeyDocument",
     "PermitError",
     "PermitFormatError",

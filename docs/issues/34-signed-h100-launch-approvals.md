@@ -39,9 +39,15 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
 - [ ] The outer wrapper reserves terminal evidence before permit consumption;
   every consumed timeout, partial output, lost response, or local artifact
   failure reconciles all newly attributable exact-name IDs to confirmed absence.
+- [ ] The initial terminal reservation persists the exact validated pre-snapshot,
+  allocation, permit, and expected-claim bindings. A kernel-backed exclusive
+  lease is held from before claim consumption through terminal finalization, so
+  crash recovery cannot race a live launch wrapper and automatically becomes
+  available when that wrapper exits or dies.
 - [ ] Unconfirmed cleanup has an append-only, exact-parent retry chain. Cleanup
-  authority survives Gate 0 expiry only when a consumed claim and failed-cleanup
-  receipt already exist; expired permits remain unusable for launch.
+  authority survives Gate 0 expiry only when an exact consumed claim was created
+  inside the permit interval and either an initial reservation or failed-cleanup
+  receipt proves attribution; expired permits remain unusable for launch.
 - [ ] The permit binds one absolute, regular SSH public-key file by SHA-256; the
   exact key is passed explicitly through the installed Lium SDK and only its
   path and digest appear in provider output and receipts.
@@ -60,7 +66,8 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
   source/runtime/data/checkpoint intent artifacts that reconcile to prepared
   Gate 1 evidence.
 - [ ] Production-boundary tests cover valid, tampered, replay, expiry,
-  wrong-principal, and concurrent-use cases without mocking approval checks.
+  wrong-principal, post-rent wrapper death, terminal-receipt failure, and
+  concurrent live-wrapper/cleanup exclusion without mocking approval checks.
 - [ ] An independent machine-readable audit returns `ACCEPT` and binds the
   reviewed artifacts and constituent checksums before the launch hold is
   released.

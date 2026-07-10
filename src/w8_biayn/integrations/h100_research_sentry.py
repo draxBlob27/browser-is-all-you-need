@@ -3862,6 +3862,20 @@ def _validate_contract(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
                 "provider_terminal_reconciliation_retry_receipt_schema"
             )
             == "h100-lium-terminal-reconciliation-retry-receipt/v1"
+            and (payload.get("authorization") or {}).get(
+                "provider_terminal_reconciliation_lease_schema"
+            )
+            == "h100-lium-terminal-reconciliation-lease/v1"
+            and (payload.get("authorization") or {}).get(
+                "initial_terminal_reservation_binds_full_pre_snapshot"
+            )
+            is True
+            and (payload.get("authorization") or {}).get("terminal_reconciliation_ownership")
+            == "exclusive-kernel-flock"
+            and (payload.get("authorization") or {}).get(
+                "cleanup_retry_requires_consumed_claim_within_permit"
+            )
+            is True
             and (payload.get("authorization") or {}).get("provider_rent_boundary_evidence_required")
             is True
             and (payload.get("authorization") or {}).get("cleanup_retry_survives_gate0_expiry")
