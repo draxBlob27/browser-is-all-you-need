@@ -687,6 +687,17 @@ def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
         "ok": True,
         "repo_sha": value["repo_sha"],
         "training_base_sha": value["training_base_sha"],
+        "gpu_operating_rows": [
+            {
+                "index": str(index),
+                "clocks.sm": "345",
+                "power.draw": "75",
+                "power.limit": "700",
+                "temperature.gpu": "30",
+                "clocks_throttle_reasons.active": "0x0000000000000000",
+            }
+            for index in range(8)
+        ],
     }
     module["checkpoint_receipt"] = lambda setup, setup_path: {
         "schema_version": 2,

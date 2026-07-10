@@ -89,6 +89,7 @@ class SentryPolicy:
     required_gpu_count: int = 8
     required_gpu_name: str = "H100"
     minimum_gpu_memory_mib: float = 80_000.0
+    minimum_power_limit_w: float = 690.0
     required_topology: str = "NV18"
     training_base_sha: str = "cd83e3c8780f09e38e5b58558d84580e74afbcf6"
     miles_sha: str = "01a6d7bb74befa6e97579c80a2b1add0667606f3"
@@ -3199,6 +3200,13 @@ def _validate_contract(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
             "contract_training_base_mismatch",
         ),
         (
+            math.isclose(
+                _finite((payload.get("hardware") or {}).get("minimum_power_limit_w_per_gpu")) or 0,
+                policy.minimum_power_limit_w,
+            ),
+            "contract_power_limit_mismatch",
+        ),
+        (
             _integer((payload.get("current_experiment") or {}).get("total_perf_steps_per_leg"))
             == 16,
             "contract_total_observations_mismatch",
@@ -3259,6 +3267,32 @@ def _validate_hardware(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
         value is None or value < policy.minimum_gpu_memory_mib for value in memories
     ):
         reasons.append("hardware_memory_below_minimum")
+    operating_rows = payload.get("gpu_operating_rows")
+    operating = operating_rows if isinstance(operating_rows, list) else []
+    operating_indices: set[int] = set()
+    power_limits: list[float] = []
+    for row in operating:
+        if not isinstance(row, Mapping):
+            continue
+        index = _integer(row.get("index"))
+        clock = _positive(row.get("clocks.sm"))
+        power_draw = _positive(row.get("power.draw"))
+        power_limit = _positive(row.get("power.limit"))
+        temperature = _finite(row.get("temperature.gpu"))
+        if None in (index, clock, power_draw, power_limit, temperature):
+            continue
+        operating_indices.add(int(index))
+        power_limits.append(float(power_limit))
+        if _throttle_active(row.get("clocks_throttle_reasons.active")):
+            reasons.append("hardware_preflight_throttling_detected")
+    if (
+        len(operating) != policy.required_gpu_count
+        or operating_indices != set(range(policy.required_gpu_count))
+        or len(power_limits) != len(operating)
+    ):
+        reasons.append("hardware_operating_snapshot_incomplete")
+    if not power_limits or min(power_limits) < policy.minimum_power_limit_w:
+        reasons.append("hardware_power_limit_below_minimum")
     topology = _ANSI_RE.sub("", str(payload.get("topology") or ""))
     gpu_lines = [line for line in topology.splitlines() if re.match(r"^GPU\d+\s", line)]
     edge_count = sum(
@@ -3286,6 +3320,7 @@ def _validate_hardware(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
         "minimum_memory_total_mib": min(
             (value for value in memories if value is not None), default=None
         ),
+        "minimum_power_limit_w": min(power_limits, default=None),
         "gpu_count": len(parsed),
         "full_NV18": edge_count >= 56,
     }
@@ -3533,7 +3568,12 @@ def _telemetry_evidence(
                         columns,
                         lambda value: "clock" in value and ("sm" in value or "graphics" in value),
                     ),
-                    "power": _column(columns, lambda value: "power" in value),
+                    "power_draw": _column(
+                        columns, lambda value: "power" in value and "limit" not in value
+                    ),
+                    "power_limit": _column(
+                        columns, lambda value: "power" in value and "limit" in value
+                    ),
                     "temperature": _column(
                         columns, lambda value: "temperature" in value or value.startswith("temp")
                     ),
@@ -3550,22 +3590,34 @@ def _telemetry_evidence(
         times: list[datetime] = []
         per_gpu: dict[int, int] = {}
         throttle = False
+        power_limit_below_minimum = False
+        minimum_power_limit: float | None = None
         for row in rows:
             timestamp = _parse_time(row.get(selected["timestamp"] or ""))
             index = _integer(row.get(selected["index"] or ""))
             clock = _positive(row.get(selected["clock"] or ""))
-            power = _positive(row.get(selected["power"] or ""))
+            power_draw = _positive(row.get(selected["power_draw"] or ""))
+            power_limit = _positive(row.get(selected["power_limit"] or ""))
             temperature = _finite(row.get(selected["temperature"] or ""))
             if (
                 timestamp is None
                 or index is None
                 or clock is None
-                or power is None
+                or power_draw is None
+                or power_limit is None
                 or temperature is None
             ):
                 continue
             times.append(timestamp)
             per_gpu[index] = per_gpu.get(index, 0) + 1
+            minimum_power_limit = (
+                power_limit
+                if minimum_power_limit is None
+                else min(minimum_power_limit, power_limit)
+            )
+            power_limit_below_minimum = (
+                power_limit_below_minimum or power_limit < policy.minimum_power_limit_w
+            )
             throttle = throttle or _throttle_active(row.get(selected["throttle"] or ""))
         coverage = set(per_gpu) == set(range(policy.required_gpu_count)) and all(
             count >= policy.minimum_telemetry_rows_per_gpu for count in per_gpu.values()
@@ -3592,6 +3644,8 @@ def _telemetry_evidence(
             reasons.append("telemetry_does_not_overlap_raw_run_wall_time")
         if throttle:
             reasons.append("telemetry_throttling_detected")
+        if power_limit_below_minimum:
+            reasons.append("telemetry_power_limit_below_minimum")
         return {
             "passed": not reasons,
             "reasons": reasons,
@@ -3601,6 +3655,7 @@ def _telemetry_evidence(
             "run_duration_s": run_duration,
             "overlap_fraction": overlap,
             "throttling_detected": throttle,
+            "minimum_power_limit_w": minimum_power_limit,
         }
     return {
         "passed": False,

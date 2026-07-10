@@ -72,6 +72,8 @@ GRPO and independent audit follow only after that confirmation passes.
 - Exact config diff and hardware/source/data/checkpoint receipts.
 - Per-GPU clocks, power, thermals, memory, SM, tensor, HBM, and NVLink
   telemetry.
+- Eight-GPU preflight and continuous operating snapshots with at least a 690 W
+  configured power limit per H100.
 - Adapter fingerprints before update, after update, and after SGLang
   synchronization.
 - Exact OCI/Hugging Face setup attestation and model-revision marker.

@@ -155,6 +155,8 @@ one unchanged 8x H100 node:
   before and after every leg. A surviving relevant process invalidates the leg.
 - Gate 1 requires a read-only setup attestation for the exact OCI digest and
   Hugging Face revision plus a matching revision marker in the model tree.
+- Preflight and continuous telemetry require all eight H100s to retain at
+  least a 690 W configured power limit; lower-power evidence is invalid.
 
 T1 can only promote all-to-all to a separately budgeted T2 confirmation issue.
 TP2/EP8 with a 14K token cap remains queued behind this lower-cost ambiguity

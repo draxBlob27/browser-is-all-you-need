@@ -22,6 +22,7 @@ from w8_biayn.integrations.h100_research_sentry import (
     DecisionReplayError,
     DecisionSecurityError,
     SentrySecurity,
+    SentryPolicy,
     Stage,
     evaluate_confirmation,
     evaluate_final,
@@ -34,6 +35,7 @@ from w8_biayn.integrations.h100_research_sentry import (
     signature_domain_for_kind,
     verify_consume_and_execute,
     verify_signed_decision,
+    _telemetry_evidence,
 )
 from w8_biayn.integrations.h100_signed_approval import (
     CREDENTIAL_TRANSPORT,
@@ -477,6 +479,22 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
                 f"{index}, NVIDIA H100 80GB HBM3, 81559, 595.1, 0000:{index:02x}:00.0"
                 for index in range(8)
             ],
+            "gpu_operating_rows": [
+                {
+                    "timestamp": "2026/07/10 00:00:00.000",
+                    "index": str(index),
+                    "clocks.sm": "345",
+                    "power.draw": "75",
+                    "power.limit": "700",
+                    "temperature.gpu": "30",
+                    "clocks_throttle_reasons.active": "0x0000000000000000",
+                    "utilization.gpu": "0",
+                    "utilization.memory": "0",
+                    "memory.used": "0",
+                    "memory.total": "81559",
+                }
+                for index in range(8)
+            ],
             "topology": topology,
             "repo_sha": CURRENT_REPO_SHA,
             "training_base_sha": TRAINING_BASE_SHA,
@@ -595,10 +613,32 @@ def _refresh_prepare_bindings(root: Path) -> None:
 
 
 def _write_telemetry(stage: Path) -> None:
-    rows = ["timestamp,index,clocks.sm,power.draw,temperature.gpu,clocks_throttle_reasons.active"]
+    rows = [
+        "timestamp,index,clocks.sm,power.draw,power.limit,temperature.gpu,clocks_throttle_reasons.active"
+    ]
     for timestamp in ("2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z"):
-        rows.extend(f"{timestamp},{index},1410,500,65,0x0000000000000000" for index in range(8))
+        rows.extend(f"{timestamp},{index},1410,500,700,65,0x0000000000000000" for index in range(8))
     (stage / "gpu_telemetry.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def test_telemetry_rejects_an_underpowered_h100_run(tmp_path: Path) -> None:
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    _write_telemetry(stage)
+    telemetry = stage / "gpu_telemetry.csv"
+    telemetry.write_text(telemetry.read_text(encoding="utf-8").replace(",700,", ",500,"))
+    result = _telemetry_evidence(
+        tmp_path,
+        {
+            "run_started_at_utc": "2026-07-10T00:00:00Z",
+            "run_finished_at_utc": "2026-07-10T00:01:00Z",
+        },
+        "",
+        SentryPolicy(),
+    )
+
+    assert result["passed"] is False
+    assert "telemetry_power_limit_below_minimum" in result["reasons"]
 
 
 def _write_wandb_bundle(
@@ -1246,6 +1286,24 @@ def test_preflight_provenance_and_sha_contract(tmp_path: Path) -> None:
     assert result["exit_status"] == 0
 
     hardware_payload = json.loads(hardware.read_text(encoding="utf-8"))
+    hardware_payload["gpu_operating_rows"][0]["power.limit"] = "500"
+    _json(hardware, hardware_payload)
+    underpowered = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+    assert underpowered["decision"] == "INVALID"
+    assert "hardware_power_limit_below_minimum" in underpowered["reasons"]
+
+    hardware_payload["gpu_operating_rows"][0]["power.limit"] = "700"
     hardware_payload["training_base_sha"] = "0" * 40
     _json(hardware, hardware_payload)
     assert (

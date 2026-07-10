@@ -93,6 +93,7 @@ TELEMETRY_COLUMNS = (
     "index",
     "clocks.sm",
     "power.draw",
+    "power.limit",
     "temperature.gpu",
     "clocks_throttle_reasons.active",
     "utilization.gpu",
@@ -302,18 +303,22 @@ def collect_hardware_receipt(source: dict[str, Any]) -> dict[str, Any]:
         ]
     )
     topology = _run_capture(["nvidia-smi", "topo", "-m"])
+    operating_rows, operating_error = query_gpu_telemetry()
     rows = [line.strip() for line in query["stdout"].splitlines() if line.strip()]
     errors: list[str] = []
     if query["returncode"] != 0 or len(rows) != 8 or any("H100" not in row for row in rows):
         errors.append("expected_exactly_8_h100_gpus")
     if topology["returncode"] != 0:
         errors.append("gpu_topology_query_failed")
+    if operating_error is not None:
+        errors.append(operating_error)
     return {
         "schema_version": 1,
         "ok": not errors,
         "errors": errors,
         "gpu_rows": rows,
         "topology": topology["stdout"],
+        "gpu_operating_rows": operating_rows,
         "repo_sha": source["repo_sha"],
         "training_base_sha": source["training_base_sha"],
         "miles_sha": _optional_git_sha(Path("/root/miles")),
@@ -759,6 +764,7 @@ def query_gpu_telemetry() -> tuple[list[dict[str, str]], str | None]:
         "index",
         "clocks.sm",
         "power.draw",
+        "power.limit",
         "temperature.gpu",
     ]
     tail = ["utilization.gpu", "utilization.memory", "memory.used", "memory.total"]
