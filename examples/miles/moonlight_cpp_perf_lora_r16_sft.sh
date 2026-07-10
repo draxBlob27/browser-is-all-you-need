@@ -242,7 +242,7 @@ wandb_job_type=${WANDB_JOB_TYPE}
 experiment_id=${EXPERIMENT_ID}
 timing_status=${W8_TIMING_STATUS:-unverified}
 extra_args=${MILES_EXTRA_ARGS:-}
-skip_train_only_clear_memory=${W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY:-0}
+lightweight_train_only_clear=${W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR:-0}
 EOF
   cat "${RUN_RECEIPT}"
 }
@@ -503,7 +503,7 @@ for key in (
     "W8_GLM47_PROBE_OUT",
     "W8_GLM47_NO_SHARED_LORA_CKPT_PATCH",
     "W8_GLM47_SYNC_FORENSICS",
-    "W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY",
+    "W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR",
 ):
     if key in os.environ:
         env[key] = os.environ[key]

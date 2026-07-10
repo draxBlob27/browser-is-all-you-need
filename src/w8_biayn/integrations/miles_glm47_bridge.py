@@ -38,25 +38,25 @@ def register_glm47_bridge() -> None:
     _patch_sglang_lora_mem_pool_ordering()
     _patch_router_circuit_breaker()
     _patch_warm_start_optimizer_reload()
-    _when_imported("miles.ray.actor_group", lambda module: _apply_train_only_clear_memory_skip(module))
+    _when_imported("miles.ray.train_actor", lambda module: _apply_train_only_lightweight_clear(module))
     _when_imported("megatron.bridge", lambda module: _register_glm47_bridge_class())
 
 
-def _apply_train_only_clear_memory_skip(module) -> None:
-    """Avoid full-process GC between resident train-only SFT batches."""
+def _apply_train_only_lightweight_clear(module) -> None:
+    """Release CUDA cache without scanning the full resident model object graph."""
 
     global _TRAIN_ONLY_CLEAR_PATCHED
     if _TRAIN_ONLY_CLEAR_PATCHED:
         return
 
-    group_cls = getattr(module, "RayTrainGroup", None)
-    if group_cls is None or getattr(group_cls, "_w8_train_only_clear_patched", False):
+    actor_cls = getattr(module, "TrainRayActor", None)
+    if actor_cls is None or getattr(actor_cls, "_w8_train_only_clear_patched", False):
         return
 
-    original_clear_memory = group_cls.clear_memory
+    original_clear_memory = actor_cls.clear_memory
 
-    async def clear_memory(self):
-        enabled = os.environ.get("W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY", "").strip().lower()
+    def clear_memory(self):
+        enabled = os.environ.get("W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR", "").strip().lower()
         args = getattr(self, "args", None)
         if (
             enabled in {"1", "true", "yes", "on"}
@@ -64,13 +64,15 @@ def _apply_train_only_clear_memory_skip(module) -> None:
             and not getattr(args, "offload_train", False)
         ):
             if not getattr(self, "_w8_train_only_clear_reported", False):
-                print("w8 GLM47 SFT: keeping resident actor allocator cache between batches", flush=True)
+                print("w8 GLM47 SFT: clearing CUDA cache without full-process Python GC", flush=True)
                 self._w8_train_only_clear_reported = True
+            module.torch.cuda.synchronize()
+            module.torch.cuda.empty_cache()
             return None
-        return await original_clear_memory(self)
+        return original_clear_memory(self)
 
-    group_cls.clear_memory = clear_memory
-    group_cls._w8_train_only_clear_patched = True
+    actor_cls.clear_memory = clear_memory
+    actor_cls._w8_train_only_clear_patched = True
     _TRAIN_ONLY_CLEAR_PATCHED = True
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import subprocess
 import sys
@@ -119,7 +118,7 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
     ):
         assert f'"{probe_key}",' in sft_runner_text
         assert f'\\"{probe_key}\\": \\"${{{probe_key}:-}}\\"' in grpo_runner_text
-    assert '"W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY",' in sft_runner_text
+    assert '"W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR",' in sft_runner_text
     grpo_text = GLM47_GRPO_RUNNER.read_text(encoding="utf-8")
     assert (
         'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
@@ -492,7 +491,7 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
         # one lazy hook per patch target: mbridge.core.bridge, miles_plugins.mbridge,
         # megatron.bridge.peft.utils, miles update_weight module, sglang mem_pool,
         # miles router_manager, miles lora_utils (optimizer reload), Miles actor
-        # group (resident SFT cleanup), and
+        # train actor (resident SFT cleanup), and
         # megatron.bridge for the bridge-class registration
         assert len(added) == 9
     finally:
@@ -506,36 +505,42 @@ def test_grpo_runner_supports_adapter_init_passthrough() -> None:
     assert '--lora-adapter-path "${LORA_ADAPTER_PATH}"' in text
 
 
-def test_h100_sft_skips_only_train_only_actor_gc(monkeypatch) -> None:
+def test_h100_sft_uses_lightweight_train_only_actor_clear(monkeypatch) -> None:
     from w8_biayn.integrations import miles_glm47_bridge
 
     calls: list[str] = []
+    cuda_calls: list[str] = []
 
-    class FakeRayTrainGroup:
-        async def clear_memory(self):
+    class FakeTrainRayActor:
+        def clear_memory(self):
             calls.append("cleared")
 
-    fake_module = types.SimpleNamespace(RayTrainGroup=FakeRayTrainGroup)
+    fake_cuda = types.SimpleNamespace(
+        synchronize=lambda: cuda_calls.append("synchronize"),
+        empty_cache=lambda: cuda_calls.append("empty_cache"),
+    )
+    fake_module = types.SimpleNamespace(TrainRayActor=FakeTrainRayActor, torch=types.SimpleNamespace(cuda=fake_cuda))
     monkeypatch.setattr(miles_glm47_bridge, "_TRAIN_ONLY_CLEAR_PATCHED", False)
-    monkeypatch.setenv("W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY", "1")
-    miles_glm47_bridge._apply_train_only_clear_memory_skip(fake_module)
+    monkeypatch.setenv("W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR", "1")
+    miles_glm47_bridge._apply_train_only_lightweight_clear(fake_module)
 
-    group = FakeRayTrainGroup()
-    group.args = types.SimpleNamespace(debug_train_only=True, offload_train=False)
-    asyncio.run(group.clear_memory())
+    actor = FakeTrainRayActor()
+    actor.args = types.SimpleNamespace(debug_train_only=True, offload_train=False)
+    actor.clear_memory()
     assert calls == []
+    assert cuda_calls == ["synchronize", "empty_cache"]
 
-    group.args.debug_train_only = False
-    asyncio.run(group.clear_memory())
+    actor.args.debug_train_only = False
+    actor.clear_memory()
     assert calls == ["cleared"]
 
-    group.args.debug_train_only = True
-    group.args.offload_train = True
-    asyncio.run(group.clear_memory())
+    actor.args.debug_train_only = True
+    actor.args.offload_train = True
+    actor.clear_memory()
     assert calls == ["cleared", "cleared"]
 
     sft_text = GLM47_H100_SFT_RUNNER.read_text(encoding="utf-8")
-    assert 'W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY="${W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY:-1}"' in sft_text
+    assert 'W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR="${W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR:-1}"' in sft_text
 
 
 def test_grpo_runner_save_interval_is_configurable() -> None:
