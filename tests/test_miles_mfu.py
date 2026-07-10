@@ -101,6 +101,12 @@ def test_mfu_sweep_has_exactly_sixteen_diverse_rounds() -> None:
     assert [spec.round for spec in specs] == list(range(1, 17))
     assert len({spec.name for spec in specs}) == 16
     assert any("overlap-grad-reduce" in spec.extra_args for spec in specs)
+    param_gather = next(spec for spec in specs if "--overlap-param-gather" in spec.extra_args)
+    assert "--overlap-grad-reduce" in param_gather.extra_args
+    ep_overlap = next(
+        spec for spec in specs if "--overlap-moe-expert-parallel-comm" in spec.extra_args
+    )
+    assert "--delay-wgrad-compute" in ep_overlap.extra_args
     assert any(spec.env.get("MILES_MOE_ENABLE_DEEPEP") == "0" for spec in specs)
     assert any(spec.env.get("MILES_TENSOR_MODEL_PARALLEL_SIZE") == "2" for spec in specs)
     assert any(spec.precision == "fp8" for spec in specs)
