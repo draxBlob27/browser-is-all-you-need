@@ -44,6 +44,10 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
   lease is held from before claim consumption through terminal finalization, so
   crash recovery cannot race a live launch wrapper and automatically becomes
   available when that wrapper exits or dies.
+- [ ] Every child still capable of an `up` or cleanup mutation inherits the
+  same locked open-file description. Wrapper death alone cannot release
+  ownership while an orphan child can still rent, and each child has its own
+  hard deadline so an orphan cannot hold cleanup indefinitely.
 - [ ] Unconfirmed cleanup has an append-only, exact-parent retry chain. Cleanup
   authority survives Gate 0 expiry only when an exact consumed claim was created
   inside the permit interval and either an initial reservation or failed-cleanup
@@ -66,8 +70,9 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
   source/runtime/data/checkpoint intent artifacts that reconcile to prepared
   Gate 1 evidence.
 - [ ] Production-boundary tests cover valid, tampered, replay, expiry,
-  wrong-principal, post-rent wrapper death, terminal-receipt failure, and
-  concurrent live-wrapper/cleanup exclusion without mocking approval checks.
+  wrong-principal, pre-rent and post-rent wrapper death, orphan-child timeout,
+  orphan cleanup, terminal-receipt failure, and concurrent
+  live-wrapper/cleanup exclusion without mocking approval checks.
 - [ ] An independent machine-readable audit returns `ACCEPT` and binds the
   reviewed artifacts and constituent checksums before the launch hold is
   released.

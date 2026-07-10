@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -147,6 +148,11 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "'status':'ERROR','mode':mode,'allocation_name':name,"
         "'error':'allocation_cleanup_unconfirmed','details':{}}\n"
         "        print(json.dumps(record, separators=(',', ':')), flush=True); raise SystemExit(70)\n"
+        "    cleanup_marker = os.environ.get('FAKE_CLEANUP_BEFORE_MUTATION_MARKER')\n"
+        "    if cleanup_marker:\n"
+        "        open(cleanup_marker, 'ab').close()\n"
+        "        cleanup_release = os.environ.get('FAKE_CLEANUP_BEFORE_MUTATION_RELEASE')\n"
+        "        while cleanup_release and not os.path.exists(cleanup_release): time.sleep(0.01)\n"
         "    preexisting = {sys.argv[index + 1] for index, token in enumerate(sys.argv[:-1]) "
         "if token == '--preexisting-id'}\n"
         "    attributable = [row for row in matches if row['id'] not in preexisting]\n"
@@ -174,6 +180,11 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "    os.write(fd, row.encode('utf-8'))\n"
         "finally:\n"
         "    os.close(fd)\n"
+        "before_rent_marker = os.environ.get('FAKE_BEFORE_RENT_MARKER')\n"
+        "if before_rent_marker:\n"
+        "    open(before_rent_marker, 'ab').close()\n"
+        "    before_rent_release = os.environ.get('FAKE_BEFORE_RENT_RELEASE')\n"
+        "    while before_rent_release and not os.path.exists(before_rent_release): time.sleep(0.01)\n"
         "if load_state(): raise SystemExit(73)\n"
         "name, pod_id = option('--name'), 'fake-pod-123'\n"
         "extra_ids = [value for value in "
@@ -366,6 +377,10 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "import os, sys\nfrom pathlib import Path\n"
         "import w8_biayn.integrations.h100_signed_approval as module\n"
         "module.GATE0_CONSUMPTION_ROOT = Path(sys.argv[1])\n"
+        "if os.environ.get('FAKE_RECONCILIATION_TIMEOUT_SECONDS'):\n"
+        "    module.RECONCILIATION_TIMEOUT_SECONDS = int(\n"
+        "        os.environ['FAKE_RECONCILIATION_TIMEOUT_SECONDS']\n"
+        "    )\n"
         "if os.environ.get('FAKE_FAIL_INITIAL_TERMINAL_REPLACE') == '1':\n"
         "    original_replace = module._replace_reserved_terminal_reconciliation_receipt\n"
         "    def fail_initial(path, receipt):\n"
@@ -489,6 +504,32 @@ def _invocations(harness: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         json.loads(line) for line in harness["log"].read_text(encoding="utf-8").splitlines() if line
     ]
+
+
+def _wait_for_path(path: Path, *, timeout: float = 8) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.01)
+    pytest.fail(f"timed out waiting for {path.name}")
+
+
+def _wait_for_lease_release(path: Path, *, timeout: float = 8) -> None:
+    deadline = time.monotonic() + timeout
+    descriptor = os.open(path, os.O_RDWR)
+    try:
+        while time.monotonic() < deadline:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                time.sleep(0.01)
+                continue
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            return
+    finally:
+        os.close(descriptor)
+    pytest.fail("timed out waiting for terminal ownership lease release")
 
 
 def _terminal_receipt(harness: dict[str, Any]) -> dict[str, Any]:
@@ -1555,9 +1596,220 @@ def test_live_wrapper_lease_excludes_concurrent_initial_cleanup_retry(
     assert json.loads(terminal_path.read_text(encoding="utf-8"))["status"] == ("LAUNCH_COMPLETED")
 
 
+def test_pre_rent_orphan_holds_lease_until_exit_then_cleanup_confirms_absence(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    marker = tmp_path / "provider-paused-before-rent"
+    release = tmp_path / "release-provider-rent"
+    harness["payload"]["environment"].update(
+        {
+            "FAKE_BEFORE_RENT_MARKER": str(marker),
+            "FAKE_BEFORE_RENT_RELEASE": str(release),
+        }
+    )
+    harness["payload"]["provider_timeout_seconds"] = 5
+    _resign(harness)
+    live = subprocess.Popen(
+        _wrapper_argv(harness),
+        env=harness["env"],
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert live.stdin is not None
+        live.stdin.write(harness["credential"] + "\n")
+        live.stdin.close()
+        _wait_for_path(marker)
+        terminal_path = next(harness["ledger"].glob("*.terminal-reconciliation.json"))
+        lease_path = next(harness["ledger"].glob("*.terminal-reconciliation.lease.json"))
+
+        live.kill()
+        assert live.wait(timeout=10) != 0
+        denied = _run_wrapper(harness, retry_terminal_reconciliation=True)
+
+        assert denied.returncode == 2
+        assert "owned by a live wrapper" in denied.stderr
+        assert not harness["allocation_state"].exists()
+        assert not list(harness["ledger"].glob("*.retry-*.json"))
+        release.touch()
+        _wait_for_path(harness["allocation_state"])
+        _wait_for_lease_release(lease_path)
+
+        cleanup = _run_wrapper(harness, retry_terminal_reconciliation=True)
+        retry_path = terminal_path.with_name(
+            f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+        )
+        retry = json.loads(retry_path.read_text(encoding="utf-8"))
+
+        assert cleanup.returncode == 0, cleanup.stderr
+        assert retry["cleanup_status"] == "CONFIRMED_ABSENT"
+        assert retry["reconciliation"]["record"]["observed_attributable_ids"] == ["fake-pod-123"]
+        assert harness["mutation_log"].read_text(encoding="utf-8").splitlines() == ["up"]
+        assert len(_invocations(harness)) == 1
+        assert not harness["allocation_state"].exists()
+        time.sleep(0.1)
+        assert not harness["allocation_state"].exists()
+    finally:
+        if live.poll() is None:
+            live.kill()
+            live.wait(timeout=10)
+        try:
+            os.killpg(live.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for stream in (live.stdout, live.stderr):
+            if stream is not None:
+                stream.close()
+
+
+def test_pre_rent_orphan_hard_timeout_releases_lease_without_mutation(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    marker = tmp_path / "provider-paused-until-hard-timeout"
+    never_release = tmp_path / "never-release-provider-rent"
+    harness["payload"]["environment"].update(
+        {
+            "FAKE_BEFORE_RENT_MARKER": str(marker),
+            "FAKE_BEFORE_RENT_RELEASE": str(never_release),
+        }
+    )
+    harness["payload"]["provider_timeout_seconds"] = 2
+    _resign(harness)
+    live = subprocess.Popen(
+        _wrapper_argv(harness),
+        env=harness["env"],
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert live.stdin is not None
+        live.stdin.write(harness["credential"] + "\n")
+        live.stdin.close()
+        _wait_for_path(marker)
+        terminal_path = next(harness["ledger"].glob("*.terminal-reconciliation.json"))
+        lease_path = next(harness["ledger"].glob("*.terminal-reconciliation.lease.json"))
+
+        live.kill()
+        assert live.wait(timeout=10) != 0
+        denied = _run_wrapper(harness, retry_terminal_reconciliation=True)
+
+        assert denied.returncode == 2
+        assert "owned by a live wrapper" in denied.stderr
+        _wait_for_lease_release(lease_path, timeout=5)
+        assert not harness["allocation_state"].exists()
+        assert not harness["mutation_log"].exists()
+
+        cleanup = _run_wrapper(harness, retry_terminal_reconciliation=True)
+        retry_path = terminal_path.with_name(
+            f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+        )
+
+        assert cleanup.returncode == 0, cleanup.stderr
+        assert json.loads(retry_path.read_text(encoding="utf-8"))["cleanup_status"] == (
+            "CONFIRMED_ABSENT"
+        )
+        assert len(_invocations(harness)) == 1
+        time.sleep(0.1)
+        assert not harness["allocation_state"].exists()
+    finally:
+        if live.poll() is None:
+            live.kill()
+            live.wait(timeout=10)
+        try:
+            os.killpg(live.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for stream in (live.stdout, live.stderr):
+            if stream is not None:
+                stream.close()
+
+
+def test_orphan_cleanup_child_holds_lease_and_has_independent_timeout(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    marker = tmp_path / "cleanup-paused-before-mutation"
+    release = tmp_path / "release-cleanup-mutation"
+    harness["payload"]["environment"].update(
+        {
+            "FAKE_CLEANUP_BEFORE_MUTATION_MARKER": str(marker),
+            "FAKE_CLEANUP_BEFORE_MUTATION_RELEASE": str(release),
+        }
+    )
+    harness["env"]["FAKE_RECONCILIATION_TIMEOUT_SECONDS"] = "2"
+    _resign(harness)
+    _, terminal_path, _ = _seed_initial_terminal_reservation(harness)
+    harness["allocation_state"].write_text(
+        json.dumps([{"id": "orphan-cleanup-target", "name": ALLOCATION_NAME}]),
+        encoding="utf-8",
+    )
+    live = subprocess.Popen(
+        _wrapper_argv(harness, retry_terminal_reconciliation=True),
+        env=harness["env"],
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert live.stdin is not None
+        live.stdin.write(harness["credential"] + "\n")
+        live.stdin.close()
+        _wait_for_path(marker)
+        retry_path = terminal_path.with_name(
+            f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+        )
+        _wait_for_path(retry_path)
+        lease_path = next(harness["ledger"].glob("*.terminal-reconciliation.lease.json"))
+
+        live.kill()
+        assert live.wait(timeout=10) != 0
+        denied = _run_wrapper(harness, retry_terminal_reconciliation=True)
+
+        assert denied.returncode == 2
+        assert "owned by a live wrapper" in denied.stderr
+        assert json.loads(retry_path.read_text(encoding="utf-8"))["status"] == "RESERVED"
+        _wait_for_lease_release(lease_path, timeout=5)
+        assert harness["allocation_state"].exists()
+
+        release.touch()
+        resumed = _run_wrapper(harness, retry_terminal_reconciliation=True)
+        retry = json.loads(retry_path.read_text(encoding="utf-8"))
+
+        assert resumed.returncode == 0, resumed.stderr
+        assert retry["status"] == "RETRY_RECONCILED"
+        assert retry["cleanup_status"] == "CONFIRMED_ABSENT"
+        assert retry["reconciliation"]["record"]["observed_attributable_ids"] == [
+            "orphan-cleanup-target"
+        ]
+        assert not harness["allocation_state"].exists()
+        assert not harness["mutation_log"].exists()
+        assert _invocations(harness) == []
+    finally:
+        if live.poll() is None:
+            live.kill()
+            live.wait(timeout=10)
+        try:
+            os.killpg(live.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for stream in (live.stdout, live.stderr):
+            if stream is not None:
+                stream.close()
+
+
 def test_post_rent_wrapper_death_releases_lease_for_cleanup_retry(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
-    harness["payload"]["environment"]["FAKE_LIUM_SLEEP"] = "5"
+    harness["payload"]["environment"]["FAKE_LIUM_SLEEP"] = "2"
     _resign(harness)
     live = subprocess.Popen(
         _wrapper_argv(harness),
@@ -1594,6 +1846,12 @@ def test_post_rent_wrapper_death_releases_lease_for_cleanup_retry(tmp_path: Path
         assert live.wait(timeout=10) != 0
         terminal_path = next(harness["ledger"].glob("*.terminal-reconciliation.json"))
         assert json.loads(terminal_path.read_text(encoding="utf-8"))["status"] == "RESERVED"
+        lease_path = next(harness["ledger"].glob("*.terminal-reconciliation.lease.json"))
+
+        denied = _run_wrapper(harness, retry_terminal_reconciliation=True)
+        assert denied.returncode == 2
+        assert "owned by a live wrapper" in denied.stderr
+        _wait_for_lease_release(lease_path, timeout=4)
 
         cleanup = _run_wrapper(harness, retry_terminal_reconciliation=True)
         retry_path = terminal_path.with_name(
@@ -1754,6 +2012,8 @@ def test_script_path_swap_immediately_before_popen_executes_held_bytes(
     )
     script_fd = signed_approval._open_verified_executable(permit)
     interpreter_fd = signed_approval._open_verified_interpreter(permit, script_fd)
+    lease_fd = os.open(tmp_path / "held-terminal.lease", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     replacement = tmp_path / "swapped-provider"
     replacement.write_text(
         f"#!{PROVIDER_INTERPRETER}\nprint('SWAPPED-BYTES-EXECUTED')\n",
@@ -1772,10 +2032,13 @@ def test_script_path_swap_immediately_before_popen_executes_held_bytes(
             permit,
             executable_descriptor=script_fd,
             interpreter_descriptor=interpreter_fd,
+            terminal_lease_descriptor=lease_fd,
             provider_environment=harness["payload"]["environment"],
         )
         output, _ = process.communicate(input=(harness["credential"] + "\n").encode(), timeout=10)
     finally:
+        fcntl.flock(lease_fd, fcntl.LOCK_UN)
+        os.close(lease_fd)
         os.close(interpreter_fd)
         os.close(script_fd)
 

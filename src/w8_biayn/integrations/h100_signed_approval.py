@@ -57,15 +57,23 @@ GATE0_CONSUMPTION_ROOT = (
     / ".local/state/w8-biayn/control-plane/gate0-consumption/v1"
 )
 PROVIDER_FD_LOADER = (
-    "import sys\n"
-    "fd_path, display_path, *script_args = sys.argv[1:]\n"
+    "import os, signal, sys\n"
+    "fd_path, display_path, hard_timeout_text, *script_args = sys.argv[1:]\n"
+    "hard_timeout_seconds = int(hard_timeout_text)\n"
+    "def hard_timeout(_signum, _frame):\n"
+    "    os._exit(124)\n"
+    "signal.signal(signal.SIGALRM, hard_timeout)\n"
+    "signal.alarm(hard_timeout_seconds)\n"
     "with open(fd_path, 'rb', buffering=0) as handle:\n"
     "    handle.seek(0)\n"
     "    source = handle.read()\n"
     "sys.argv = [display_path, *script_args]\n"
     "scope = {'__name__': '__main__', '__file__': display_path, "
     "'__package__': None, '__cached__': None}\n"
-    "exec(compile(source, display_path, 'exec'), scope, scope)\n"
+    "try:\n"
+    "    exec(compile(source, display_path, 'exec'), scope, scope)\n"
+    "finally:\n"
+    "    signal.alarm(0)\n"
 )
 
 _HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -640,6 +648,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
                     permit,
                     executable_descriptor=executable_descriptor,
                     interpreter_descriptor=interpreter_descriptor,
+                    terminal_lease_descriptor=terminal_lease_descriptor,
                     provider_environment=provider_environment,
                 )
                 credential_line = bytearray(credential)
@@ -726,6 +735,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
                 pre_snapshot=pre_snapshot,
                 executable_descriptor=executable_descriptor,
                 interpreter_descriptor=interpreter_descriptor,
+                terminal_lease_descriptor=terminal_lease_descriptor,
                 provider_environment=provider_environment,
                 credential=credential,
                 provider_output=provider_output,
@@ -761,6 +771,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
                 pre_snapshot=pre_snapshot,
                 executable_descriptor=executable_descriptor,
                 interpreter_descriptor=interpreter_descriptor,
+                terminal_lease_descriptor=terminal_lease_descriptor,
                 provider_environment=provider_environment,
                 credential=credential,
                 provider_output=provider_output,
@@ -781,6 +792,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
                 pre_snapshot=pre_snapshot,
                 executable_descriptor=executable_descriptor,
                 interpreter_descriptor=interpreter_descriptor,
+                terminal_lease_descriptor=terminal_lease_descriptor,
                 provider_environment=provider_environment,
                 credential=credential,
                 provider_output=provider_output,
@@ -1230,7 +1242,11 @@ def _provider_loader_command(
     permit: VerifiedPermit,
     executable_descriptor: int,
     script_args: Sequence[str],
+    *,
+    hard_timeout_seconds: int,
 ) -> list[str]:
+    if hard_timeout_seconds <= 0:
+        raise PermitVerificationError("provider child hard timeout must be positive")
     return [
         permit.provider_interpreter,
         "-I",
@@ -1238,6 +1254,7 @@ def _provider_loader_command(
         PROVIDER_FD_LOADER,
         f"/dev/fd/{executable_descriptor}",
         permit.provider_executable,
+        str(hard_timeout_seconds),
         *script_args,
     ]
 
@@ -1304,7 +1321,12 @@ def _verify_runtime_evidence(
         cwd=permit.working_directory,
     )
     provider_version = _run_probe(
-        _provider_loader_command(permit, executable_descriptor, ["--version"]),
+        _provider_loader_command(
+            permit,
+            executable_descriptor,
+            ["--version"],
+            hard_timeout_seconds=15,
+        ),
         env=provider_environment,
         cwd=permit.working_directory,
         pass_fds=(executable_descriptor,),
@@ -1344,6 +1366,7 @@ def _start_provider_process(
     *,
     executable_descriptor: int,
     interpreter_descriptor: int,
+    terminal_lease_descriptor: int,
     provider_environment: Mapping[str, str],
 ) -> subprocess.Popen[bytes]:
     # macOS lacks a usable fexecve path for this Python interpreter. A same-UID
@@ -1356,7 +1379,12 @@ def _start_provider_process(
         label="provider interpreter",
     )
     return subprocess.Popen(
-        _provider_loader_command(permit, executable_descriptor, permit.argv[1:]),
+        _provider_loader_command(
+            permit,
+            executable_descriptor,
+            permit.argv[1:],
+            hard_timeout_seconds=int(permit.payload["provider_timeout_seconds"]),
+        ),
         executable=permit.provider_interpreter,
         cwd=permit.working_directory,
         env=dict(provider_environment),
@@ -1364,7 +1392,7 @@ def _start_provider_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         close_fds=True,
-        pass_fds=(executable_descriptor,),
+        pass_fds=(executable_descriptor, terminal_lease_descriptor),
     )
 
 
@@ -1401,6 +1429,7 @@ def _run_provider_control(
     provider_environment: Mapping[str, str],
     credential: bytearray,
     preexisting_ids: Sequence[str] = (),
+    terminal_lease_descriptor: int | None = None,
 ) -> dict[str, Any]:
     _recheck_path_identity(
         Path(permit.provider_interpreter),
@@ -1408,6 +1437,13 @@ def _run_provider_control(
         str(permit.payload["provider_interpreter_sha256"]),
         label="provider interpreter",
     )
+    if mode == "cleanup" and terminal_lease_descriptor is None:
+        raise PermitVerificationError("cleanup control requires terminal ownership lease")
+    if mode not in {"snapshot", "cleanup"}:
+        raise PermitVerificationError("allocation reconciliation mode is invalid")
+    pass_fds = [executable_descriptor]
+    if terminal_lease_descriptor is not None:
+        pass_fds.append(terminal_lease_descriptor)
     try:
         process = subprocess.Popen(
             _provider_loader_command(
@@ -1418,6 +1454,7 @@ def _run_provider_control(
                     mode=mode,
                     preexisting_ids=preexisting_ids,
                 ),
+                hard_timeout_seconds=RECONCILIATION_TIMEOUT_SECONDS,
             ),
             executable=permit.provider_interpreter,
             cwd=permit.working_directory,
@@ -1426,7 +1463,7 @@ def _run_provider_control(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             close_fds=True,
-            pass_fds=(executable_descriptor,),
+            pass_fds=tuple(pass_fds),
         )
     except OSError as exc:
         raise PermitVerificationError("allocation reconciliation could not start") from exc
@@ -2303,6 +2340,7 @@ def _retry_terminal_reconciliation(
                 provider_environment=provider_environment,
                 credential=credential,
                 preexisting_ids=preexisting_ids,
+                terminal_lease_descriptor=lease_descriptor,
             )
             record = reconciliation["record"]
             confirmed = (
@@ -2410,6 +2448,7 @@ def _finish_terminal_reconciliation(
     pre_snapshot: Mapping[str, Any],
     executable_descriptor: int,
     interpreter_descriptor: int,
+    terminal_lease_descriptor: int,
     provider_environment: Mapping[str, str],
     credential: bytearray,
     provider_output: bytes,
@@ -2428,6 +2467,7 @@ def _finish_terminal_reconciliation(
             provider_environment=provider_environment,
             credential=credential,
             preexisting_ids=preexisting_ids,
+            terminal_lease_descriptor=terminal_lease_descriptor,
         )
         record = reconciliation["record"]
         confirmed = (

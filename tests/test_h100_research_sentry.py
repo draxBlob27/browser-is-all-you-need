@@ -805,6 +805,9 @@ def _write_telemetry(stage: Path) -> None:
         ("initial_terminal_reservation_binds_full_pre_snapshot", False),
         ("terminal_reconciliation_ownership", "none"),
         ("cleanup_retry_requires_consumed_claim_within_permit", False),
+        ("mutation_capable_provider_children_inherit_terminal_lease", False),
+        ("provider_child_hard_timeout_required", False),
+        ("cleanup_child_hard_timeout_seconds", 0),
     ],
 )
 def test_contract_pins_initial_reservation_crash_recovery(

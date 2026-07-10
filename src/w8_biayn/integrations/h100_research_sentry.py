@@ -3876,6 +3876,16 @@ def _validate_contract(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
                 "cleanup_retry_requires_consumed_claim_within_permit"
             )
             is True
+            and (payload.get("authorization") or {}).get(
+                "mutation_capable_provider_children_inherit_terminal_lease"
+            )
+            is True
+            and (payload.get("authorization") or {}).get("provider_child_hard_timeout_required")
+            is True
+            and _integer(
+                (payload.get("authorization") or {}).get("cleanup_child_hard_timeout_seconds")
+            )
+            == 120
             and (payload.get("authorization") or {}).get("provider_rent_boundary_evidence_required")
             is True
             and (payload.get("authorization") or {}).get("cleanup_retry_survives_gate0_expiry")

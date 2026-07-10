@@ -171,10 +171,13 @@ one unchanged 8x H100 node:
   The initial terminal reservation persists that exact validated pre-snapshot
   with permit, allocation, and expected-claim bindings. A kernel-backed
   exclusive lease prevents cleanup from racing a live wrapper and is released
-  automatically on process death. Cleanup retains an append-only retry chain
-  that remains cleanup-only after Gate 0 expiry when the consumed claim was
-  created inside the permit interval; an expired permit can never be revived
-  for launch.
+  only after every mutation-capable provider child exits. Both the signed rent
+  child and cleanup-control children inherit the locked open-file description
+  and enforce their own hard deadlines, so wrapper death cannot create a false
+  absence window or an indefinitely held lease. Cleanup retains an append-only
+  retry chain that remains cleanup-only after Gate 0 expiry when the consumed
+  claim was created inside the permit interval; an expired permit can never be
+  revived for launch.
 - Supervisor shutdown executes through the same absolute hash-pinned Python
   3.11 runtime that contains Lium SDK 0.0.3; a generic PATH-selected Python is
   not an accepted cleanup path.
