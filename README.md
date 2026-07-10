@@ -29,10 +29,11 @@ uses one rollout, one sample per prompt, batch size 4, short responses, eval
 disabled, and `SLIME_RAY_MEMORY_USAGE_THRESHOLD=0.99` so Ray does not kill the
 Megatron train actors during the temporary host-RAM spike at checkpoint load.
 
-## Miles GLM-4.7 H100:8 Fast Profile
+## Miles GLM-4.7 H100:8 Validated Profile
 
-The fastest single-node GLM-4.7-Flash Miles path is explicit rather than hidden
-behind generic Moonlight defaults:
+The current validated single-node GLM-4.7-Flash Miles path is explicit rather
+than hidden behind generic Moonlight defaults. It is the control profile for
+the acceptance experiment below, not yet a proved fastest configuration:
 
 - checkpoint layout: TP4 / PP1 / EP8 / ETP1
 - training node: 8x H100, 4096 sequence length, 16384 max tokens per GPU,
@@ -112,6 +113,13 @@ bash examples/miles/glm47_cpp_perf_lora_r16_h100_grpo.sh
 ```
 
 ### 8x H100 MFU sweep
+
+The original issue-31 sweep is screening evidence, not proof of an optimized
+winner. The active acceptance contract, role boundaries, paired-run protocol,
+and budget gates live in
+[`docs/H100_RESEARCH_SUPERVISION.md`](docs/H100_RESEARCH_SUPERVISION.md) and
+[`examples/miles/h100_fastest_acceptance.json`](examples/miles/h100_fastest_acceptance.json).
+Do not promote the short-window sweep winner without passing that contract.
 
 Miles computes active-MoE forward FLOPs for the observed sequence lengths,
 multiplies by three for training, then divides by distributed world size and

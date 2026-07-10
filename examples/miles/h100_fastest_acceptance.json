@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "contract_id": "h100-fastest-accepted-v1",
+  "goal": "Fastest accepted GLM-4.7-Flash LoRA SFT and GRPO configuration on one 8x H100 node",
+  "claim_boundary": "fastest tested configuration on the pinned 8x H100 stack and declared search space",
+  "metric_definition": {
+    "name": "estimated_active_model_equivalent_mfu",
+    "actor_tflops_metric": "perf/actor_train_tflops",
+    "bf16_peak_tflops_per_gpu": 989.0,
+    "formula": "perf/actor_train_tflops / 989.0",
+    "absolute_hardware_mfu_claim_allowed": false,
+    "freeze_formula_during_comparisons": true
+  },
+  "historical_reference": {
+    "actor_tflops_per_gpu_median": 20.46292670240481,
+    "estimated_mfu_percent_median": 2.0690522449347637,
+    "global_actor_tokens_per_second_median": 6735.536057011609,
+    "measured_post_warmup_steps": 11,
+    "peak_vram_mib": 72695,
+    "status": "descriptive_reference_not_promotion_evidence"
+  },
+  "acceptance": {
+    "minimum_relative_mfu_gain": 0.03,
+    "minimum_relative_actor_throughput_gain": 0.03,
+    "minimum_historical_mfu_percent": 2.1311238122828066,
+    "minimum_historical_actor_tokens_per_second": 6937.602138721957,
+    "paired_one_sided_confidence_level": 0.95,
+    "minimum_paired_confidence_ratio": 1.0,
+    "t1_clean_control_repeats": 2,
+    "t1_clean_candidate_repeats": 2,
+    "minimum_final_independent_process_pairs": 4,
+    "minimum_measured_steps_per_leg": 12,
+    "minimum_vram_headroom_mib": 4096,
+    "early_stop_minimum_throughput_retention": 0.98,
+    "require_fixed_workload": true,
+    "require_finite_loss_and_grad_norm": true,
+    "require_verified_timing": true,
+    "require_checkpoint_load": true,
+    "require_grpo_fit_sync_and_save": true,
+    "require_independent_raw_evidence_audit": true,
+    "t1_has_final_confidence_authority": false,
+    "final_confidence_unit": "aggregate_process_pair_log_ratio",
+    "step_or_workload_block_pseudoreplication_allowed": false
+  },
+  "fixed_workload": {
+    "dataset_rows": 128,
+    "dataset_sha256": "f1f5f70b1e77dbb6da51d075a35b2e48f784f4080873f356c9c4bd3c83a3d783",
+    "sequence_length": 4096,
+    "global_batch_size": 32,
+    "rollout_batch_size": 32,
+    "micro_batch_size": 1,
+    "precision": "bf16",
+    "lora_rank": 16
+  },
+  "hardware": {
+    "gpu_count": 8,
+    "gpu_model_contains": "H100",
+    "minimum_memory_mib_per_gpu": 80000,
+    "required_peer_topology": "NV18",
+    "single_node": true
+  },
+  "source_pins": {
+    "training_base_sha": "cd83e3c8780f09e38e5b58558d84580e74afbcf6",
+    "measurement_repo_sha_source": "runtime_git_head",
+    "require_clean_measurement_tree": true,
+    "allowed_paths_since_training_base": [
+      "README.md",
+      "docs/H100_RESEARCH_SUPERVISION.md",
+      "docs/issues/32-dispatcher-abba.md",
+      "docs/issues/33-h100-research-sentry.md",
+      "docs/issues/34-signed-h100-launch-approvals.md",
+      "examples/miles/h100_fastest_acceptance.json",
+      "scripts/h100_research_sentry.py",
+      "scripts/h100_sign_research_artifact.py",
+      "scripts/lium_create_h100_pod.py",
+      "scripts/reconstruct_issue31_train_data.py",
+      "scripts/run_lium_h100_tranche.py",
+      "scripts/run_miles_h100_dispatcher_abba.py",
+      "src/w8_biayn/integrations/h100_research_sentry.py",
+      "src/w8_biayn/integrations/h100_signed_approval.py",
+      "tests/test_h100_research_sentry.py",
+      "tests/test_h100_sign_research_artifact.py",
+      "tests/test_lium_create_h100_pod.py",
+      "tests/test_lium_h100_tranche.py",
+      "tests/test_miles_h100_dispatcher_abba.py",
+      "tests/test_reconstruct_issue31_train_data.py"
+    ],
+    "miles_sha": "01a6d7bb74befa6e97579c80a2b1add0667606f3",
+    "megatron_sha": "79fc0894d0ba57acd10a9c0da507abd1dfef3bdf"
+  },
+  "runtime_pins": {
+    "container_image": "radixark/miles@sha256:d86263bf0024adb655eb63b802fe9d0f335737f6991b08b84b7c5a8202a7dc91",
+    "container_platform": "linux/amd64",
+    "hf_model": "zai-org/GLM-4.7-Flash",
+    "hf_revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+    "lium_cli_version": "0.0.3",
+    "lium_provider_version": "1.0.0"
+  },
+  "current_experiment": {
+    "issue": "https://github.com/tokenbender/browser-is-all-you-need/issues/32",
+    "stage": "T1_SCREEN",
+    "possible_success_state": "PROMOTE_TO_CONFIRMATION",
+    "can_establish_final_performance_acceptance": false,
+    "order": ["A1", "B1", "B2", "A2"],
+    "total_perf_steps_per_leg": 16,
+    "discarded_warmup_steps_per_leg": 2,
+    "measured_steps_per_leg": 14,
+    "control": {
+      "moe_token_dispatcher_type": "flex",
+      "moe_enable_deepep": true
+    },
+    "candidate": {
+      "moe_token_dispatcher_type": "alltoall",
+      "moe_enable_deepep": false
+    },
+    "all_other_configuration_must_match": true
+  },
+  "stage_order": [
+    "BOOKING_REQUEST",
+    "GATE0_AUTHORIZED",
+    "ALLOCATED",
+    "GATE1_PREFLIGHT",
+    "T1_SCREEN",
+    "PROMOTE_TO_CONFIRMATION",
+    "T2_CONFIRMATION",
+    "PERFORMANCE_ACCEPTED",
+    "GRPO_VALIDATED",
+    "INDEPENDENT_AUDIT_ACCEPT",
+    "FINAL"
+  ],
+  "final_statistics": {
+    "minimum_independent_process_pairs": 4,
+    "per_pair_value": "log(candidate_aggregate_rate/control_aggregate_rate)",
+    "minimum_geometric_mean_ratio": 1.03,
+    "one_sided_student_t_confidence_level": 0.95,
+    "minimum_log_ratio_lower_bound": 0.0
+  },
+  "audit_artifact": {
+    "required_decision": "ACCEPT",
+    "required_fields": [
+      "bounded_claim",
+      "artifact_manifest_sha256",
+      "constituent_sha256",
+      "auditor_identity",
+      "auditor_timestamp",
+      "auditor_key_id",
+      "parent_decision_sha256",
+      "signature_base64"
+    ],
+    "runner_may_author": false,
+    "sentry_may_author": false
+  },
+  "budget": {
+    "tranche_id": "T1",
+    "maximum_node_hours": 2.0,
+    "maximum_usd": 36.0,
+    "expected_node_hourly_rate_usd": 18.0,
+    "unused_budget_transfer_allowed": false,
+    "ttl_hours": 2
+  },
+  "authorization": {
+    "signature_algorithm": "Ed25519",
+    "gate0_required_before_provider_mutation": true,
+    "gate0_single_use": true,
+    "gate1_single_use": true,
+    "maximum_gate0_ttl_seconds": 7200,
+    "maximum_gate1_ttl_seconds": 1800,
+    "require_domain_separation": true,
+    "require_exact_parent_digest_chain": true,
+    "require_distinct_sentry_and_auditor_keys": true,
+    "private_keys_may_be_committed": false
+  },
+  "issues": {
+    "master": "https://github.com/tokenbender/browser-is-all-you-need/issues/31",
+    "sentry": "https://github.com/tokenbender/browser-is-all-you-need/issues/33",
+    "signed_approvals": "https://github.com/tokenbender/browser-is-all-you-need/issues/34",
+    "parent_training": "https://github.com/tokenbender/browser-is-all-you-need/issues/10",
+    "project_ledger": "https://github.com/tokenbender/browser-is-all-you-need/issues/1"
+  }
+}

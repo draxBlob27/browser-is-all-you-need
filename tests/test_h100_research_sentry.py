@@ -1,0 +1,1734 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import sys
+import base64
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from w8_biayn.integrations.h100_research_sentry import (
+    AUDIT_DECISION_DOMAIN,
+    T2_AUTHORIZATION_DOMAIN,
+    DecisionReplayError,
+    DecisionSecurityError,
+    SentrySecurity,
+    Stage,
+    evaluate_confirmation,
+    evaluate_final,
+    evaluate_grpo,
+    evaluate_preflight,
+    evaluate_promotion,
+    evaluate_screen,
+    main,
+    sign_bounded_payload,
+    signature_domain_for_kind,
+    verify_consume_and_execute,
+    verify_signed_decision,
+)
+from w8_biayn.integrations.h100_signed_approval import (
+    ENVELOPE_SCHEMA,
+    PERMIT_SCHEMA,
+    PUBLIC_KEY_SCHEMA,
+    SIGNATURE_DOMAIN,
+    domain_separated_message,
+    key_id_for_public_key,
+)
+from w8_biayn.integrations.miles_mfu import (
+    summarize_miles_mfu_trial,
+    write_trial_summary,
+)
+
+
+TRAINING_BASE_SHA = "cd83e3c8780f09e38e5b58558d84580e74afbcf6"
+CURRENT_REPO_SHA = "f" * 40
+MILES_SHA = "01a6d7bb74befa6e97579c80a2b1add0667606f3"
+MEGATRON_SHA = "79fc0894d0ba57acd10a9c0da507abd1dfef3bdf"
+CLAIM = "fastest tested configuration on the pinned 8x H100 stack and declared search space"
+RUNNER_SCRIPT = Path(__file__).parents[1] / "scripts/run_miles_h100_dispatcher_abba.py"
+TEST_NOW = datetime(2026, 7, 10, 0, 5, tzinfo=timezone.utc)
+
+
+def _write_test_key(root: Path, name: str) -> tuple[Path, Path]:
+    private_path = root / "keys" / f"{name}.pem"
+    public_path = root / "keys" / f"{name}.public.json"
+    if private_path.is_file() and public_path.is_file():
+        return private_path, public_path
+    private_path.parent.mkdir(parents=True, exist_ok=True)
+    private_key = Ed25519PrivateKey.generate()
+    private_path.write_bytes(
+        private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    private_path.chmod(0o600)
+    public_raw = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    _json(
+        public_path,
+        {
+            "schema": PUBLIC_KEY_SCHEMA,
+            "algorithm": "Ed25519",
+            "key_id": key_id_for_public_key(public_raw),
+            "public_key_base64": base64.b64encode(public_raw).decode("ascii"),
+        },
+    )
+    return private_path, public_path
+
+
+def _test_security(root: Path) -> SentrySecurity:
+    sentry_private, sentry_public = _write_test_key(root, "sentry")
+    _, supervisor_public = _write_test_key(root, "supervisor")
+    _, auditor_public = _write_test_key(root, "auditor")
+    return SentrySecurity(
+        signing_private_key_path=sentry_private,
+        sentry_public_key_path=sentry_public,
+        sentry_principal="research-sentry",
+        executor_principal="h100-runner",
+        supervisor_public_key_path=supervisor_public,
+        supervisor_principal="research-supervisor",
+        auditor_public_key_path=auditor_public,
+        auditor_principal="independent-auditor",
+        now=TEST_NOW,
+    )
+
+
+def _test_private_key(root: Path, name: str) -> Path:
+    private, _ = _write_test_key(root, name)
+    return private
+
+
+def _copy_test_keys(source: Path, destination: Path) -> None:
+    target = destination / "keys"
+    target.mkdir(parents=True, exist_ok=True)
+    for path in (source / "keys").iterdir():
+        copied = target / path.name
+        copied.write_bytes(path.read_bytes())
+        if copied.suffix == ".pem":
+            copied.chmod(0o600)
+
+
+def _json(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_gate0_chain(
+    root: Path,
+    security: SentrySecurity,
+    *,
+    now: datetime = TEST_NOW,
+) -> dict[str, Path]:
+    issued_at = now.astimezone(timezone.utc).replace(microsecond=0) - timedelta(minutes=1)
+    expires_at = issued_at + timedelta(hours=1)
+    consumed_at = issued_at + timedelta(seconds=30)
+    booking = _json(
+        root / "gate0/booking_request.json",
+        {"issue_number": 32, "allocation_name": "issue-32-dispatcher"},
+    )
+    provider_output = _json(
+        root / "gate0/provider_output.json",
+        {"allocation": {"id": "alloc-h100-001", "name": "issue-32-dispatcher"}},
+    )
+    private = serialization.load_pem_private_key(
+        Path(security.signing_private_key_path).read_bytes(), password=None
+    )
+    assert isinstance(private, Ed25519PrivateKey)
+    public_document = json.loads(Path(security.sentry_public_key_path).read_text(encoding="utf-8"))
+    permit_payload = {
+        "schema": PERMIT_SCHEMA,
+        "stage": "lium-booking",
+        "decision": "PROMOTABLE",
+        "request_id": "gate0-request-0001",
+        "nonce": "1" * 64,
+        "issued_at": issued_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expires_at": expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sentry_principal": security.sentry_principal,
+        "executor_principal": security.executor_principal,
+        "parent_request_sha256": _sha256(booking),
+        "provider": "lium",
+        "profile": "h100-sxm",
+        "issue_number": 32,
+        "allocation_name": "issue-32-dispatcher",
+        "gpu_type": "H100",
+        "gpu_count": 8,
+        "ttl_seconds": 7200,
+        "max_cost_usd": "36",
+        "max_node_hours": "2",
+    }
+    permit = _json(
+        root / "gate0/permit.json",
+        {
+            "schema": ENVELOPE_SCHEMA,
+            "key_id": public_document["key_id"],
+            "payload": permit_payload,
+            "signature_base64": base64.b64encode(
+                private.sign(domain_separated_message(SIGNATURE_DOMAIN, permit_payload))
+            ).decode("ascii"),
+        },
+    )
+    claim = _json(
+        root / "gate0/claim.consumed.json",
+        {
+            "key_id": public_document["key_id"],
+            "nonce": permit_payload["nonce"],
+            "permit_sha256": _sha256(permit),
+            "request_id": permit_payload["request_id"],
+            "consumed_at": consumed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+    )
+    receipt = _json(
+        root / "gate0/launch_receipt.json",
+        {
+            "schema": "h100-lium-launch-receipt/v1",
+            "status": "COMPLETED",
+            "permit": {
+                "path": str(permit),
+                "sha256": _sha256(permit),
+                "key_id": public_document["key_id"],
+                "request_id": permit_payload["request_id"],
+                "nonce": permit_payload["nonce"],
+                "issued_at": permit_payload["issued_at"],
+                "expires_at": permit_payload["expires_at"],
+            },
+            "claim": {
+                "path": str(claim),
+                "sha256": _sha256(claim),
+                "consumed_at": consumed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+            "parent_request": {"path": str(booking), "sha256": _sha256(booking)},
+            "provider_output": {
+                "path": str(provider_output),
+                "sha256": _sha256(provider_output),
+                "size_bytes": provider_output.stat().st_size,
+            },
+            "allocation": {"issue_number": 32, "name": "issue-32-dispatcher"},
+        },
+    )
+    return {
+        "permit": permit,
+        "public_key": Path(security.sentry_public_key_path),
+        "launch_receipt": receipt,
+        "booking_request": booking,
+        "provider_output": provider_output,
+    }
+
+
+def _save_decision(path: Path, payload: dict[str, Any]) -> Path:
+    return _json(path, payload)
+
+
+def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
+    contract_source = Path(__file__).parents[1] / "examples/miles/h100_fastest_acceptance.json"
+    contract = root / "contract.json"
+    contract.parent.mkdir(parents=True, exist_ok=True)
+    contract.write_text(contract_source.read_text(encoding="utf-8"), encoding="utf-8")
+    topology = "\n".join(
+        "\t".join([f"GPU{index}", *["X" if peer == index else "NV18" for peer in range(8)]])
+        for index in range(8)
+    )
+    hardware = _json(
+        root / "hardware.json",
+        {
+            "ok": True,
+            "gpu_rows": [
+                f"{index}, NVIDIA H100 80GB HBM3, 81559, 595.1, 0000:{index:02x}:00.0"
+                for index in range(8)
+            ],
+            "topology": topology,
+            "repo_sha": CURRENT_REPO_SHA,
+            "training_base_sha": TRAINING_BASE_SHA,
+            "miles_sha": MILES_SHA,
+            "megatron_sha": MEGATRON_SHA,
+        },
+    )
+    budget = _json(
+        root / "budget.json",
+        {
+            "provider": "Lium",
+            "tranche_id": "T1",
+            "accelerators": "8xH100-SXM-80GB",
+            "hourly_rate_usd": 18.0,
+            "planned_hours": 1.0,
+            "unused_budget_transfer_allowed": False,
+            "source_commit": CURRENT_REPO_SHA,
+        },
+    )
+    source = _json(
+        root / "receipts/source.json",
+        {
+            "schema_version": 1,
+            "ok": True,
+            "errors": [],
+            "repo_sha": CURRENT_REPO_SHA,
+            "training_base_sha": TRAINING_BASE_SHA,
+            "training_base_is_ancestor": True,
+            "worktree_clean": True,
+            "changed_paths_since_training_base": [],
+            "allowed_paths_since_training_base": [],
+            "disallowed_paths": [],
+        },
+    )
+    immutable = {
+        "protocol": _json(
+            root / "protocol.json",
+            {"schema_version": 2, "authority": "executor_evidence_only"},
+        ),
+        "source": source,
+        "hardware": hardware,
+        "checkpoint": _json(
+            root / "receipts/checkpoint.json",
+            {"schema_version": 1, "checkpoint": "fixed"},
+        ),
+        "data": _json(
+            root / "receipts/data.json",
+            {"schema_version": 1, "sha256": "1" * 64, "row_count": 128},
+        ),
+        "wandb_auth": _json(
+            root / "receipts/wandb_auth.json",
+            {"schema_version": 1, "ok": True, "authenticated_api_read": True},
+        ),
+        "runtime": _json(
+            root / "receipts/runtime.json",
+            {"returncode": 0, "stdout": "ok", "stderr": ""},
+        ),
+        "budget": budget,
+    }
+    input_hashes = {name: _sha256(path) for name, path in immutable.items()}
+    manifest = _json(
+        root / "prepare_manifest.json",
+        {
+            "schema_version": 1,
+            "authority": "executor_prepare_evidence",
+            "ok": True,
+            "artifacts": {name: str(path) for name, path in immutable.items()},
+            "sha256": input_hashes,
+        },
+    )
+    request = _json(
+        root / "preflight_request.json",
+        {
+            "schema_version": 1,
+            "requested_stage": "preflight",
+            "input_hashes": input_hashes,
+            "prepare_manifest_sha256": _sha256(manifest),
+            "source_identity": {
+                "repo_sha": CURRENT_REPO_SHA,
+                "training_base_sha": TRAINING_BASE_SHA,
+            },
+        },
+    )
+    return contract, hardware, budget, request
+
+
+def _write_telemetry(stage: Path) -> None:
+    rows = ["timestamp,index,clocks.sm,power.draw,temperature.gpu,clocks_throttle_reasons.active"]
+    for timestamp in ("2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z"):
+        rows.extend(f"{timestamp},{index},1410,500,65,0x0000000000000000" for index in range(8))
+    (stage / "gpu_telemetry.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def _write_wandb_bundle(
+    output_dir: Path,
+    *,
+    run_id: str,
+    experiment_id: str,
+    job_stage: str,
+    metric_event_count: int,
+    artifact_files: tuple[Path, ...] = (),
+    rollout_rows: int = 0,
+) -> tuple[Path, Path, Path]:
+    evidence = _json(
+        output_dir / f"{run_id}.evidence_summary.json",
+        {
+            "schema_version": 1,
+            "experiment_id": experiment_id,
+            "timing_status": "verified",
+            "metric_event_count": metric_event_count,
+            "sample_rows_total": {"rollout": rollout_rows, "eval": 0},
+            "checkpoint_file_count": len(artifact_files),
+        },
+    )
+    artifact_manifest = _json(
+        output_dir / f"{run_id}.artifact_manifest.json",
+        {
+            "schema_version": 1,
+            "files": [
+                {
+                    "name": path.name,
+                    "size_bytes": path.stat().st_size,
+                    "sha256": _sha256(path),
+                }
+                for path in artifact_files
+            ],
+            "skipped": [],
+        },
+    )
+    downloaded_files = {
+        evidence.name: _sha256(evidence),
+        artifact_manifest.name: _sha256(artifact_manifest),
+        **{path.name: _sha256(path) for path in artifact_files},
+    }
+    readback = _json(
+        output_dir / "wandb_readback.json",
+        {
+            "schema": "h100-wandb-readback/v1",
+            "ok": True,
+            "errors": [],
+            "authenticated_api_read": True,
+            "entity": "research-team",
+            "project": "glm47-pie-cpp-posttraining",
+            "run_id": run_id,
+            "experiment_id": experiment_id,
+            "stage": job_stage,
+            "local_artifact_sha256": {
+                "evidence_summary": _sha256(evidence),
+                "artifact_manifest": _sha256(artifact_manifest),
+            },
+            "remote": {
+                "run_id": run_id,
+                "state": "finished",
+                "summary": {
+                    "timing_status": "verified",
+                    "experiment_id": experiment_id,
+                    "stage": job_stage,
+                    "status": "success",
+                    "metric_event_count": metric_event_count,
+                    "artifact_file_count": len(artifact_files),
+                },
+                "config": {
+                    "timing_status": "verified",
+                    "experiment_id": experiment_id,
+                },
+                "matching_artifacts": [
+                    {
+                        "name": f"{experiment_id}-{job_stage}-run:v0",
+                        "digest": "remote-artifact-digest",
+                        "metadata": {
+                            "experiment_id": experiment_id,
+                            "stage": job_stage,
+                            "status": "success",
+                            "timing_status": "verified",
+                        },
+                        "downloaded_files": downloaded_files,
+                    }
+                ],
+            },
+        },
+    )
+    return readback, evidence, artifact_manifest
+
+
+def _write_trial(
+    root: Path,
+    *,
+    name: str,
+    ratio: float,
+    candidate: bool,
+    tranche: str,
+) -> Path:
+    stage = root / "sft_lora_r16"
+    stage.mkdir(parents=True)
+    log = stage / "run.log"
+    receipt = stage / "run_receipt.txt"
+    token_cycle = (93021, 101665, 112769, 86256)
+    lines: list[str] = []
+    for step in range(16):
+        work_tokens = token_cycle[step % len(token_cycle)]
+        tok_s = 6800.0 * ratio
+        actor_time = work_tokens / tok_s
+        actor_tflops = 21.0 * ratio
+        lines.append(
+            "train_metric_utils.py:50 - perf "
+            f"{step}: {{'perf/actor_train_time': {actor_time}, "
+            f"'perf/actor_train_tflops': {actor_tflops}, "
+            f"'perf/actor_train_tok_per_s': {tok_s}, "
+            f"'perf/step_time': {actor_time + 8.0}, 'perf/wait_time_ratio': 0.3}}"
+        )
+        lines.append(
+            f"log_utils.py:463 - step {step}: {{'train/loss': 0.25, 'train/grad_norm': 0.3}}"
+        )
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    dispatcher = "alltoall" if candidate else "flex"
+    deepep = 0 if candidate else 1
+    receipt.write_text(
+        "status=success\n"
+        "ray_status=0\n"
+        "wall_s=60\n"
+        "run_started_at_utc=2026-07-10T00:00:00Z\n"
+        "run_finished_at_utc=2026-07-10T00:01:00Z\n"
+        "max_memory_used_mib=74000\n"
+        "data_dir=/data/fixed-long128\n"
+        "tasks_dir=/data/fixed-tasks\n"
+        "hf_checkpoint=/models/GLM-4.7-Flash\n"
+        "model_args_path=/miles/glm4.7-flash.sh\n"
+        "ref_load=/models/GLM-4.7-Flash_tp4_ep8\n"
+        "seq_length=4096\n"
+        "gpus_per_node=8\n"
+        "tensor_model_parallel_size=4\n"
+        "pipeline_model_parallel_size=1\n"
+        "context_parallel_size=1\n"
+        "expert_model_parallel_size=8\n"
+        "expert_tensor_parallel_size=1\n"
+        "max_tokens_per_gpu=16384\n"
+        "micro_batch_size=1\n"
+        "use_dynamic_batch_size=1\n"
+        "balance_data=1\n"
+        "sft_rollout_shuffle=0\n"
+        "rollout_batch_size=32\n"
+        "global_batch_size=32\n"
+        "lora_rank=16\n"
+        "no_gradient_accumulation_fusion=1\n"
+        f"moe_token_dispatcher_type={dispatcher}\n"
+        f"moe_enable_deepep={deepep}\n"
+        "recompute_granularity=selective\n"
+        "cuda_device_max_connections=1\n"
+        "extra_args=--no-offload-train\n"
+        "timing_status=verified\n"
+        "wandb_entity=research-team\n"
+        "wandb_project=glm47-pie-cpp-posttraining\n"
+        f"wandb_run_id={name}\n"
+        "experiment_id=issue32-test\n"
+        "wandb_stage=dispatcher-abba\n"
+        f"tranche_id={tranche}\n",
+        encoding="utf-8",
+    )
+    summary = summarize_miles_mfu_trial(
+        log_path=log,
+        receipt_path=receipt,
+        round_number=1,
+        name=name,
+    )
+    summary["launcher_exit_code"] = 0
+    summary_path = write_trial_summary(root / "trial_summary.json", summary)
+    _write_wandb_bundle(
+        stage,
+        run_id=name,
+        experiment_id="issue32-test",
+        job_stage="dispatcher-abba",
+        metric_event_count=16,
+    )
+    _write_telemetry(stage)
+    return summary_path
+
+
+def _write_leg_evidence(summary: Path, leg_id: str) -> dict[str, Any]:
+    leg_root = summary.parent
+    stage = leg_root / "sft_lora_r16"
+    evidence_paths = {
+        "trial_summary": summary,
+        "leg_summary": _json(
+            leg_root / "leg_summary.json",
+            {
+                "schema_version": 1,
+                "authority": "executor_supplementary_evidence",
+                "valid": True,
+            },
+        ),
+        "run_log": stage / "run.log",
+        "run_receipt": stage / "run_receipt.txt",
+        "gpu_telemetry": stage / "gpu_telemetry.csv",
+        "nvlink_before": _json(leg_root / "nvlink_before.json", {"supported": True}),
+        "nvlink_after": _json(leg_root / "nvlink_after.json", {"supported": True}),
+        "wandb_readback": stage / "wandb_readback.json",
+        "wandb_evidence_summary": next(stage.glob("*.evidence_summary.json")),
+        "wandb_artifact_manifest": next(stage.glob("*.artifact_manifest.json")),
+    }
+    manifest = _json(
+        leg_root / "leg_evidence_manifest.json",
+        {
+            "schema_version": 1,
+            "authority": "executor_raw_evidence",
+            "leg": leg_id,
+            "paths": {name: str(path) for name, path in evidence_paths.items()},
+            "sha256": {name: _sha256(path) for name, path in evidence_paths.items()},
+            "valid": True,
+        },
+    )
+    return {
+        "leg_id": leg_id,
+        "leg_root": str(leg_root),
+        "trial_summary": str(summary),
+        "leg_summary": str(evidence_paths["leg_summary"]),
+        "evidence_manifest": str(manifest),
+        "evidence_manifest_sha256": _sha256(manifest),
+        "valid": True,
+    }
+
+
+def _write_screen_request(root: Path, control: Path, candidate: Path) -> Path:
+    legs = [
+        _write_leg_evidence(control, "a1"),
+        _write_leg_evidence(candidate, "b1"),
+    ]
+    _json(
+        root / "first_pair_result.json",
+        {
+            "status": "first_pair_complete",
+            "authority": "executor_evidence",
+            "legs": legs,
+        },
+    )
+    return _json(
+        root / "screen_request.json",
+        {
+            "schema_version": 1,
+            "requested_stage": "screen",
+            "evidence_hashes": {leg["leg_id"]: leg["evidence_manifest_sha256"] for leg in legs},
+            "trial_summary_hashes": {
+                leg["leg_id"]: _sha256(Path(leg["trial_summary"])) for leg in legs
+            },
+            "source_identity": {
+                "repo_sha": CURRENT_REPO_SHA,
+                "training_base_sha": TRAINING_BASE_SHA,
+            },
+        },
+    )
+
+
+def _runner_module() -> dict[str, Any]:
+    spec = importlib.util.spec_from_file_location("h100_runner_for_sentry_test", RUNNER_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return vars(module)
+
+
+def _run_preflight(root: Path) -> tuple[Path, Path, Path, Path]:
+    security = _test_security(root)
+    gate0 = _write_gate0_chain(root, security)
+    contract, hardware, budget, request = _write_preflight_inputs(root)
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+        command="sentry preflight",
+    )
+    return contract, hardware, budget, _save_decision(root / "preflight.json", result)
+
+
+def _run_screen(
+    root: Path, *, ratio: float = 1.04, control_scale: float = 1.0
+) -> tuple[Path, Path, Path, Path, Path, dict[str, Any]]:
+    contract, hardware, _, preflight = _run_preflight(root)
+    control = _write_trial(
+        root / "A1",
+        name="A1",
+        ratio=control_scale,
+        candidate=False,
+        tranche="T1",
+    )
+    candidate = _write_trial(
+        root / "B1",
+        name="B1",
+        ratio=control_scale * ratio,
+        candidate=True,
+        tranche="T1",
+    )
+    request = _write_screen_request(root, control, candidate)
+    security = _test_security(root)
+    result = evaluate_screen(
+        preflight_decision_path=preflight,
+        control_path=control,
+        candidate_path=candidate,
+        request_path=request,
+        security=security,
+        command="sentry screen",
+    )
+    decision = _save_decision(root / "screen.json", result)
+    return contract, hardware, control, candidate, decision, result
+
+
+def _run_promotion(
+    root: Path, *, a2_scale: float = 1.0
+) -> tuple[Path, list[Path], list[Path], Path, dict[str, Any]]:
+    contract, _, a1, b1, screen, _ = _run_screen(root)
+    controls = [
+        a1,
+        _write_trial(
+            root / "A2",
+            name="A2",
+            ratio=a2_scale,
+            candidate=False,
+            tranche="T1",
+        ),
+    ]
+    candidates = [
+        b1,
+        _write_trial(
+            root / "B2",
+            name="B2",
+            ratio=a2_scale * 1.04,
+            candidate=True,
+            tranche="T1",
+        ),
+    ]
+    result = evaluate_promotion(
+        screen_decision_path=screen,
+        control_paths=controls,
+        candidate_paths=candidates,
+        security=_test_security(root),
+        command="sentry promotion",
+    )
+    decision = _save_decision(root / "promotion.json", result)
+    return contract, controls, candidates, decision, result
+
+
+def _write_confirmation_request(
+    root: Path,
+    promotion: Path,
+    controls: list[Path],
+    candidates: list[Path],
+) -> Path:
+    parent_hash = _sha256(promotion)
+    security = _test_security(root)
+    unsigned_budget = {
+        "schema_version": 1,
+        "authority": "supervisor_t2_authorization",
+        "authorization_id": "T2-AUTH-001",
+        "authorized": True,
+        "authorized_by": "research-supervisor",
+        "authorized_at_utc": "2026-07-10T00:03:00Z",
+        "tranche_id": "T2",
+        "provider": "Lium",
+        "accelerators": "8xH100-SXM-80GB",
+        "planned_hours": 1.0,
+        "maximum_node_hours": 2.0,
+        "hourly_rate_usd": 18.0,
+        "maximum_usd": 36.0,
+        "unused_budget_transfer_allowed": False,
+        "source_commit": CURRENT_REPO_SHA,
+        "parent_t1_promotion_sha256": parent_hash,
+        "issue_number": 32,
+        "nontransferable": True,
+    }
+    budget = _json(
+        root / "t2_budget.json",
+        sign_bounded_payload(
+            unsigned_budget,
+            private_key_path=_test_private_key(root, "supervisor"),
+            public_key_path=security.supervisor_public_key_path,  # type: ignore[arg-type]
+            domain=T2_AUTHORIZATION_DOMAIN,
+            signer_principal=security.supervisor_principal or "",
+            verifier_principal=security.executor_principal,
+            request_id="t2-authorization-0001",
+            nonce="2" * 64,
+            issued_at=TEST_NOW,
+            expires_at=TEST_NOW + timedelta(hours=1),
+        ),
+    )
+    labeled = {
+        **{f"a{index}": path for index, path in enumerate(controls, 1)},
+        **{f"b{index}": path for index, path in enumerate(candidates, 1)},
+    }
+    readbacks = {
+        label: next(path.parent.rglob("wandb_readback.json")) for label, path in labeled.items()
+    }
+    return _json(
+        root / "confirmation_request.json",
+        {
+            "schema_version": 1,
+            "requested_stage": "confirmation",
+            "source_identity": {
+                "repo_sha": CURRENT_REPO_SHA,
+                "training_base_sha": TRAINING_BASE_SHA,
+            },
+            "parent_promotion_sha256": parent_hash,
+            "t2_budget_path": str(budget),
+            "t2_budget_sha256": _sha256(budget),
+            "trial_summary_hashes": {label: _sha256(path) for label, path in labeled.items()},
+            "wandb_readback_hashes": {label: _sha256(path) for label, path in readbacks.items()},
+        },
+    )
+
+
+def _run_confirmation(
+    root: Path,
+    *,
+    t2_control_scale: float = 1.0,
+    t2_candidate_pair_ratio: float = 1.04,
+) -> tuple[Path, Path, dict[str, Any]]:
+    contract, controls, candidates, promotion, _ = _run_promotion(root)
+    for index in (3, 4):
+        controls.append(
+            _write_trial(
+                root / f"A{index}",
+                name=f"A{index}",
+                ratio=t2_control_scale,
+                candidate=False,
+                tranche="T2",
+            )
+        )
+        candidates.append(
+            _write_trial(
+                root / f"B{index}",
+                name=f"B{index}",
+                ratio=t2_control_scale * t2_candidate_pair_ratio,
+                candidate=True,
+                tranche="T2",
+            )
+        )
+    request = _write_confirmation_request(root, promotion, controls, candidates)
+    result = evaluate_confirmation(
+        promotion_decision_path=promotion,
+        control_paths=controls,
+        candidate_paths=candidates,
+        request_path=request,
+        security=_test_security(root),
+        command="sentry confirmation",
+    )
+    decision = _save_decision(root / "confirmation.json", result)
+    return contract, decision, result
+
+
+def _write_grpo(root: Path) -> Path:
+    stage = root / "grpo_lora_r16"
+    stage.mkdir(parents=True)
+    (stage / "run_receipt.txt").write_text(
+        "status=success\n"
+        "ray_status=0\n"
+        "run_started_at_utc=2026-07-10T00:00:00Z\n"
+        "run_finished_at_utc=2026-07-10T00:01:00Z\n"
+        "max_memory_used_mib=74000\n"
+        "timing_status=verified\n"
+        "wandb_entity=research-team\n"
+        "wandb_project=glm47-pie-cpp-posttraining\n"
+        "wandb_run_id=grpo-run-1\n"
+        "experiment_id=issue32-grpo-test\n"
+        "wandb_stage=grpo\n",
+        encoding="utf-8",
+    )
+    (stage / "run.log").write_text(
+        "Successfully loaded LoRA adapter\n"
+        "Finish rollout\n"
+        "log_utils.py:463 - step 0: {'train/loss': 0.1, 'train/grad_norm': 0.2}\n"
+        "Saving LoRA checkpoint\n"
+        "LoRA sync staging complete\n",
+        encoding="utf-8",
+    )
+    checkpoint_root = root / "checkpoint"
+    checkpoint_entries: list[dict[str, Any]] = []
+    for relative, content in (
+        ("iter/adapter/adapter_megatron_tp0_pp0.pt", b"megatron-adapter"),
+        ("iter/adapter/adapter_model.bin", b"hf-adapter"),
+        ("iter/adapter/training_state_rank0.pt", b"training-state"),
+    ):
+        checkpoint_file = checkpoint_root / relative
+        checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_file.write_bytes(content)
+        checkpoint_entries.append(
+            {
+                "path": relative,
+                "size_bytes": checkpoint_file.stat().st_size,
+                "sha256": _sha256(checkpoint_file),
+            }
+        )
+    checkpoint_manifest = _json(
+        stage / "grpo.checkpoint_manifest.json",
+        {
+            "schema_version": 1,
+            "checkpoint_root": str(checkpoint_root),
+            "latest_iteration": "iter",
+            "files": checkpoint_entries,
+        },
+    )
+    _write_wandb_bundle(
+        stage,
+        run_id="grpo-run-1",
+        experiment_id="issue32-grpo-test",
+        job_stage="grpo",
+        metric_event_count=1,
+        artifact_files=(checkpoint_manifest,),
+        rollout_rows=32,
+    )
+    post = "b" * 64
+    _json(
+        stage / "fingerprints.json",
+        {
+            "pre_update": {"sha256": "a" * 64},
+            "post_update": {"sha256": post},
+            "sglang_sync": {"sha256": post},
+        },
+    )
+    _write_telemetry(stage)
+    return root
+
+
+def _run_grpo_stage(root: Path, confirmation: Path) -> tuple[Path, Path, dict[str, Any]]:
+    artifact = _write_grpo(root / "grpo-artifact")
+    result = evaluate_grpo(
+        confirmation_decision_path=confirmation,
+        grpo_path=artifact,
+        security=_test_security(confirmation.parent),
+        command="sentry grpo",
+    )
+    decision = _save_decision(root / "grpo.json", result)
+    return artifact, decision, result
+
+
+def _write_audit(
+    root: Path,
+    *,
+    contract: Path,
+    confirmation: Path,
+    grpo: Path,
+) -> Path:
+    constituents = [
+        {"role": role, "path": str(path), "sha256": _sha256(path)}
+        for role, path in (
+            ("confirmation_decision", confirmation),
+            ("grpo_decision", grpo),
+            ("contract", contract),
+        )
+    ]
+    manifest = _json(
+        root / "audit-manifest.json",
+        {"schema_version": 1, "constituent_checksums": constituents},
+    )
+    security = _test_security(confirmation.parent)
+    unsigned = {
+        "decision": "ACCEPT",
+        "auditor_role": "independent_auditor",
+        "auditor_identity": "SD-REVIEW-02",
+        "auditor_timestamp_utc": "2026-07-10T00:04:00Z",
+        "bounded_claim": CLAIM,
+        "manifest_path": str(manifest),
+        "manifest_sha256": _sha256(manifest),
+        "constituent_checksums": constituents,
+        "contract_sha256": _sha256(contract),
+    }
+    return _json(
+        root / "audit.json",
+        sign_bounded_payload(
+            unsigned,
+            private_key_path=_test_private_key(confirmation.parent, "auditor"),
+            public_key_path=security.auditor_public_key_path,  # type: ignore[arg-type]
+            domain=AUDIT_DECISION_DOMAIN,
+            signer_principal=security.auditor_principal or "",
+            verifier_principal=security.sentry_principal,
+            request_id="independent-audit-0001",
+            nonce="3" * 64,
+            issued_at=TEST_NOW,
+            expires_at=TEST_NOW + timedelta(hours=1),
+        ),
+    )
+
+
+def test_preflight_provenance_and_sha_contract(tmp_path: Path) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+        command="sentry preflight --offline",
+    )
+
+    assert result["decision"] == "PROMOTABLE"
+    assert result["next_stage"] == "screen"
+    assert result["exact_command"] == "sentry preflight --offline"
+    assert result["sentry"]["source_sha256"]
+    assert result["sentry"]["script_sha256"]
+    assert len(result["provenance"]["inputs"]) > 3
+    assert result["request_sha256"] == _sha256(request)
+    assert result["input_hashes"] == json.loads(request.read_text())["input_hashes"]
+    assert result["source_identity"] == {
+        "repo_sha": CURRENT_REPO_SHA,
+        "training_base_sha": TRAINING_BASE_SHA,
+    }
+    assert result["exit_status"] == 0
+
+    hardware_payload = json.loads(hardware.read_text(encoding="utf-8"))
+    hardware_payload["training_base_sha"] = "0" * 40
+    _json(hardware, hardware_payload)
+    assert (
+        evaluate_preflight(
+            contract_path=contract,
+            hardware_path=hardware,
+            budget_path=budget,
+            request_path=request,
+            gate0_permit_path=gate0["permit"],
+            gate0_public_key_path=gate0["public_key"],
+            launch_receipt_path=gate0["launch_receipt"],
+            booking_request_path=gate0["booking_request"],
+            provider_output_path=gate0["provider_output"],
+            security=security,
+        )["decision"]
+        == "INVALID"
+    )
+
+    hardware_payload["training_base_sha"] = TRAINING_BASE_SHA
+    _json(hardware, hardware_payload)
+    budget_payload = json.loads(budget.read_text(encoding="utf-8"))
+    budget_payload["source_commit"] = "e" * 40
+    _json(budget, budget_payload)
+    assert (
+        evaluate_preflight(
+            contract_path=contract,
+            hardware_path=hardware,
+            budget_path=budget,
+            request_path=request,
+            gate0_permit_path=gate0["permit"],
+            gate0_public_key_path=gate0["public_key"],
+            launch_receipt_path=gate0["launch_receipt"],
+            booking_request_path=gate0["booking_request"],
+            provider_output_path=gate0["provider_output"],
+            security=security,
+        )["decision"]
+        == "INVALID"
+    )
+
+
+def test_signed_gate1_chain_binds_gate0_and_exact_screen_parents(tmp_path: Path) -> None:
+    run_root = tmp_path / "chain"
+    _run_screen(run_root)
+    security = _test_security(run_root)
+    preflight_path = run_root / "preflight.json"
+    screen_path = run_root / "screen.json"
+    preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+    screen = json.loads(screen_path.read_text(encoding="utf-8"))
+
+    verified_preflight = verify_signed_decision(
+        preflight_path,
+        security.sentry_public_key_path,
+        expected_stage=Stage.PREFLIGHT,
+        expected_signer_principal=security.sentry_principal,
+        expected_verifier_principal=security.executor_principal,
+        expected_request_sha256=_sha256(run_root / "preflight_request.json"),
+        expected_parent_decision_sha256=_sha256(run_root / "gate0/permit.json"),
+        expected_parent_request_sha256=_sha256(run_root / "gate0/booking_request.json"),
+        now=TEST_NOW,
+    )
+    verified_screen = verify_signed_decision(
+        screen_path,
+        security.sentry_public_key_path,
+        expected_stage=Stage.SCREEN,
+        expected_signer_principal=security.sentry_principal,
+        expected_verifier_principal=security.executor_principal,
+        expected_request_sha256=_sha256(run_root / "screen_request.json"),
+        expected_parent_decision_sha256=_sha256(preflight_path),
+        expected_parent_request_sha256=_sha256(run_root / "preflight_request.json"),
+        now=TEST_NOW,
+    )
+    assert len(bytes.fromhex(verified_preflight.nonce)) == 32
+    assert len(bytes.fromhex(verified_screen.nonce)) == 32
+    assert preflight["context"]["gate0"]["allocation_id"] == "alloc-h100-001"
+    assert preflight["context"]["gate0"]["provider_output_sha256"] == _sha256(
+        run_root / "gate0/provider_output.json"
+    )
+    assert screen["parent_decision_sha256"] == _sha256(preflight_path)
+
+
+def test_signed_decision_rejects_tamper_domain_principal_parent_and_expiry(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "signed"
+    _run_preflight(run_root)
+    security = _test_security(run_root)
+    source = run_root / "preflight.json"
+    signed = json.loads(source.read_text(encoding="utf-8"))
+    unsigned = {
+        key: value
+        for key, value in signed.items()
+        if key not in {"signature_base64", "signed_payload_sha256"}
+    }
+
+    tampered = dict(signed)
+    tampered["decision"] = "REJECTED"
+    tampered_path = _json(tmp_path / "tampered.json", tampered)
+    with pytest.raises(DecisionSecurityError, match="digest mismatch"):
+        verify_signed_decision(
+            tampered_path,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal=security.sentry_principal,
+            expected_verifier_principal=security.executor_principal,
+            now=TEST_NOW,
+        )
+
+    wrong_domain = _json(
+        tmp_path / "wrong-domain.json",
+        sign_bounded_payload(
+            unsigned,
+            private_key_path=security.signing_private_key_path,
+            public_key_path=security.sentry_public_key_path,
+            domain=T2_AUTHORIZATION_DOMAIN,
+            signer_principal=security.sentry_principal,
+            verifier_principal=security.executor_principal,
+            issued_at=TEST_NOW,
+        ),
+    )
+    with pytest.raises(DecisionSecurityError, match="domain mismatch"):
+        verify_signed_decision(
+            wrong_domain,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal=security.sentry_principal,
+            expected_verifier_principal=security.executor_principal,
+            now=TEST_NOW,
+        )
+
+    wrong_principal = _json(
+        tmp_path / "wrong-principal.json",
+        sign_bounded_payload(
+            unsigned,
+            private_key_path=security.signing_private_key_path,
+            public_key_path=security.sentry_public_key_path,
+            domain=signature_domain_for_kind("preflight"),
+            signer_principal="different-sentry",
+            verifier_principal=security.executor_principal,
+            issued_at=TEST_NOW,
+        ),
+    )
+    with pytest.raises(DecisionSecurityError, match="signer principal mismatch"):
+        verify_signed_decision(
+            wrong_principal,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal=security.sentry_principal,
+            expected_verifier_principal=security.executor_principal,
+            now=TEST_NOW,
+        )
+
+    expired = _json(
+        tmp_path / "expired.json",
+        sign_bounded_payload(
+            unsigned,
+            private_key_path=security.signing_private_key_path,
+            public_key_path=security.sentry_public_key_path,
+            domain=signature_domain_for_kind("preflight"),
+            signer_principal=security.sentry_principal,
+            verifier_principal=security.executor_principal,
+            issued_at=TEST_NOW - timedelta(hours=2),
+            expires_at=TEST_NOW - timedelta(hours=1),
+        ),
+    )
+    with pytest.raises(DecisionSecurityError, match="expired"):
+        verify_signed_decision(
+            expired,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal=security.sentry_principal,
+            expected_verifier_principal=security.executor_principal,
+            now=TEST_NOW,
+        )
+    with pytest.raises(DecisionSecurityError, match="parent_decision_sha256 mismatch"):
+        verify_signed_decision(
+            source,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal=security.sentry_principal,
+            expected_verifier_principal=security.executor_principal,
+            expected_parent_decision_sha256="0" * 64,
+            now=TEST_NOW,
+        )
+
+
+def test_execution_approval_is_single_use_and_concurrently_consumed_once(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "execution"
+    _run_preflight(run_root)
+    security = _test_security(run_root)
+    decision = run_root / "preflight.json"
+    request_hash = _sha256(run_root / "preflight_request.json")
+    calls: list[str] = []
+
+    def callback() -> str:
+        calls.append("ran")
+        return "executed"
+
+    assert (
+        verify_consume_and_execute(
+            decision,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal=security.sentry_principal,
+            expected_verifier_principal=security.executor_principal,
+            expected_request_sha256=request_hash,
+            ledger_dir=tmp_path / "ledger-one",
+            callback=callback,
+            now=TEST_NOW,
+        )
+        == "executed"
+    )
+    with pytest.raises(DecisionReplayError):
+        verify_consume_and_execute(
+            decision,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal=security.sentry_principal,
+            expected_verifier_principal=security.executor_principal,
+            expected_request_sha256=request_hash,
+            ledger_dir=tmp_path / "ledger-one",
+            callback=callback,
+            now=TEST_NOW,
+        )
+    assert calls == ["ran"]
+
+    concurrent_calls: list[str] = []
+
+    def concurrent_worker() -> str:
+        try:
+            return verify_consume_and_execute(
+                decision,
+                security.sentry_public_key_path,
+                expected_stage="preflight",
+                expected_signer_principal=security.sentry_principal,
+                expected_verifier_principal=security.executor_principal,
+                expected_request_sha256=request_hash,
+                ledger_dir=tmp_path / "ledger-concurrent",
+                callback=lambda: concurrent_calls.append("ran") or "executed",
+                now=TEST_NOW,
+            )
+        except DecisionReplayError:
+            return "replay"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = sorted(executor.map(lambda _: concurrent_worker(), range(2)))
+    assert outcomes == ["executed", "replay"]
+    assert concurrent_calls == ["ran"]
+
+    rejected_calls: list[str] = []
+    with pytest.raises(DecisionSecurityError, match="signer principal mismatch"):
+        verify_consume_and_execute(
+            decision,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal="wrong-principal",
+            expected_verifier_principal=security.executor_principal,
+            expected_request_sha256=request_hash,
+            ledger_dir=tmp_path / "ledger-rejected",
+            callback=lambda: rejected_calls.append("ran"),
+            now=TEST_NOW,
+        )
+    assert rejected_calls == []
+
+
+def test_screen_uses_98_percent_guardrail_not_success_threshold(tmp_path: Path) -> None:
+    _, _, _, _, _, retained = _run_screen(tmp_path / "retained", ratio=0.99)
+    _, _, _, _, _, stopped = _run_screen(tmp_path / "stopped", ratio=0.97)
+
+    assert retained["decision"] == "PROMOTABLE"
+    assert retained["pair"]["preserved_matched_observations"] == 14
+    assert retained["screen_rule"]["three_percent_required"] is False
+    request = json.loads((tmp_path / "retained/screen_request.json").read_text())
+    assert retained["evidence_hashes"] == request["evidence_hashes"]
+    assert retained["trial_summary_hashes"] == request["trial_summary_hashes"]
+    assert stopped["decision"] == "REJECTED"
+
+
+def test_control_baseline_envelope_is_enforced_at_screen_and_promotion(
+    tmp_path: Path,
+) -> None:
+    *_, screen = _run_screen(tmp_path / "screen", control_scale=1.06)
+    *_, promotion = _run_promotion(tmp_path / "promotion", a2_scale=1.06)
+
+    assert screen["decision"] == "INVALID"
+    assert "T1-P1_control_estimated_mfu_outside_historical_5pct" in screen["reasons"]
+    assert promotion["decision"] == "INVALID"
+    assert "T1-P2_control_estimated_mfu_outside_historical_5pct" in promotion["reasons"]
+
+
+def test_wandb_readback_is_request_bound_and_required(tmp_path: Path) -> None:
+    missing_root = tmp_path / "missing"
+    _, _, control, candidate, _, _ = _run_screen(missing_root)
+    (control.parent / "sft_lora_r16/wandb_readback.json").unlink()
+    missing = evaluate_screen(
+        preflight_decision_path=missing_root / "preflight.json",
+        control_path=control,
+        candidate_path=candidate,
+        request_path=missing_root / "screen_request.json",
+        security=_test_security(missing_root),
+    )
+    assert missing["decision"] == "INVALID"
+    assert "screen_a1_wandb_readback_missing" in missing["reasons"]
+
+    tampered_root = tmp_path / "tampered"
+    _, _, control, candidate, _, _ = _run_screen(tampered_root)
+    readback = control.parent / "sft_lora_r16/wandb_readback.json"
+    payload = json.loads(readback.read_text(encoding="utf-8"))
+    payload["remote"]["config"]["timing_status"] = "unverified"
+    _json(readback, payload)
+    tampered = evaluate_screen(
+        preflight_decision_path=tampered_root / "preflight.json",
+        control_path=control,
+        candidate_path=candidate,
+        request_path=tampered_root / "screen_request.json",
+        security=_test_security(tampered_root),
+    )
+    assert tampered["decision"] == "INVALID"
+    assert "screen_a1_wandb_readback_hash_mismatch" in tampered["reasons"]
+
+
+def test_promotion_is_abba_only_and_reports_cycle_diagnostic(tmp_path: Path) -> None:
+    _, _, _, _, result = _run_promotion(tmp_path)
+
+    assert result["decision"] == "PROMOTABLE"
+    assert result["next_stage"] == "confirmation"
+    assert [pair["preserved_matched_observations"] for pair in result["pairs"]] == [14, 14]
+    assert [pair["complete_cycle_diagnostic"]["observation_count"] for pair in result["pairs"]] == [
+        12,
+        12,
+    ]
+    assert result["promotion_rule"]["complete_block_bootstrap_is_diagnostic_only"] is True
+    assert result["promotion_rule"]["final_confidence_claim_allowed"] is False
+
+
+def test_confirmation_uses_four_independent_process_pair_ratios(tmp_path: Path) -> None:
+    _, _, result = _run_confirmation(tmp_path)
+
+    assert result["decision"] == "PROMOTABLE"
+    assert result["next_stage"] == "grpo"
+    stats = result["confirmation_statistics"]
+    assert stats["sample_size"] == 4
+    assert stats["independent_unit"] == "process_pair"
+    for metric in ("estimated_mfu", "actor_throughput"):
+        assert stats[metric]["geometric_mean_ratio"] >= 1.03
+        assert stats[metric]["one_sided_95_percent_lower_log_bound"] > 0.0
+
+
+def test_confirmation_requires_t2_authorization_and_every_candidate_hurdle(
+    tmp_path: Path,
+) -> None:
+    authorized_root = tmp_path / "authorized"
+    _, _, authorized = _run_confirmation(authorized_root)
+    controls = [authorized_root / f"A{index}/trial_summary.json" for index in range(1, 5)]
+    candidates = [authorized_root / f"B{index}/trial_summary.json" for index in range(1, 5)]
+    no_request = evaluate_confirmation(
+        promotion_decision_path=authorized_root / "promotion.json",
+        control_paths=controls,
+        candidate_paths=candidates,
+        security=_test_security(authorized_root),
+    )
+    assert authorized["decision"] == "PROMOTABLE"
+    assert no_request["decision"] == "INVALID"
+    assert "request_missing" in no_request["reasons"]
+
+    budget = authorized_root / "t2_budget.json"
+    budget_payload = json.loads(budget.read_text(encoding="utf-8"))
+    budget_payload["maximum_usd"] = 72.0
+    _json(budget, budget_payload)
+    tampered_budget = evaluate_confirmation(
+        promotion_decision_path=authorized_root / "promotion.json",
+        control_paths=controls,
+        candidate_paths=candidates,
+        request_path=authorized_root / "confirmation_request.json",
+        security=_test_security(authorized_root),
+    )
+    assert tampered_budget["decision"] == "INVALID"
+    assert "confirmation_t2_budget_hash_mismatch" in tampered_budget["reasons"]
+
+    *_, weak = _run_confirmation(
+        tmp_path / "weak-candidate",
+        t2_control_scale=0.96,
+        t2_candidate_pair_ratio=1.04,
+    )
+    assert weak["decision"] == "NO_WIN"
+    assert "P3_candidate_below_historical_throughput_hurdle" in weak["reasons"]
+    assert "P4_candidate_below_historical_throughput_hurdle" in weak["reasons"]
+
+
+def test_grpo_checkpoint_files_must_exist_and_match_manifest(tmp_path: Path) -> None:
+    _, confirmation, _ = _run_confirmation(tmp_path / "chain")
+    artifact = _write_grpo(tmp_path / "grpo")
+    checkpoint = artifact / "checkpoint/iter/adapter/adapter_model.bin"
+    original = checkpoint.read_bytes()
+
+    checkpoint.unlink()
+    missing = evaluate_grpo(
+        confirmation_decision_path=confirmation,
+        grpo_path=artifact,
+        security=_test_security(tmp_path / "chain"),
+    )
+    assert missing["decision"] == "INVALID"
+    assert any(
+        reason.startswith("grpo_checkpoint_file_missing_or_not_regular")
+        for reason in missing["reasons"]
+    )
+
+    checkpoint.write_bytes(original + b"tampered")
+    tampered = evaluate_grpo(
+        confirmation_decision_path=confirmation,
+        grpo_path=artifact,
+        security=_test_security(tmp_path / "chain"),
+    )
+    assert tampered["decision"] == "INVALID"
+    assert any(
+        reason.startswith("grpo_checkpoint_file_hash_mismatch") for reason in tampered["reasons"]
+    )
+
+
+def test_grpo_then_independent_audit_is_required_for_verified(tmp_path: Path) -> None:
+    contract, confirmation, _ = _run_confirmation(tmp_path)
+    grpo_artifact = _write_grpo(tmp_path / "grpo")
+    grpo_result = evaluate_grpo(
+        confirmation_decision_path=confirmation,
+        grpo_path=grpo_artifact,
+        security=_test_security(tmp_path),
+        command="sentry grpo",
+    )
+    grpo_decision = _save_decision(tmp_path / "grpo.json", grpo_result)
+    assert grpo_result["decision"] == "PROMOTABLE"
+
+    audit = _write_audit(
+        tmp_path,
+        contract=contract,
+        confirmation=confirmation,
+        grpo=grpo_decision,
+    )
+    final = evaluate_final(
+        confirmation_decision_path=confirmation,
+        grpo_decision_path=grpo_decision,
+        audit_path=audit,
+        contract_path=contract,
+        security=_test_security(tmp_path),
+        command="sentry final",
+    )
+
+    assert final["decision"] == "VERIFIED"
+    assert final["accepted"] is True
+    assert final["exit_status"] == 0
+
+
+def test_final_rejects_cross_run_grpo_and_audit_splices(tmp_path: Path) -> None:
+    contract_a, confirmation_a, _ = _run_confirmation(tmp_path / "chain-a")
+    _, grpo_a, result_a = _run_grpo_stage(tmp_path / "chain-a-final", confirmation_a)
+    chain_b = tmp_path / "chain-b"
+    _copy_test_keys(tmp_path / "chain-a", chain_b)
+    contract_b, confirmation_b, _ = _run_confirmation(chain_b)
+    _, grpo_b, result_b = _run_grpo_stage(tmp_path / "chain-b-final", confirmation_b)
+    assert result_a["decision"] == result_b["decision"] == "PROMOTABLE"
+
+    mixed_audit = _write_audit(
+        tmp_path / "mixed-audit",
+        contract=contract_a,
+        confirmation=confirmation_a,
+        grpo=grpo_b,
+    )
+    mixed = evaluate_final(
+        confirmation_decision_path=confirmation_a,
+        grpo_decision_path=grpo_b,
+        audit_path=mixed_audit,
+        contract_path=contract_a,
+        security=_test_security(tmp_path / "chain-a"),
+    )
+    assert mixed["decision"] == "INVALID"
+    assert "grpo_confirmation_chain_mismatch" in mixed["reasons"]
+
+    foreign_audit = _write_audit(
+        tmp_path / "foreign-audit",
+        contract=contract_b,
+        confirmation=confirmation_b,
+        grpo=grpo_b,
+    )
+    foreign = evaluate_final(
+        confirmation_decision_path=confirmation_a,
+        grpo_decision_path=grpo_a,
+        audit_path=foreign_audit,
+        contract_path=contract_a,
+        security=_test_security(tmp_path / "chain-a"),
+    )
+    assert foreign["decision"] == "INVALID"
+    assert "audit_required_constituent_mismatch:confirmation_decision" in foreign["reasons"]
+
+
+def test_final_rejects_self_audit_and_sentry_auditor_key_reuse(tmp_path: Path) -> None:
+    contract, confirmation, _ = _run_confirmation(tmp_path)
+    _, grpo, grpo_result = _run_grpo_stage(tmp_path / "final", confirmation)
+    assert grpo_result["decision"] == "PROMOTABLE"
+    valid_audit = _write_audit(
+        tmp_path / "audit",
+        contract=contract,
+        confirmation=confirmation,
+        grpo=grpo,
+    )
+    unsigned = {
+        key: value
+        for key, value in json.loads(valid_audit.read_text(encoding="utf-8")).items()
+        if key not in {"signature_base64", "signed_payload_sha256"}
+    }
+    security = _test_security(tmp_path)
+    self_audit = _json(
+        tmp_path / "self-audit.json",
+        sign_bounded_payload(
+            unsigned,
+            private_key_path=security.signing_private_key_path,
+            public_key_path=security.sentry_public_key_path,
+            domain=AUDIT_DECISION_DOMAIN,
+            signer_principal=security.sentry_principal,
+            verifier_principal=security.sentry_principal,
+            issued_at=TEST_NOW,
+        ),
+    )
+    reused_security = SentrySecurity(
+        signing_private_key_path=security.signing_private_key_path,
+        sentry_public_key_path=security.sentry_public_key_path,
+        sentry_principal=security.sentry_principal,
+        executor_principal=security.executor_principal,
+        supervisor_public_key_path=security.supervisor_public_key_path,
+        supervisor_principal=security.supervisor_principal,
+        auditor_public_key_path=security.sentry_public_key_path,
+        auditor_principal=security.sentry_principal,
+        now=TEST_NOW,
+    )
+    result = evaluate_final(
+        confirmation_decision_path=confirmation,
+        grpo_decision_path=grpo,
+        audit_path=self_audit,
+        contract_path=contract,
+        security=reused_security,
+    )
+    assert result["decision"] == "INVALID"
+    assert "audit_sentry_key_reuse_forbidden" in result["reasons"]
+    assert "audit_self_signing_forbidden" in result["reasons"]
+
+
+def test_runner_requests_validate_end_to_end_and_reject_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current_now = datetime.now(timezone.utc).replace(microsecond=0)
+    original_write_gate0_chain = _write_gate0_chain
+
+    def write_current_gate0_chain(
+        root: Path,
+        security: SentrySecurity,
+        *,
+        now: datetime = current_now,
+    ) -> dict[str, Path]:
+        return original_write_gate0_chain(root, security, now=now)
+
+    monkeypatch.setitem(globals(), "TEST_NOW", current_now)
+    monkeypatch.setitem(globals(), "_write_gate0_chain", write_current_gate0_chain)
+    run_root = tmp_path / "run"
+    _, _, control, candidate, _, screen = _run_screen(run_root)
+    runner = _runner_module()
+    security = _test_security(run_root)
+    public_key = Path(security.sentry_public_key_path)
+    gate0_permit = json.loads((run_root / "gate0/permit.json").read_text())
+    gate1_trust = {
+        "public_key_sha256": _sha256(public_key),
+        "key_id": gate0_permit["key_id"],
+        "sentry_principal": security.sentry_principal,
+        "executor_principal": security.executor_principal,
+    }
+    runner["_verify_gate1_trust_anchor"](
+        public_key,
+        trust=gate1_trust,
+        expected_sentry_principal=security.sentry_principal,
+        expected_executor_principal=security.executor_principal,
+    )
+
+    preflight_path = run_root / "preflight.json"
+    preflight_request = run_root / "preflight_request.json"
+    preflight_payload = json.loads(preflight_path.read_text())
+    preflight_request_sha256 = _sha256(preflight_request)
+    gate0_permit_sha256 = _sha256(run_root / "gate0/permit.json")
+    booking_request_sha256 = _sha256(run_root / "gate0/booking_request.json")
+    assert preflight_payload["request_sha256"] == preflight_request_sha256
+    assert preflight_payload["parent_decision_sha256"] == gate0_permit_sha256
+    assert preflight_payload["parent_request_sha256"] == booking_request_sha256
+
+    ledger = run_root / "approval-ledger"
+    preserved_preflight = run_root / "runner-approvals/preflight.json"
+    preflight_approval_sha256 = runner["_verify_consume_and_preserve_approval"](
+        approval_path=preflight_path,
+        public_key_path=public_key,
+        ledger_dir=ledger,
+        destination=preserved_preflight,
+        expected_stage=Stage.PREFLIGHT,
+        expected_sentry_principal=security.sentry_principal,
+        expected_executor_principal=security.executor_principal,
+        expected_request_sha256=preflight_request_sha256,
+        expected_parent_decision_sha256=gate0_permit_sha256,
+        expected_parent_request_sha256=booking_request_sha256,
+        expected_public_key_sha256=gate1_trust["public_key_sha256"],
+        request_path=preflight_request,
+        run_root=run_root,
+        consumed_phase="first_pair_authorized",
+    )
+    assert preflight_approval_sha256 == _sha256(preflight_path)
+    assert _sha256(preserved_preflight) == preflight_approval_sha256
+
+    screen_path = run_root / "screen.json"
+    screen_request = run_root / "screen_request.json"
+    screen_payload = json.loads(screen_path.read_text())
+    screen_request_sha256 = _sha256(screen_request)
+    assert screen_payload["request_sha256"] == screen_request_sha256
+    assert screen_payload["parent_decision_sha256"] == preflight_approval_sha256
+    assert screen_payload["parent_request_sha256"] == preflight_request_sha256
+
+    preserved_screen = run_root / "runner-approvals/screen.json"
+    screen_approval_sha256 = runner["_verify_consume_and_preserve_approval"](
+        approval_path=screen_path,
+        public_key_path=public_key,
+        ledger_dir=ledger,
+        destination=preserved_screen,
+        expected_stage=Stage.SCREEN,
+        expected_sentry_principal=security.sentry_principal,
+        expected_executor_principal=security.executor_principal,
+        expected_request_sha256=screen_request_sha256,
+        expected_parent_decision_sha256=preflight_approval_sha256,
+        expected_parent_request_sha256=preflight_request_sha256,
+        expected_public_key_sha256=gate1_trust["public_key_sha256"],
+        request_path=screen_request,
+        run_root=run_root,
+        consumed_phase="second_pair_authorized",
+    )
+    assert screen_approval_sha256 == _sha256(screen_path)
+    assert _sha256(preserved_screen) == screen_approval_sha256
+    assert screen_payload["evidence_hashes"] == screen["evidence_hashes"]
+    assert screen_payload["trial_summary_hashes"] == screen["trial_summary_hashes"]
+    assert len(list(ledger.glob("*.consumed.json"))) == 2
+
+    control_log = control.parent / "sft_lora_r16/run.log"
+    control_log.write_text(
+        control_log.read_text(encoding="utf-8") + "tampered after request\n",
+        encoding="utf-8",
+    )
+    sentry_recheck = evaluate_screen(
+        preflight_decision_path=run_root / "preflight.json",
+        control_path=control,
+        candidate_path=candidate,
+        request_path=run_root / "screen_request.json",
+        security=_test_security(run_root),
+    )
+    assert sentry_recheck["decision"] == "INVALID"
+    assert "screen_a1_run_log_hash_mismatch" in sentry_recheck["reasons"]
+
+    request_payload = json.loads((run_root / "screen_request.json").read_text())
+    request_payload["trial_summary_hashes"]["b1"] = "0" * 64
+    _json(run_root / "screen_request.json", request_payload)
+    claims_before = {path.name for path in ledger.iterdir()}
+    rejected_copy = run_root / "runner-approvals/rejected-screen.json"
+    with pytest.raises(SystemExit, match="stage request changed before approval verification"):
+        runner["_verify_consume_and_preserve_approval"](
+            approval_path=screen_path,
+            public_key_path=public_key,
+            ledger_dir=ledger,
+            destination=rejected_copy,
+            expected_stage=Stage.SCREEN,
+            expected_sentry_principal=security.sentry_principal,
+            expected_executor_principal=security.executor_principal,
+            expected_request_sha256=screen_request_sha256,
+            expected_parent_decision_sha256=preflight_approval_sha256,
+            expected_parent_request_sha256=preflight_request_sha256,
+            expected_public_key_sha256=gate1_trust["public_key_sha256"],
+            request_path=screen_request,
+            run_root=run_root,
+            consumed_phase="must_not_be_written",
+        )
+    assert {path.name for path in ledger.iterdir()} == claims_before
+    assert not rejected_copy.exists()
+
+
+def test_runner_authored_and_stale_stage_receipts_are_invalid(tmp_path: Path) -> None:
+    _, hardware, control, candidate, _, _ = _run_screen(tmp_path)
+    preflight = json.loads((tmp_path / "preflight.json").read_text(encoding="utf-8"))
+    preflight["sentry"]["authored_by"] = "runner"
+    runner_receipt = _json(tmp_path / "runner-preflight.json", preflight)
+    runner_result = evaluate_screen(
+        preflight_decision_path=runner_receipt,
+        control_path=control,
+        candidate_path=candidate,
+        request_path=tmp_path / "screen_request.json",
+        security=_test_security(tmp_path),
+    )
+    assert runner_result["decision"] == "INVALID"
+    assert "prior_decision_not_sentry_authored" in runner_result["reasons"]
+
+    hardware_payload = json.loads(hardware.read_text(encoding="utf-8"))
+    hardware_payload["probe_note"] = "changed after preflight"
+    _json(hardware, hardware_payload)
+    stale_result = evaluate_screen(
+        preflight_decision_path=tmp_path / "preflight.json",
+        control_path=control,
+        candidate_path=candidate,
+        request_path=tmp_path / "screen_request.json",
+        security=_test_security(tmp_path),
+    )
+    assert stale_result["decision"] == "INVALID"
+    assert "prior_decision_input_artifact_stale" in stale_result["reasons"]
+
+
+def test_cli_emits_machine_readable_preflight_decision(tmp_path: Path, capsys: Any) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security, now=datetime.now(timezone.utc))
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+
+    exit_code = main(
+        [
+            "preflight",
+            "--contract",
+            str(contract),
+            "--hardware",
+            str(hardware),
+            "--budget",
+            str(budget),
+            "--request",
+            str(request),
+            "--gate0-permit",
+            str(gate0["permit"]),
+            "--gate0-public-key",
+            str(gate0["public_key"]),
+            "--launch-receipt",
+            str(gate0["launch_receipt"]),
+            "--booking-request",
+            str(gate0["booking_request"]),
+            "--provider-output",
+            str(gate0["provider_output"]),
+            "--signing-key",
+            str(security.signing_private_key_path),
+            "--sentry-public-key",
+            str(security.sentry_public_key_path),
+            "--sentry-principal",
+            security.sentry_principal,
+            "--executor-principal",
+            security.executor_principal,
+            "--supervisor-public-key",
+            str(security.supervisor_public_key_path),
+            "--supervisor-principal",
+            security.supervisor_principal or "",
+            "--auditor-public-key",
+            str(security.auditor_public_key_path),
+            "--auditor-principal",
+            security.auditor_principal or "",
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["decision"] == "PROMOTABLE"
+    assert output["output_schema"] == "h100-research-sentry-decision/v3"
