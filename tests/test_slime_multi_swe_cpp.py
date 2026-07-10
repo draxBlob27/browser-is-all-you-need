@@ -589,6 +589,193 @@ def test_standard_harness_uses_prepared_official_image_without_cloning(
     assert kwargs["timeout"] == 1230
 
 
+def test_preflight_prepares_checksum_pinned_simdjson_dependencies_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_id = "simdjson__simdjson-1615"
+    row = {
+        **cpp_row(instance_id),
+        "org": "simdjson",
+        "repo": "simdjson",
+        "number": 1615,
+    }
+    harness = multi_swe.REPO_HARNESSES[("simdjson", "simdjson")]
+    task = multi_swe.normalized_task(row, harness=harness, instance_id=instance_id)
+    root = tmp_path / "data"
+    task_path = root / "tasks" / instance_id / "task.json"
+    task_path.parent.mkdir(parents=True)
+    task_path.write_text(json.dumps(task), encoding="utf-8")
+    (root / "manifest.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
+    installs: list[str] = []
+
+    def fake_install(
+        dependency: multi_swe.OfflineDependency,
+        target: Path,
+    ) -> None:
+        installs.append(dependency.name)
+        target.mkdir(parents=True)
+        if dependency.name == "cxxopts":
+            (target / ".git").mkdir()
+
+    monkeypatch.setattr(multi_swe, "_install_offline_dependency", fake_install)
+
+    receipt, receipt_path = multi_swe.prepare_simdjson_offline_dependencies(
+        root,
+        [(task_path, task)],
+    )
+    multi_swe.prepare_simdjson_offline_dependencies(root, [(task_path, task)])
+
+    assert installs == ["cxxopts", "simdjson-data"]
+    assert receipt_path == root / multi_swe.OFFLINE_DEPENDENCIES_FILENAME
+    assert receipt is not None
+    assert receipt["simdjson_bundle_sha256"] == multi_swe.simdjson_offline_bundle_sha256()
+    assert [item["name"] for item in receipt["dependencies"]] == [
+        "cxxopts",
+        "simdjson-data",
+    ]
+    persisted = json.loads(task_path.read_text(encoding="utf-8"))
+    assert persisted["repo_harness_revision"] == multi_swe.SIMDJSON_HARNESS_REVISION
+    assert persisted["offline_dependency_cache"] == "offline-dependencies/simdjson"
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["files"]["offline_dependencies"] == "offline-dependencies.json"
+
+
+def test_affected_simdjson_harness_mounts_offline_dependencies_and_disables_downloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_id = "simdjson__simdjson-958"
+    row = {
+        **cpp_row(instance_id),
+        "org": "simdjson",
+        "repo": "simdjson",
+        "number": 958,
+    }
+    harness = multi_swe.REPO_HARNESSES[("simdjson", "simdjson")]
+    task = multi_swe.normalized_task(row, harness=harness, instance_id=instance_id)
+    cache_root = tmp_path / "offline-dependencies" / "simdjson"
+    for dependency in ("cxxopts", "simdjson-data"):
+        (cache_root / dependency).mkdir(parents=True)
+    task.update(
+        {
+            "_offline_dependency_cache": str(cache_root),
+            "offline_dependency_bundle_sha256": multi_swe.simdjson_offline_bundle_sha256(),
+            "repo_harness_revision": multi_swe.SIMDJSON_HARNESS_REVISION,
+            "sandbox_image_digest": "mswebench/simdjson_m_simdjson@sha256:abc",
+            "sandbox_image_id": "sha256:abc",
+        }
+    )
+    captured: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "100% tests passed, 0 tests failed out of 42\n",
+            "",
+        )
+
+    monkeypatch.delenv(multi_swe.SANDBOX_IMAGE_ENV, raising=False)
+    monkeypatch.setattr(multi_swe.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        multi_swe,
+        "_host_visible_simdjson_dependency_cache",
+        lambda _task: cache_root,
+    )
+
+    result = multi_swe.run_official_instance_tests(task, str(task["fix_patch"]))
+
+    assert result.passed is True
+    command = captured[0]
+    command_text = " ".join(command)
+    script = command[-1]
+    assert "--network none" in command_text
+    assert f"{cache_root / 'cxxopts'}:/home/simdjson/dependencies/cxxopts:ro" in command_text
+    assert (
+        f"{cache_root / 'simdjson-data'}:"
+        "/home/simdjson/dependencies/.cache/simdjson-data:ro"
+    ) in command_text
+    assert "-DSIMDJSON_ALLOW_DOWNLOADS=OFF" in script
+    assert "-DSIMDJSON_GOOGLE_BENCHMARKS=OFF" in script
+    assert "-DSIMDJSON_COMPETITION=OFF" in script
+    assert "git clone" not in script
+    assert "ctest --output-on-failure" in script
+
+
+def test_simdjson_dependency_cache_is_mirrored_once_into_shared_tmpdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "data-cache"
+    for dependency in ("cxxopts", "simdjson-data"):
+        dependency_root = source / dependency
+        dependency_root.mkdir(parents=True)
+        (dependency_root / "marker").write_text(dependency, encoding="utf-8")
+    shared_tmp = tmp_path / "shared-tmp"
+    shared_tmp.mkdir()
+    bundle_sha256 = multi_swe.simdjson_offline_bundle_sha256()
+    task = {
+        "instance_id": "simdjson__simdjson-2016",
+        "_offline_dependency_cache": str(source),
+        "offline_dependency_bundle_sha256": bundle_sha256,
+    }
+    monkeypatch.setattr(multi_swe, "gettempdir", lambda: str(shared_tmp))
+
+    first = multi_swe._host_visible_simdjson_dependency_cache(task)
+    second = multi_swe._host_visible_simdjson_dependency_cache(task)
+
+    assert first == second
+    assert first.parent == shared_tmp
+    assert (first / "cxxopts" / "marker").read_text(encoding="utf-8") == "cxxopts"
+    assert (first / "simdjson-data" / "marker").read_text(encoding="utf-8") == "simdjson-data"
+    assert (first / ".w8-biayn-ready").read_text(encoding="utf-8").strip() == bundle_sha256
+
+
+def test_affected_simdjson_preflight_receipt_passes_dataset_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance_id = "simdjson__simdjson-1712"
+    source = tmp_path / "source"
+    source.mkdir()
+    row = {
+        **cpp_row(instance_id),
+        "org": "simdjson",
+        "repo": "simdjson",
+        "number": 1712,
+    }
+    (source / "multi_swe_bench_mini.jsonl").write_text(
+        json.dumps(row) + "\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    multi_swe.build_slime_multi_swe_cpp_dataset(source, out, eval_limit=1, force=True)
+
+    def fake_install(
+        dependency: multi_swe.OfflineDependency,
+        target: Path,
+    ) -> None:
+        target.mkdir(parents=True)
+        if dependency.name == "cxxopts":
+            (target / ".git").mkdir()
+
+    monkeypatch.delenv(multi_swe.SANDBOX_IMAGE_ENV, raising=False)
+    monkeypatch.setattr(multi_swe, "_pull_docker_image", lambda _image: None)
+    monkeypatch.setattr(multi_swe, "_inspect_docker_image", _fake_image_details)
+    monkeypatch.setattr(multi_swe, "_install_offline_dependency", fake_install)
+    monkeypatch.setattr(multi_swe, "oracle_setup_record_from_metadata", _fake_oracle_record)
+
+    paths, summary = multi_swe.run_multi_swe_oracle_preflight(out)
+
+    assert summary["all_passed"] is True
+    assert paths["manifest"].is_file()
+    assert multi_swe.verify_multi_swe_dataset(out)["all_passed"] is True
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    assert manifest["files"]["offline_dependencies"] == "offline-dependencies.json"
+
+
 @pytest.mark.parametrize(
     ("returncode", "harness_error", "patch_apply_error"),
     [

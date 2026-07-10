@@ -25,21 +25,29 @@ or GPU rollout:
 3. Grade directly in that image's repository at the task's exact base revision,
    prepared build directory, and bundled offline test assets. The standard path
    does not clone GitHub repositories.
-4. Verify that the image's trusted `test.patch` matches the dataset, mount only
-   the candidate or `fix_patch` read-only, and run `/home/fix-run.sh` with
-   container networking disabled.
-5. Require a successful result and a positive parsed CTest count. Exit zero with
+4. For simdjson PRs 958, 1615, 1712, and 2016, download the exact pinned
+   `cxxopts` and simdjson-data archives once outside the grader, verify their
+   SHA-256 digests, and cache them under the data root.
+5. Verify that the image's trusted `test.patch` matches the dataset, mount the
+   candidate or `fix_patch` plus any prepared simdjson dependencies read-only,
+   and run the image test contract with container networking disabled.
+6. Require a successful result and a positive parsed CTest count. Exit zero with
    no discovered tests remains `no_tests_collected`, never a pass.
-6. Write `oracle.records.jsonl`, `oracle.summary.json`, and the manifest after
+7. Write `oracle.records.jsonl`, `oracle.summary.json`, and the manifest after
    every task. `--resume` reuses only passing records whose task patches, base
    revision, image digest/ID, and harness protocol fingerprint still match.
 
-This directly fixes two misleading setup failures:
+This directly fixes three misleading setup failures:
 
 - Slow fresh repository clones no longer consume the build/test timeout. The
   default 1200-second budget applies to the image's build/test command alone.
 - `nlohmann/json` uses the official image's preloaded `json_test_data`, so
   `download_test_data` does not need network access inside the offline grader.
+- The four affected simdjson images no longer try to download Google Benchmark,
+  rename an empty extraction directory, or clone an uninitialized benchmark
+  submodule from inside a `--network none` container. Optional benchmarks are
+  disabled and the core test data/tool dependency is mounted from the pinned
+  host cache.
 
 For example, Catch2 PR 1608 uses
 `mswebench/catchorg_m_catch2:pr-1608` (all repository components must be
@@ -141,6 +149,14 @@ unset W8_SLIME_MULTI_SWE_SANDBOX_IMAGE
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
 ```
 
+The first preflight containing one of the four affected simdjson tasks needs
+outbound HTTPS from the parent SLIME container to fetch about 6.5 MiB of pinned
+archives. The nested grading containers remain offline. Later runs reuse
+`data/offline-dependencies/simdjson/` after validating
+`data/offline-dependencies.json`. Before the first nested Docker launch, the
+cache is mirrored once into the launcher's same-path shared `TMPDIR`, so the
+host Docker daemon can mount it read-only.
+
 A schema-v2 data directory cannot be reused because it was created by the old
 clone-based protocol. Rebuild that directory once, then return the knob to
 zero:
@@ -162,8 +178,21 @@ export SLIME_MULTI_SWE_PULL_IMAGES=0
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
 ```
 
-To refresh only the two observed nlohmann tasks, then finish the blocking
-all-task admission:
+To refresh only the four simdjson tasks repaired by the offline dependency
+cache:
+
+```bash
+PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
+  --data-root "$SLIME_MULTI_SWE_DATA_DIR" \
+  --resume \
+  --task-id simdjson__simdjson-958 \
+  --task-id simdjson__simdjson-1615 \
+  --task-id simdjson__simdjson-1712 \
+  --task-id simdjson__simdjson-2016
+```
+
+Then refresh the two observed nlohmann tasks and finish the blocking all-task
+admission:
 
 ```bash
 PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
@@ -219,6 +248,9 @@ Before starting the paid/base-model rollout:
 - [ ] Every oracle row has `tests_collected > 0`, `setup_valid: true`, an
       `oracle_cache_key`, and the immutable sandbox identity.
 - [ ] `data/sandbox-images.json` says `mode: official-per-task`.
+- [ ] If the selected data contains an affected simdjson task,
+      `data/offline-dependencies.json` matches the task bundle fingerprint and
+      both cached dependency directories exist.
 - [ ] No standard-path process is running `git clone`; only short-lived
       `mswebench/*` containers should appear during grading.
 - [ ] Only then run `eval_base.sh` and inspect `base.summary.json`.
@@ -248,6 +280,8 @@ The lane writes:
     oracle.records.jsonl
     oracle.summary.json
     sandbox-images.json
+    offline-dependencies.json
+    offline-dependencies/simdjson/{cxxopts,simdjson-data}/
     eval/cpp.jsonl
     tasks/<instance_id>/task.json
   stages/base-eval/
@@ -324,6 +358,11 @@ diagnostics, but that path never changes strict reward or pass fields.
 - `download_test_data` fails and dependent nlohmann tests are `Not Run`: the old
   host-checkout path is active. The schema-v3 standard path uses the official
   image's preloaded `json_test_data`; rebuild once and resume.
+- simdjson reports `file RENAME failed`, missing
+  `google_benchmarks_SOURCE_DIR`, or tries to clone
+  `dependencies/benchmark`: the task predates the offline dependency receipt
+  or its cache is missing. Pull this fix and rerun the four-task targeted
+  preflight above; do not enable networking in the grading container.
 - `oracle.summary.json.all_passed` is false: fix the setup before starting the
   model. The lane keeps `manifest.json.admitted` false and exits nonzero.
 - Response truncation: raise `SLIME_EVAL_MAX_RESPONSE_LEN`.

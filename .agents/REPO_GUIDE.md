@@ -213,7 +213,10 @@ manifest; aggregation copies it into `eval/base.oracle.records.jsonl` plus
 `oracle_setup_check` in `eval/base.summary.json`. Keep detailed setup, response
 contract, artifact fields, repo summaries, oracle proof, and `recovered_*`
 diagnostics in `examples/slime/moonlight_multi_swe_cpp/README.md` instead of
-duplicating them across repo-wide docs:
+duplicating them across repo-wide docs. For simdjson PRs 958, 1615, 1712, and
+2016, preparation must populate the checksum-pinned data-local
+`cxxopts`/simdjson-data cache and the grader must mount it read-only while
+retaining `--network none`:
 
 ```bash
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh

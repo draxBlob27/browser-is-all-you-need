@@ -10,10 +10,12 @@ import re
 import shlex
 import shutil
 import subprocess
+import tarfile
+import urllib.request
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 from typing import Any, Iterable, Sequence
 
 from w8_biayn.cpp_perf.eval import write_json
@@ -46,6 +48,17 @@ _TRUSTED_PATCH_ERROR = 87
 _CANDIDATE_PATCH_ERROR = 88
 ORACLE_SUMMARY_FILENAME = "oracle.summary.json"
 SANDBOX_IMAGES_FILENAME = "sandbox-images.json"
+OFFLINE_DEPENDENCIES_FILENAME = "offline-dependencies.json"
+SIMDJSON_DEPENDENCY_CACHE_RELATIVE = Path("offline-dependencies") / "simdjson"
+SIMDJSON_HARNESS_REVISION = "offline-dependencies-v1"
+SIMDJSON_OFFLINE_INSTANCE_IDS = frozenset(
+    {
+        "simdjson__simdjson-958",
+        "simdjson__simdjson-1615",
+        "simdjson__simdjson-1712",
+        "simdjson__simdjson-2016",
+    }
+)
 ALLOWED_DIFF_FENCE_LANGS = {"diff", "patch"}
 RECOVERABLE_DIFF_FENCE_LANGS = {"", "diff", "patch"}
 
@@ -163,6 +176,36 @@ class MultiSweResponseError(ValueError):
     def __init__(self, reason: str, message: str) -> None:
         super().__init__(message)
         self.reason = reason
+
+
+@dataclass(frozen=True)
+class OfflineDependency:
+    name: str
+    commit: str
+    url: str
+    sha256: str
+
+
+SIMDJSON_OFFLINE_DEPENDENCIES = (
+    OfflineDependency(
+        name="cxxopts",
+        commit="794c975287355de48158d9a80ed502d26b20a472",
+        url=(
+            "https://github.com/jarro2783/cxxopts/archive/"
+            "794c975287355de48158d9a80ed502d26b20a472.tar.gz"
+        ),
+        sha256="4756f00aac2809900efd389b96a2741678d9b5ec36d695983a4bd22704ac1ae1",
+    ),
+    OfflineDependency(
+        name="simdjson-data",
+        commit="a5b13babe65c1bba7186b41b43d4cbdc20a5c470",
+        url=(
+            "https://github.com/simdjson/simdjson-data/archive/"
+            "a5b13babe65c1bba7186b41b43d4cbdc20a5c470.tar.gz"
+        ),
+        sha256="aa5c4e199d05730116f3c9664a1897a75fde30dd9236334800eb83b08c6aba70",
+    ),
+)
 
 
 REPO_HARNESSES: dict[tuple[str, str], MultiSweRepoHarness] = {
@@ -668,6 +711,172 @@ def prepare_multi_swe_sandbox_images(
     return receipt, receipt_path
 
 
+def _uses_simdjson_offline_dependencies(task: dict[str, Any]) -> bool:
+    instance_id = str(task.get("instance_id") or task.get("task_id") or "")
+    return instance_id in SIMDJSON_OFFLINE_INSTANCE_IDS
+
+
+def simdjson_offline_bundle_sha256() -> str:
+    payload = {
+        "harness_revision": SIMDJSON_HARNESS_REVISION,
+        "dependencies": [
+            {
+                "name": dependency.name,
+                "commit": dependency.commit,
+                "url": dependency.url,
+                "sha256": dependency.sha256,
+            }
+            for dependency in SIMDJSON_OFFLINE_DEPENDENCIES
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _download_offline_dependency(dependency: OfflineDependency, archive_path: Path) -> None:
+    request = urllib.request.Request(
+        dependency.url,
+        headers={"User-Agent": "w8-biayn-multi-swe-preflight"},
+    )
+    with urllib.request.urlopen(  # noqa: S310 - immutable HTTPS URL + checksum below
+        request,
+        timeout=DEFAULT_CLONE_TIMEOUT_SECONDS,
+    ) as response:
+        with archive_path.open("wb") as archive:
+            shutil.copyfileobj(response, archive)
+    actual_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    if actual_sha256 != dependency.sha256:
+        raise RuntimeError(
+            f"checksum mismatch for {dependency.name}: "
+            f"expected {dependency.sha256}, got {actual_sha256}"
+        )
+
+
+def _extract_offline_dependency(
+    dependency: OfflineDependency,
+    archive_path: Path,
+    target: Path,
+) -> None:
+    with TemporaryDirectory(prefix=f".{dependency.name}-", dir=target.parent) as scratch_dir:
+        scratch = Path(scratch_dir)
+        extract_root = scratch / "extract"
+        extract_root.mkdir()
+        with tarfile.open(archive_path, mode="r:gz") as archive:
+            members = archive.getmembers()
+            if not members:
+                raise RuntimeError(f"empty archive for {dependency.name}")
+            for member in members:
+                member_path = PurePosixPath(member.name)
+                if (
+                    member_path.is_absolute()
+                    or ".." in member_path.parts
+                    or member.issym()
+                    or member.islnk()
+                    or member.isdev()
+                ):
+                    raise RuntimeError(
+                        f"unsafe archive member for {dependency.name}: {member.name}"
+                    )
+            archive.extractall(extract_root)  # noqa: S202 - members validated above
+        roots = [path for path in extract_root.iterdir() if path.is_dir()]
+        if len(roots) != 1:
+            raise RuntimeError(
+                f"expected one archive root for {dependency.name}, found {len(roots)}"
+            )
+        roots[0].rename(target)
+
+
+def _install_offline_dependency(dependency: OfflineDependency, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=f".{dependency.name}-download-", dir=target.parent) as scratch:
+        archive_path = Path(scratch) / "source.tar.gz"
+        _download_offline_dependency(dependency, archive_path)
+        _extract_offline_dependency(dependency, archive_path, target)
+    if dependency.name == "cxxopts":
+        # simdjson <= 0.3 only checks for this marker before add_subdirectory().
+        (target / ".git").mkdir(exist_ok=True)
+
+
+def prepare_simdjson_offline_dependencies(
+    data_root: str | Path,
+    prepared_tasks: list[tuple[Path, dict[str, Any]]],
+) -> tuple[dict[str, Any] | None, Path | None]:
+    """Prepare pinned dependencies outside network-disabled simdjson graders."""
+
+    affected = [
+        (task_path, task)
+        for task_path, task in prepared_tasks
+        if _uses_simdjson_offline_dependencies(task)
+    ]
+    if not affected:
+        return None, None
+
+    root = Path(data_root)
+    cache_root = root / SIMDJSON_DEPENDENCY_CACHE_RELATIVE
+    receipt_path = root / OFFLINE_DEPENDENCIES_FILENAME
+    bundle_sha256 = simdjson_offline_bundle_sha256()
+    existing: dict[str, Any] = {}
+    if receipt_path.is_file():
+        try:
+            payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            existing = payload
+    cache_valid = (
+        existing.get("simdjson_bundle_sha256") == bundle_sha256
+        and all((cache_root / dependency.name).is_dir() for dependency in SIMDJSON_OFFLINE_DEPENDENCIES)
+    )
+    if not cache_valid:
+        if cache_root.exists():
+            shutil.rmtree(cache_root)
+        for dependency in SIMDJSON_OFFLINE_DEPENDENCIES:
+            _install_offline_dependency(dependency, cache_root / dependency.name)
+
+    receipt = {
+        "kind": "multi-swe-offline-dependencies",
+        "schema_version": 1,
+        "benchmark": BENCHMARK,
+        "simdjson_harness_revision": SIMDJSON_HARNESS_REVISION,
+        "simdjson_bundle_sha256": bundle_sha256,
+        "cache_root": SIMDJSON_DEPENDENCY_CACHE_RELATIVE.as_posix(),
+        "dependencies": [
+            {
+                "name": dependency.name,
+                "commit": dependency.commit,
+                "url": dependency.url,
+                "sha256": dependency.sha256,
+                "path": (
+                    SIMDJSON_DEPENDENCY_CACHE_RELATIVE / dependency.name
+                ).as_posix(),
+            }
+            for dependency in SIMDJSON_OFFLINE_DEPENDENCIES
+        ],
+    }
+    write_json(receipt_path, receipt)
+
+    for task_path, task in affected:
+        task["offline_dependency_cache"] = SIMDJSON_DEPENDENCY_CACHE_RELATIVE.as_posix()
+        task["offline_dependency_bundle_sha256"] = bundle_sha256
+        task["repo_harness_revision"] = SIMDJSON_HARNESS_REVISION
+        write_json(task_path, task)
+
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    files = manifest.setdefault("files", {})
+    files["offline_dependencies"] = receipt_path.relative_to(root).as_posix()
+    manifest["simdjson_offline_dependencies"] = {
+        "harness_revision": SIMDJSON_HARNESS_REVISION,
+        "bundle_sha256": bundle_sha256,
+        "affected_task_ids": sorted(
+            str(task.get("instance_id") or task_path.parent.name)
+            for task_path, task in affected
+        ),
+    }
+    write_json(manifest_path, manifest)
+    return receipt, receipt_path
+
+
 def _sha256_text(value: object) -> str:
     return hashlib.sha256(str(value or "").encode()).hexdigest()
 
@@ -686,6 +895,8 @@ def oracle_setup_cache_key(task: dict[str, Any]) -> str:
         "sandbox_image": task.get("sandbox_image"),
         "sandbox_image_digest": task.get("sandbox_image_digest"),
         "sandbox_image_id": task.get("sandbox_image_id"),
+        "repo_harness_revision": task.get("repo_harness_revision"),
+        "offline_dependency_bundle_sha256": task.get("offline_dependency_bundle_sha256"),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -807,6 +1018,13 @@ def run_multi_swe_oracle_preflight(
         pull=pull_images,
         task_ids=tuple(sorted(selected_ids)),
     )
+    prepared_tasks = load_prepared_multi_swe_tasks(root)
+    selected_tasks = _select_prepared_multi_swe_tasks(
+        prepared_tasks,
+        tuple(sorted(selected_ids)),
+    )
+    if not os.environ.get(SANDBOX_IMAGE_ENV, "").strip():
+        prepare_simdjson_offline_dependencies(root, selected_tasks)
     prepared_tasks = load_prepared_multi_swe_tasks(root)
 
     records_path = root / ORACLE_RECORDS_FILENAME
@@ -935,6 +1153,39 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
     tasks = load_prepared_multi_swe_tasks(root)
     if oracle_check.get("task_count") != len(tasks):
         raise ValueError(f"Multi-SWE oracle/task-count mismatch in {manifest_path}")
+    affected_simdjson_tasks = [
+        (task_path, task)
+        for task_path, task in tasks
+        if _uses_simdjson_offline_dependencies(task)
+    ]
+    if affected_simdjson_tasks:
+        dependency_receipt_path = root / str(files.get("offline_dependencies") or "")
+        if not dependency_receipt_path.is_file():
+            raise ValueError(
+                f"missing Multi-SWE simdjson offline-dependency receipt under {root}"
+            )
+        dependency_receipt = json.loads(dependency_receipt_path.read_text(encoding="utf-8"))
+        expected_bundle = simdjson_offline_bundle_sha256()
+        if (
+            dependency_receipt.get("simdjson_harness_revision")
+            != SIMDJSON_HARNESS_REVISION
+            or dependency_receipt.get("simdjson_bundle_sha256") != expected_bundle
+        ):
+            raise ValueError(
+                f"stale Multi-SWE simdjson offline-dependency receipt under {root}"
+            )
+        dependency_cache = root / SIMDJSON_DEPENDENCY_CACHE_RELATIVE
+        for dependency in SIMDJSON_OFFLINE_DEPENDENCIES:
+            if not (dependency_cache / dependency.name).is_dir():
+                raise ValueError(
+                    f"missing Multi-SWE simdjson dependency {dependency.name!r} under {root}"
+                )
+        for task_path, task in affected_simdjson_tasks:
+            if (
+                task.get("repo_harness_revision") != SIMDJSON_HARNESS_REVISION
+                or task.get("offline_dependency_bundle_sha256") != expected_bundle
+            ):
+                raise ValueError(f"stale Multi-SWE simdjson task harness in {task_path}")
     override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
     if override:
         if image_receipt.get("mode") != "override" or image_receipt.get("override") != override:
@@ -1286,7 +1537,20 @@ def load_task_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     task_path = str(metadata.get("task_path") or "")
     path = _resolve_task_path(task_path, metadata=metadata)
     with path.open(encoding="utf-8") as handle:
-        return json.load(handle)
+        task = json.load(handle)
+    if _uses_simdjson_offline_dependencies(task):
+        task_root = metadata.get("task_root") or os.environ.get(DEFAULT_DATA_ROOT_ENV)
+        if task_root:
+            root = Path(task_root)
+        elif len(path.parents) >= 3:
+            root = path.parents[2]
+        else:  # pragma: no cover - prepared tasks always use tasks/<id>/task.json
+            root = path.parent
+        relative_cache = Path(
+            str(task.get("offline_dependency_cache") or SIMDJSON_DEPENDENCY_CACHE_RELATIVE)
+        )
+        task["_offline_dependency_cache"] = str((root / relative_cache).resolve())
+    return task
 
 
 def _resolve_task_path(task_path: str, *, metadata: dict[str, Any]) -> Path:
@@ -1324,9 +1588,32 @@ def _official_instance_script(
     expected_test_patch_sha = _sha256_text(task.get("test_patch"))
     quoted_repo = shlex.quote(repo_dir)
     quoted_base = shlex.quote(base_ref)
+    if _uses_simdjson_offline_dependencies(task):
+        test_body = """
+set -euo pipefail
+if [ -s /home/test.patch ]; then
+  git -C "$repo_dir" apply --whitespace=nowarn /home/test.patch /home/fix.patch
+else
+  git -C "$repo_dir" apply --whitespace=nowarn /home/fix.patch
+fi
+cd "$repo_dir/build"
+cmake \
+  -DSIMDJSON_DEVELOPER_MODE=ON \
+  -DSIMDJSON_ALLOW_DOWNLOADS=OFF \
+  -DSIMDJSON_GOOGLE_BENCHMARKS=OFF \
+  -DSIMDJSON_COMPETITION=OFF \
+  -DSIMDJSON_CXXOPTS=OFF \
+  ..
+cmake --build .
+ctest --output-on-failure
+""".strip()
+    else:
+        test_body = "bash /home/fix-run.sh"
+    quoted_test_body = shlex.quote(test_body)
     return f"""
 set -euo pipefail
 repo_dir={quoted_repo}
+export repo_dir
 if [ ! -d "$repo_dir/.git" ] || [ ! -f /home/test.patch ] || [ ! -f /home/fix-run.sh ]; then
   echo W8_OFFICIAL_IMAGE_CONTRACT_ERROR
   exit {_OFFICIAL_CONTRACT_ERROR}
@@ -1355,17 +1642,18 @@ elif ! git -C "$repo_dir" apply --check --whitespace=nowarn /home/fix.patch; the
   echo W8_CANDIDATE_PATCH_APPLY_ERROR
   exit {_CANDIDATE_PATCH_ERROR}
 fi
-timeout {timeout_s}s bash /home/fix-run.sh
+timeout {timeout_s}s bash -lc {quoted_test_body}
 """.strip()
 
 
 def _official_multi_swe_docker_args(
     patch_path: Path,
     *,
+    task: dict[str, Any],
     image: str,
     memory: str = DEFAULT_MEMORY,
 ) -> list[str]:
-    return [
+    command = [
         "docker",
         "run",
         "--rm",
@@ -1385,8 +1673,61 @@ def _official_multi_swe_docker_args(
         "no-new-privileges",
         "-v",
         f"{patch_path.resolve()}:/home/fix.patch:ro",
-        image,
     ]
+    if _uses_simdjson_offline_dependencies(task):
+        cache_value = str(task.get("_offline_dependency_cache") or "").strip()
+        if not cache_value:
+            raise ValueError(
+                f"missing offline dependency cache for {task.get('instance_id')}"
+            )
+        cache_root = Path(cache_value).resolve()
+        for dependency, container_path in (
+            ("cxxopts", "/home/simdjson/dependencies/cxxopts"),
+            ("simdjson-data", "/home/simdjson/dependencies/.cache/simdjson-data"),
+        ):
+            source = cache_root / dependency
+            if not source.is_dir():
+                raise ValueError(
+                    f"missing offline simdjson dependency {dependency!r}: {source}"
+                )
+            command.extend(["-v", f"{source}:{container_path}:ro"])
+    command.append(image)
+    return command
+
+
+def _host_visible_simdjson_dependency_cache(task: dict[str, Any]) -> Path:
+    source_value = str(task.get("_offline_dependency_cache") or "").strip()
+    if not source_value:
+        raise ValueError(f"missing offline dependency cache for {task.get('instance_id')}")
+    source = Path(source_value).resolve()
+    bundle_sha256 = str(task.get("offline_dependency_bundle_sha256") or "").strip()
+    if bundle_sha256 != simdjson_offline_bundle_sha256():
+        raise ValueError(f"stale offline dependency bundle for {task.get('instance_id')}")
+
+    target = (
+        Path(gettempdir())
+        / f"w8-biayn-multi-swe-simdjson-{bundle_sha256[:16]}"
+    ).resolve()
+    ready = target / ".w8-biayn-ready"
+    if ready.is_file() and ready.read_text(encoding="utf-8").strip() == bundle_sha256:
+        return target
+    if target.exists():
+        raise ValueError(f"incomplete host-visible simdjson dependency cache: {target}")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".w8-simdjson-stage-", dir=target.parent) as scratch_dir:
+        staged = Path(scratch_dir) / "cache"
+        shutil.copytree(source, staged)
+        (staged / ".w8-biayn-ready").write_text(bundle_sha256 + "\n", encoding="utf-8")
+        try:
+            staged.rename(target)
+        except OSError:
+            # Another rollout worker may have won the atomic publish race.
+            if not target.is_dir():
+                raise
+    if not ready.is_file() or ready.read_text(encoding="utf-8").strip() != bundle_sha256:
+        raise ValueError(f"failed to publish host-visible simdjson dependency cache: {target}")
+    return target
 
 
 def run_official_instance_tests(
@@ -1401,10 +1742,19 @@ def run_official_instance_tests(
     timeout = timeout_s or int(os.environ.get(TEST_TIMEOUT_ENV, str(DEFAULT_TEST_TIMEOUT_SECONDS)))
     image = sandbox_image_reference_for_task(task)
     image_id = str(task.get("sandbox_image_id") or "").strip() or None
+    runtime_task = dict(task)
+    if _uses_simdjson_offline_dependencies(task):
+        runtime_task["_offline_dependency_cache"] = str(
+            _host_visible_simdjson_dependency_cache(task)
+        )
     with TemporaryDirectory(prefix="w8-multi-swe-patch-") as scratch_dir:
         patch_path = Path(scratch_dir) / "fix.patch"
         patch_path.write_text(patch, encoding="utf-8")
-        command = _official_multi_swe_docker_args(patch_path, image=image) + [
+        command = _official_multi_swe_docker_args(
+            patch_path,
+            task=runtime_task,
+            image=image,
+        ) + [
             "bash",
             "-lc",
             _official_instance_script(task, harness, timeout_s=timeout),

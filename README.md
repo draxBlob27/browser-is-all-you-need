@@ -90,6 +90,10 @@ resumes only fingerprint-matching passes before admitting the manifest. It is no
 training proof, does not report speed metrics, and is not an official Multi-SWE
 leaderboard run; keep detailed setup and artifact semantics in
 `examples/slime/moonlight_multi_swe_cpp/README.md`.
+The four historical simdjson images whose CMake files otherwise download
+Google Benchmark or an uninitialized submodule use a data-local, SHA-256-pinned
+`cxxopts`/simdjson-data cache prepared outside the grader and mounted
+read-only; the grading container remains network-disabled.
 
 The GLM agentic SWE-agent lane grades the final edited FILE instead of model
 text: SWE-agent edits `candidate.cpp` over many turns, the hardened Docker
