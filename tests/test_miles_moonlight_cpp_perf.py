@@ -7,6 +7,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 
 EXAMPLE_ROOT = Path("examples/miles")
 SFT_RUNNER = EXAMPLE_ROOT / "moonlight_cpp_perf_lora_r16_sft.sh"
@@ -16,6 +18,7 @@ GLM47_GRPO_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_grpo.sh"
 GLM47_H100_SFT_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_h100_sft.sh"
 GLM47_H100_GRPO_RUNNER = EXAMPLE_ROOT / "glm47_cpp_perf_lora_r16_h100_grpo.sh"
 GLM47_H100_CONVERTER = EXAMPLE_ROOT / "glm47_h100_convert_tp4_pp1_ep8.sh"
+GLM47_H100_RUNTIME = EXAMPLE_ROOT / "Dockerfile.h100-runtime"
 MILES_SCRIPTS = (
     SFT_RUNNER,
     GRPO_RUNNER,
@@ -507,10 +510,49 @@ def test_grpo_runner_supports_adapter_init_passthrough() -> None:
 
 def test_h100_grpo_prepares_hybrid_adapter() -> None:
     text = GLM47_H100_GRPO_RUNNER.read_text(encoding="utf-8")
+    assert "scripts/check_miles_h100_runtime.py" in text
+    assert "MILES_SKIP_RUNTIME_PREFLIGHT:-0" in text
     assert 'MILES_AUTO_PREPARE_GRPO_ADAPTER:-1' in text
     assert 'MILES_GRPO_ADAPTER_DIR:-${MILES_RUN_ROOT}/adapter_hybrid' in text
     assert 'scripts/strip_mtp_adapter.py' in text
     assert "--include-native" in text
+
+
+def test_h100_runtime_aligns_all_flashinfer_packages() -> None:
+    text = GLM47_H100_RUNTIME.read_text(encoding="utf-8")
+    assert "FLASHINFER_VERSION=0.6.12" in text
+    assert "FLASHINFER_CUDA_INDEX=129" in text
+    for package in ("flashinfer-python", "flashinfer-cubin", "flashinfer-jit-cache"):
+        assert package in text
+
+
+def test_h100_runtime_preflight_accepts_aligned_versions() -> None:
+    module = runpy.run_path("scripts/check_miles_h100_runtime.py")
+    validate = module["validate_flashinfer_runtime"]
+
+    versions = validate(lambda _package: "0.6.12+cu129")
+
+    assert set(versions) == {
+        "flashinfer-python",
+        "flashinfer-cubin",
+        "flashinfer-jit-cache",
+    }
+
+
+def test_h100_runtime_preflight_rejects_stale_or_mixed_versions() -> None:
+    module = runpy.run_path("scripts/check_miles_h100_runtime.py")
+    validate = module["validate_flashinfer_runtime"]
+
+    with pytest.raises(RuntimeError, match="below SGLang's minimum"):
+        validate(lambda _package: "0.6.11.post1")
+
+    mixed = {
+        "flashinfer-python": "0.6.12",
+        "flashinfer-cubin": "0.6.12",
+        "flashinfer-jit-cache": "0.6.11.post1+cu129",
+    }
+    with pytest.raises(RuntimeError, match="versions are not aligned"):
+        validate(mixed.__getitem__)
 
 
 def test_strip_mtp_adapter_filters_served_layers_and_copies_native_state(tmp_path) -> None:

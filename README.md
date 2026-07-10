@@ -61,7 +61,18 @@ steady actor time, and peaked at 72,397 MiB/GPU. `recompute=none` at the safer
 step per rollout because multi-step rollouts currently misnumber resumable Miles
 checkpoints; see [issue #25](https://github.com/tokenbender/browser-is-all-you-need/issues/25).
 
-Build the matching Megatron checkpoint once inside the Miles runtime container:
+Build the repo-owned H100 runtime layer first. It aligns the FlashInfer Python
+package, cubins, and CUDA 12.9 JIT cache with the SGLang source in the Miles
+base image; the GRPO wrapper checks this contract before starting Ray:
+
+```bash
+docker build \
+  -f examples/miles/Dockerfile.h100-runtime \
+  -t w8-biayn/miles-glm47-h100:flashinfer-0.6.12 \
+  .
+```
+
+Build the matching Megatron checkpoint once inside that runtime container:
 
 ```bash
 bash examples/miles/glm47_h100_convert_tp4_pp1_ep8.sh
