@@ -490,6 +490,7 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
     monkeypatch.setattr(miles_glm47_bridge, "_LORA_TMS_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_LORA_UPDATE_TMS_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_ROLLOUT_DP_SHARD_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_CORRECT_SAMPLE_LOG_PATCHED", False)
     before_meta_path = list(sys.meta_path)
     sys.meta_path.insert(0, recorder)
     try:
@@ -501,9 +502,10 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
         # miles router_manager, miles lora_utils (optimizer reload), Miles'
         # bridge_lora_helpers (non-nested TMS allocation), Miles' actor
         # (process-group reload inside the live TMS scope), miles.utils.data
-        # (aligned raw-reward DP sharding), and
+        # (aligned raw-reward DP sharding), Miles' rollout logger (global pass@k
+        # plus local correct-sample rows), and
         # megatron.bridge for the bridge-class registration
-        assert len(added) == 11
+        assert len(added) == 12
     finally:
         sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
         sys.meta_path.remove(recorder)
@@ -1152,5 +1154,46 @@ def test_rollout_data_dp_sharding_keeps_raw_rewards_aligned() -> None:
     assert result["tokens"] == ["rank-local-row-3", "rank-local-row-0"]
     assert result["response_lengths"] == [13, 10]
     assert result["total_lengths"] == [13, 10]
-    assert result["raw_reward"] == [1.0, 0.0]
+    assert result["raw_reward"] == [0.0, 0.25, -0.5, 1.0]
+    assert result["_w8_local_raw_reward"] == [1.0, 0.0]
     assert timer_state.seq_lens == [10, 11, 12, 13]
+
+
+def test_correct_sample_logging_uses_global_rewards_only_for_passrate() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    views: list[tuple[str, list[float]]] = []
+
+    def original_log_passrate(rollout_id, args, rollout_data):
+        del rollout_id, args
+        views.append(("passrate", list(rollout_data["raw_reward"])))
+
+    fake_module = types.SimpleNamespace(log_passrate=original_log_passrate)
+
+    def original_log_rollout_data(rollout_id, args, rollout_data):
+        views.append(("aggregate", list(rollout_data["raw_reward"])))
+        fake_module.log_passrate(rollout_id, args, rollout_data)
+        views.append(("correct-samples", list(rollout_data["raw_reward"])))
+
+    fake_module.log_rollout_data = original_log_rollout_data
+    miles_glm47_bridge._apply_correct_sample_logging(fake_module)
+
+    global_rewards = [0.0, 0.25, -0.5, 1.0]
+    local_rewards = [1.0, 0.0]
+    rollout_data = {
+        "raw_reward": global_rewards,
+        "_w8_local_raw_reward": local_rewards,
+    }
+    fake_module.log_rollout_data(
+        0,
+        types.SimpleNamespace(log_correct_samples=True),
+        rollout_data,
+    )
+
+    assert views == [
+        ("aggregate", local_rewards),
+        ("passrate", global_rewards),
+        ("correct-samples", local_rewards),
+    ]
+    assert rollout_data["raw_reward"] is global_rewards
+    assert rollout_data["_w8_local_raw_reward"] is local_rewards

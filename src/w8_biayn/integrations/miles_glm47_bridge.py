@@ -14,6 +14,7 @@ _WARM_START_OPT_PATCHED = False
 _LORA_TMS_PATCHED = False
 _LORA_UPDATE_TMS_PATCHED = False
 _ROLLOUT_DP_SHARD_PATCHED = False
+_CORRECT_SAMPLE_LOG_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
@@ -43,6 +44,7 @@ def register_glm47_bridge() -> None:
     _patch_colocate_lora_tms_regions()
     _patch_colocate_lora_update_tms_scope()
     _patch_rollout_data_dp_sharding()
+    _patch_correct_sample_logging()
     _when_imported("megatron.bridge", lambda module: _register_glm47_bridge_class())
 
 
@@ -672,12 +674,80 @@ def _apply_rollout_data_dp_sharding(module) -> None:
         rollout_data["total_lengths"] = [total_lengths[i] for i in partition]
         if "raw_reward" in rollout_data:
             raw_reward = rollout_data["raw_reward"]
-            rollout_data["raw_reward"] = [raw_reward[i] for i in partition]
+            rollout_data["_w8_local_raw_reward"] = [
+                raw_reward[i] for i in partition
+            ]
 
         return rollout_data
 
     module.process_rollout_data = process_rollout_data
     module._w8_rollout_dp_shard_patched = True
+
+
+def _patch_correct_sample_logging() -> None:
+    """Give pass@k global rewards and row-wise metrics DP-local rewards."""
+
+    global _CORRECT_SAMPLE_LOG_PATCHED
+    if _CORRECT_SAMPLE_LOG_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_CORRECT_SAMPLE_LOG_PATCH", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    _CORRECT_SAMPLE_LOG_PATCHED = True
+    _when_imported(
+        "miles.backends.training_utils.log_utils",
+        _apply_correct_sample_logging,
+    )
+
+
+def _apply_correct_sample_logging(module) -> None:
+    """Select the reward view required by each Miles logging consumer."""
+
+    if getattr(module, "_w8_correct_sample_log_patched", False):
+        return
+    original_log_rollout_data = module.log_rollout_data
+    original_log_passrate = module.log_passrate
+
+    def log_rollout_data(rollout_id, args, rollout_data) -> None:
+        local_rewards = rollout_data.pop("_w8_local_raw_reward", None)
+        if local_rewards is None:
+            return original_log_rollout_data(rollout_id, args, rollout_data)
+        if not args.log_correct_samples:
+            try:
+                return original_log_rollout_data(rollout_id, args, rollout_data)
+            finally:
+                rollout_data["_w8_local_raw_reward"] = local_rewards
+
+        global_rewards = rollout_data["raw_reward"]
+        rollout_data["raw_reward"] = local_rewards
+        previous_log_passrate = module.log_passrate
+
+        def log_passrate(passrate_rollout_id, passrate_args, passrate_data) -> None:
+            current_rewards = passrate_data["raw_reward"]
+            passrate_data["raw_reward"] = global_rewards
+            try:
+                original_log_passrate(
+                    passrate_rollout_id,
+                    passrate_args,
+                    passrate_data,
+                )
+            finally:
+                passrate_data["raw_reward"] = current_rewards
+
+        module.log_passrate = log_passrate
+        try:
+            original_log_rollout_data(rollout_id, args, rollout_data)
+        finally:
+            module.log_passrate = previous_log_passrate
+            rollout_data["raw_reward"] = global_rewards
+            rollout_data["_w8_local_raw_reward"] = local_rewards
+
+    module.log_rollout_data = log_rollout_data
+    module._w8_correct_sample_log_patched = True
 
 
 def _dump_sync_forensics(updater, hf_named_tensors, out_dir) -> None:
