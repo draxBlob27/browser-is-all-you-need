@@ -103,4 +103,14 @@ export WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-${W8_EXPERIMENT_ID}}"
 export WANDB_JOB_TYPE="${WANDB_JOB_TYPE:-grpo}"
 export WANDB_TAGS="${WANDB_TAGS:-canonical,pie-cpp,grpo}"
 
+if [ -n "${MILES_LORA_ADAPTER_PATH:-}" ] && [ "${MILES_AUTO_PREPARE_GRPO_ADAPTER:-1}" = "1" ]; then
+  TRAINER_ADAPTER_PATH="${MILES_LORA_ADAPTER_PATH}"
+  HYBRID_ADAPTER_PATH="${MILES_GRPO_ADAPTER_DIR:-${MILES_RUN_ROOT}/adapter_hybrid}"
+  "${MILES_PYTHON:-python3}" "${REPO_ROOT}/scripts/strip_mtp_adapter.py" \
+    --include-native \
+    "${TRAINER_ADAPTER_PATH}" \
+    "${HYBRID_ADAPTER_PATH}"
+  export MILES_LORA_ADAPTER_PATH="${HYBRID_ADAPTER_PATH}"
+fi
+
 exec "${SCRIPT_DIR}/moonlight_cpp_perf_lora_r16_grpo.sh" "$@"

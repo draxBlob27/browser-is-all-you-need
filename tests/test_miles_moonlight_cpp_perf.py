@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import runpy
 import subprocess
 import sys
 import types
@@ -502,6 +503,44 @@ def test_grpo_runner_supports_adapter_init_passthrough() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'LORA_ADAPTER_PATH="${MILES_LORA_ADAPTER_PATH:-}"' in text
     assert '--lora-adapter-path "${LORA_ADAPTER_PATH}"' in text
+
+
+def test_h100_grpo_prepares_hybrid_adapter() -> None:
+    text = GLM47_H100_GRPO_RUNNER.read_text(encoding="utf-8")
+    assert 'MILES_AUTO_PREPARE_GRPO_ADAPTER:-1' in text
+    assert 'MILES_GRPO_ADAPTER_DIR:-${MILES_RUN_ROOT}/adapter_hybrid' in text
+    assert 'scripts/strip_mtp_adapter.py' in text
+    assert "--include-native" in text
+
+
+def test_strip_mtp_adapter_filters_served_layers_and_copies_native_state(tmp_path) -> None:
+    module = runpy.run_path("scripts/strip_mtp_adapter.py")
+    copy_native_state = module["copy_native_state"]
+    filter_served_layers = module["filter_served_layers"]
+
+    kept, dropped = filter_served_layers(
+        {
+            "model.layers.46.x": 46,
+            "model.layers.47.x": 47,
+            "model.layers.50.x": 50,
+            "other": 1,
+        },
+        num_layers=47,
+    )
+    assert kept == {"model.layers.46.x": 46, "other": 1}
+    assert dropped == ["model.layers.47.x", "model.layers.50.x"]
+
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "adapter_megatron_tp0_pp0.pt").write_bytes(b"native")
+    (src / "training_state_rank0.pt").write_bytes(b"state")
+    (src / "ignore.txt").write_text("ignore")
+    copied = copy_native_state(src, dst)
+    assert [path.name for path in copied] == ["adapter_megatron_tp0_pp0.pt", "training_state_rank0.pt"]
+    assert (dst / "adapter_megatron_tp0_pp0.pt").read_bytes() == b"native"
+    assert not (dst / "ignore.txt").exists()
 
 
 def test_grpo_runner_save_interval_is_configurable() -> None:
