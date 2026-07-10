@@ -62,7 +62,28 @@ key ID, and sentry/executor principals are fixed in the Gate 0 parent booking
 request, so the executor cannot substitute its own trust anchor. Gate 0, Gate
 1, supervisor, and independent-auditor private keys remain outside the
 repository and outside executor-controlled compute, with mode `0600` or
-stricter.
+stricter. The Lium credential is supplied by the supervisor over a bounded
+stdin channel; it is never placed in argv, the subprocess environment, the
+repository, or a receipt. The launch permit also binds the exact SSH public-key
+file by absolute path and SHA-256; the provider receives that public key
+explicitly, while receipts retain only its path and digest.
+
+## Threat Boundary
+
+The control plane rejects stale, forged, tampered, expired, concurrently
+replayed, wrong-parent, and wrong-principal artifacts. It also separates paid
+provider authorization from experiment execution: only the Research
+Supervisor invokes Gate 0 and supplies the Lium credential, while the Executor
+receives the resulting allocation and public verification material.
+
+The local Codex roles share one Unix account and are not claimed to be
+OS-isolated adversaries. A malicious same-UID process could inspect memory,
+alter same-user files, or bypass local wrappers using credentials it obtained
+elsewhere; eliminating that capability requires a separately administered
+credential broker or OS account. Acceptance therefore relies on cryptographic
+role separation and independently auditable actions, with the local account as
+the administrative trust boundary. The paid node remains outside that trust
+boundary and never receives provider or private signing credentials.
 
 ## Locked Metric
 
@@ -125,6 +146,13 @@ one unchanged 8x H100 node:
 - Stop after B1 when candidate throughput retention is below 98%.
 - Tranche T1 is capped at two node-hours and USD 36. Unused budget cannot fund
   another hypothesis.
+- Gate 0 permits expire after at most ten minutes. The provider TTL remains
+  two hours and is independently verified from the server-returned schedule.
+- The runner accepts only `/tmp/w8-issue32-t1`, uses a fixed persistent Gate 1
+  consumption registry, and records GPU/Ray/SGLang/training process inventory
+  before and after every leg. A surviving relevant process invalidates the leg.
+- Gate 1 requires a read-only setup attestation for the exact OCI digest and
+  Hugging Face revision plus a matching revision marker in the model tree.
 
 T1 can only promote all-to-all to a separately budgeted T2 confirmation issue.
 TP2/EP8 with a 14K token cap remains queued behind this lower-cost ambiguity
@@ -149,6 +177,8 @@ artifact paths and checksums
 recommended decision
 signed Gate 0 and Gate 1 parent chain, nonces, expiries, and consumption receipts
 provider allocation, output, cost, TTL, and termination receipts
+setup attestation and model-revision marker checksums
+pre-leg and post-leg process-cleanliness receipts
 ```
 
 The supervisor responds with one decision: `continue`, `stop`, `repair`,

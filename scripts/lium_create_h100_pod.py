@@ -1,25 +1,35 @@
-#!/opt/homebrew/opt/python@3.11/bin/python3.11
+#!/opt/homebrew/Cellar/python@3.11/3.11.14_3/Frameworks/Python.framework/Versions/3.11/bin/python3.11
 """Create one bounded 8xH100 Lium pod without entering SSH."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import json
 import math
+import os
+import platform
 import re
+import stat
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Mapping, Sequence
+from pathlib import Path
+from typing import Any, Callable, Mapping, NoReturn, Sequence
 
 
-VERSION = "1.0.0"
-OUTPUT_SCHEMA = "lium-h100-pod-create/v1"
+VERSION = "1.1.0"
+OUTPUT_SCHEMA = "lium-h100-pod-create/v2"
 MAX_TTL_SECONDS = 2 * 60 * 60
 MAX_RATE_USD_PER_HOUR = Decimal("18")
 MAX_POLL_TIMEOUT_SECONDS = 240
 MAX_POLL_INTERVAL_SECONDS = 30
+SDK_HTTP_TIMEOUT_SECONDS = 30
+RECOVERY_LOOKUP_ATTEMPTS = 2
+MAX_RECOVERY_LOOKUP_SECONDS = SDK_HTTP_TIMEOUT_SECONDS * RECOVERY_LOOKUP_ATTEMPTS
+MAX_CREDENTIAL_BYTES = 4096
 _HUID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}\Z")
 _NAME_RE = re.compile(r"issue-[1-9][0-9]*-[a-z0-9][a-z0-9-]{2,62}\Z")
 _TEMPLATE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}\Z")
@@ -74,7 +84,20 @@ def build_parser() -> MachineArgumentParser:
     up.add_argument("--ttl", required=True)
     up.add_argument("--name", required=True)
     up.add_argument("--yes", action="store_true")
-    up.add_argument("--template-id")
+    up.add_argument("--template-id", required=True)
+    up.add_argument("--template-image", required=True)
+    up.add_argument("--template-tag", required=True)
+    up.add_argument("--template-status", required=True)
+    up.add_argument("--expected-provider-version", required=True)
+    up.add_argument("--expected-interpreter-path", required=True)
+    up.add_argument("--expected-interpreter-sha256", required=True)
+    up.add_argument("--expected-interpreter-version", required=True)
+    up.add_argument("--expected-lium-sdk-version", required=True)
+    up.add_argument("--expected-lium-cli-path", required=True)
+    up.add_argument("--expected-lium-cli-sha256", required=True)
+    up.add_argument("--expected-lium-cli-version", required=True)
+    up.add_argument("--ssh-public-key-path", required=True)
+    up.add_argument("--ssh-public-key-sha256", required=True)
     up.add_argument("--max-rate", default="18")
     up.add_argument("--ports", type=int)
     up.add_argument("--poll-timeout", type=int, default=240)
@@ -85,8 +108,11 @@ def build_parser() -> MachineArgumentParser:
 def main(
     argv: Sequence[str] | None = None,
     *,
-    client_factory: Callable[[], Any] | None = None,
+    client_factory: Callable[[bytearray], Any] | None = None,
     now_fn: Callable[[], datetime] | None = None,
+    credential_reader: Callable[[], bytearray] | None = None,
+    runtime_probe: Callable[[argparse.Namespace], Mapping[str, Any]] | None = None,
+    ssh_public_key_reader: Callable[[Path, str], str] | None = None,
 ) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments == ["--version"]:
@@ -97,9 +123,24 @@ def main(
         if args.command != "up":
             raise ProviderFailure("invalid_arguments", "the up command is required")
         _validate_arguments(args)
+        ssh_public_key = (ssh_public_key_reader or _load_ssh_public_key)(
+            Path(args.ssh_public_key_path), args.ssh_public_key_sha256
+        )
+        os.environ.pop("LIUM_API_KEY", None)
         factory = client_factory or _new_lium_client
-        client = factory()
-        record = create_h100_pod(client, args, now_fn=now_fn)
+        credential = (credential_reader or _read_stdin_credential)()
+        try:
+            client = factory(credential)
+        finally:
+            _wipe_bytearray(credential)
+        runtime = dict((runtime_probe or _collect_runtime_evidence)(args))
+        record = create_h100_pod(
+            client,
+            args,
+            ssh_public_key=ssh_public_key,
+            now_fn=now_fn,
+            runtime_evidence=runtime,
+        )
     except ProviderFailure as exc:
         _emit(
             {
@@ -126,11 +167,132 @@ def main(
     return 0
 
 
+def _read_stdin_credential() -> bytearray:
+    line = sys.stdin.buffer.readline(MAX_CREDENTIAL_BYTES + 2)
+    tail = sys.stdin.buffer.read(1)
+    if tail or len(line) > MAX_CREDENTIAL_BYTES + 1:
+        raise ProviderFailure("credential_invalid", "stdin credential exceeds one bounded line")
+    if line.endswith(b"\n"):
+        line = line[:-1]
+    if not line or b"\n" in line or b"\r" in line or b"\x00" in line:
+        raise ProviderFailure("credential_invalid", "stdin credential is invalid")
+    return bytearray(line)
+
+
+def _wipe_bytearray(value: bytearray) -> None:
+    for index in range(len(value)):
+        value[index] = 0
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_ssh_public_key(path: Path, expected_sha256: str) -> str:
+    if not path.is_absolute():
+        raise ProviderFailure("ssh_public_key_invalid", "SSH public key path is not absolute")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        before = path.lstat()
+        descriptor = os.open(path, flags)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise ProviderFailure("ssh_public_key_invalid", "SSH public key is unavailable") from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+        or after.st_size > 16 * 1024
+    ):
+        os.close(descriptor)
+        raise ProviderFailure(
+            "ssh_public_key_invalid",
+            "SSH public key must be a bounded regular non-symlink file",
+        )
+    data = bytearray()
+    try:
+        while len(data) <= 16 * 1024:
+            chunk = os.read(descriptor, min(4096, 16 * 1024 + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+    except OSError as exc:
+        raise ProviderFailure("ssh_public_key_invalid", "SSH public key is unreadable") from exc
+    finally:
+        os.close(descriptor)
+    if len(data) > 16 * 1024:
+        raise ProviderFailure("ssh_public_key_invalid", "SSH public key grew while reading")
+    public_key_bytes = bytes(data)
+    if hashlib.sha256(public_key_bytes).hexdigest() != expected_sha256:
+        raise ProviderFailure("ssh_public_key_invalid", "SSH public key digest mismatch")
+    try:
+        lines = [
+            line.strip() for line in public_key_bytes.decode("utf-8").splitlines() if line.strip()
+        ]
+    except UnicodeError as exc:
+        raise ProviderFailure("ssh_public_key_invalid", "SSH public key is unreadable") from exc
+    if len(lines) != 1 or not lines[0].startswith(("ssh-", "ecdsa-")):
+        raise ProviderFailure("ssh_public_key_invalid", "SSH public key format is invalid")
+    if any(ord(character) < 32 for character in lines[0]):
+        raise ProviderFailure("ssh_public_key_invalid", "SSH public key contains controls")
+    return lines[0]
+
+
+def _collect_runtime_evidence(args: argparse.Namespace) -> dict[str, Any]:
+    interpreter = Path(sys.executable).resolve()
+    cli_path = Path(args.expected_lium_cli_path)
+    try:
+        sdk_version = importlib.metadata.version("lium.io")
+        interpreter_sha256 = _sha256_file(interpreter)
+        cli_sha256 = _sha256_file(cli_path)
+    except (OSError, importlib.metadata.PackageNotFoundError) as exc:
+        raise ProviderFailure(
+            "runtime_evidence_failed", "Installed runtime evidence is unavailable"
+        ) from exc
+    actual = {
+        "provider_version": VERSION,
+        "interpreter": {
+            "path": str(interpreter),
+            "sha256": interpreter_sha256,
+            "version": platform.python_version(),
+        },
+        "lium_sdk": {"distribution": "lium.io", "version": sdk_version},
+        "lium_cli": {
+            "path": str(cli_path),
+            "sha256": cli_sha256,
+            "version": args.expected_lium_cli_version,
+            "version_source": "wrapper_verified_cli_version",
+        },
+    }
+    expected = {
+        "interpreter_path": args.expected_interpreter_path,
+        "interpreter_sha256": args.expected_interpreter_sha256,
+        "interpreter_version": args.expected_interpreter_version,
+        "lium_sdk_version": args.expected_lium_sdk_version,
+        "lium_cli_sha256": args.expected_lium_cli_sha256,
+    }
+    observed = {
+        "interpreter_path": actual["interpreter"]["path"],
+        "interpreter_sha256": actual["interpreter"]["sha256"],
+        "interpreter_version": actual["interpreter"]["version"],
+        "lium_sdk_version": actual["lium_sdk"]["version"],
+        "lium_cli_sha256": actual["lium_cli"]["sha256"],
+    }
+    if observed != expected:
+        raise ProviderFailure("runtime_evidence_mismatch", "Installed runtime evidence mismatch")
+    return actual
+
+
 def create_h100_pod(
     client: Any,
     args: argparse.Namespace,
     *,
+    ssh_public_key: str,
     now_fn: Callable[[], datetime] | None = None,
+    runtime_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     max_rate = _parse_rate(args.max_rate, "max-rate")
     initial = _resolve_executor_by_huid(client, args.executor_huid)
@@ -148,18 +310,32 @@ def create_h100_pod(
     if fresh != initial:
         raise ProviderFailure("executor_changed", "Executor properties changed during validation")
 
-    template = _resolve_template(client, fresh, args.template_id)
+    template = _resolve_template(client, fresh, args)
+    preexisting_pod_ids = _snapshot_active_pod_ids(client, args.name)
     try:
         created = client.up(
             executor_id=fresh.id,
             name=args.name,
             template_id=str(template.id),
             ports=args.ports,
+            ssh_keys=[ssh_public_key],
         )
-    except Exception as exc:
-        raise ProviderFailure("pod_create_failed", "Lium pod creation failed") from exc
+    except Exception:
+        _raise_after_ambiguous_creation(
+            client,
+            allocation_name=args.name,
+            preexisting_pod_ids=preexisting_pod_ids,
+            confirmed_error="pod_create_failed",
+            confirmed_message="Lium pod creation failed; attributable pods were terminated",
+        )
     if not isinstance(created, Mapping) or not _clean_text(created.get("id")):
-        raise ProviderFailure("pod_create_failed", "Lium did not return a pod ID")
+        _raise_after_ambiguous_creation(
+            client,
+            allocation_name=args.name,
+            preexisting_pod_ids=preexisting_pod_ids,
+            confirmed_error="pod_create_response_invalid",
+            confirmed_message="Lium returned malformed pod metadata; attributable pods were terminated",
+        )
     pod_id = _clean_text(created["id"])
     pod_handle = PodHandle(pod_id)
 
@@ -232,11 +408,25 @@ def create_h100_pod(
             "gpu_model": fresh.gpu_model,
             "observed_rate_usd_per_hour": float(fresh.observed_rate),
             "observed_rate_usd_per_gpu_hour": float(fresh.observed_gpu_rate),
+            "observed_rate_status": (
+                "provider_reported_zero"
+                if fresh.observed_rate == 0
+                else "provider_reported_nonzero"
+            ),
             "max_rate_usd_per_hour": float(max_rate),
+            "rate_authority": "signed_max_rate_cap",
         },
         "template": {
             "id": _clean_text(template.id),
             "name": _clean_text(getattr(template, "name", "")),
+            "docker_image": _clean_text(getattr(template, "docker_image", "")),
+            "docker_image_tag": _clean_text(getattr(template, "docker_image_tag", "")),
+            "status": _clean_text(getattr(template, "status", "")),
+        },
+        "runtime_evidence": dict(runtime_evidence or {}),
+        "access": {
+            "ssh_public_key_path": args.ssh_public_key_path,
+            "ssh_public_key_sha256": args.ssh_public_key_sha256,
         },
         "schedule": {
             "confirmed": True,
@@ -252,15 +442,19 @@ def create_h100_pod(
     }
 
 
-def _new_lium_client() -> Any:
+def _new_lium_client(credential: bytearray) -> Any:
     try:
-        from lium.sdk import Lium
+        from lium.sdk import Config, Lium
     except ImportError as exc:
         raise ProviderFailure(
             "sdk_unavailable",
             "lium.sdk is unavailable under the provider interpreter",
         ) from exc
-    return Lium()
+    try:
+        api_key = credential.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProviderFailure("credential_invalid", "stdin credential is not UTF-8") from exc
+    return Lium(Config(api_key=api_key))
 
 
 def _validate_arguments(args: argparse.Namespace) -> None:
@@ -276,6 +470,22 @@ def _validate_arguments(args: argparse.Namespace) -> None:
     _parse_rate(args.max_rate, "max-rate")
     if args.template_id is not None and _TEMPLATE_RE.fullmatch(args.template_id) is None:
         raise ProviderFailure("invalid_arguments", "template-id has invalid format")
+    for field in ("template_image", "template_tag", "template_status"):
+        value = _clean_text(getattr(args, field, ""))
+        if not value or any(ord(character) < 32 for character in value):
+            raise ProviderFailure("invalid_arguments", f"{field} is invalid")
+    if args.expected_provider_version != VERSION:
+        raise ProviderFailure("runtime_version_mismatch", "Provider version mismatch")
+    for field in ("expected_interpreter_path", "expected_lium_cli_path"):
+        if not Path(getattr(args, field)).is_absolute():
+            raise ProviderFailure("invalid_arguments", f"{field} must be absolute")
+    if not Path(args.ssh_public_key_path).is_absolute():
+        raise ProviderFailure("invalid_arguments", "ssh-public-key-path must be absolute")
+    for field in ("expected_interpreter_sha256", "expected_lium_cli_sha256"):
+        if re.fullmatch(r"[0-9a-f]{64}", getattr(args, field)) is None:
+            raise ProviderFailure("invalid_arguments", f"{field} must be SHA-256 hex")
+    if re.fullmatch(r"[0-9a-f]{64}", args.ssh_public_key_sha256) is None:
+        raise ProviderFailure("invalid_arguments", "ssh-public-key-sha256 must be SHA-256 hex")
     if args.ports is not None and not 1 <= args.ports <= 64:
         raise ProviderFailure("invalid_arguments", "ports must be between 1 and 64")
     if not 1 <= args.poll_timeout <= MAX_POLL_TIMEOUT_SECONDS:
@@ -339,26 +549,149 @@ def _validate_executor(
         raise ProviderFailure("executor_rate_invalid", "Observed GPU rate is invalid")
 
 
-def _resolve_template(client: Any, executor: ExecutorSnapshot, template_id: str | None) -> Any:
+def _resolve_template(client: Any, executor: ExecutorSnapshot, args: argparse.Namespace) -> Any:
+    del executor
     try:
-        template = (
-            client.get_template(template_id)
-            if template_id is not None
-            else client.default_docker_template(executor.id)
-        )
+        template = client.get_template(args.template_id)
     except Exception as exc:
         raise ProviderFailure("template_resolution_failed", "Template resolution failed") from exc
     if template is None or not _clean_text(getattr(template, "id", "")):
         raise ProviderFailure("template_resolution_failed", "No usable template was found")
-    if template_id is not None and _clean_text(template.id) != template_id:
+    if _clean_text(template.id) != args.template_id:
         raise ProviderFailure("template_identity_mismatch", "Template identity mismatch")
-    if template_id is not None:
-        template_status = _clean_text(getattr(template, "status", "")).upper()
-        if template_status and template_status not in _USABLE_TEMPLATE_STATES:
+    template_status = _clean_text(getattr(template, "status", "")).upper()
+    if template_status not in _USABLE_TEMPLATE_STATES:
+        raise ProviderFailure("template_unusable", "Explicit template is not usable")
+    expected = {
+        "docker_image": args.template_image,
+        "docker_image_tag": args.template_tag,
+        "status": args.template_status,
+    }
+    for field, value in expected.items():
+        if _clean_text(getattr(template, field, "")) != value:
             raise ProviderFailure(
-                "template_unusable", "Explicit template is not in a usable status"
+                "template_metadata_mismatch", "Explicit template metadata mismatch"
             )
     return template
+
+
+def _pod_field(pod: Any, field: str) -> Any:
+    if isinstance(pod, Mapping):
+        return pod.get(field)
+    return getattr(pod, field, None)
+
+
+def _list_active_pods(client: Any) -> list[Any]:
+    pods = client.ps()
+    if pods is None or isinstance(pods, (str, bytes, Mapping)):
+        raise TypeError("pod listing is not a sequence")
+    return list(pods)
+
+
+def _cleanup_details(status: str, pod_ids: Sequence[str]) -> dict[str, Any]:
+    unique_ids = sorted(set(pod_ids))
+    return {
+        "cleanup_status": status,
+        "cleanup_count": len(unique_ids),
+        "cleanup_pod_ids": unique_ids,
+    }
+
+
+def _snapshot_active_pod_ids(client: Any, allocation_name: str) -> frozenset[str]:
+    try:
+        pods = _list_active_pods(client)
+    except Exception as exc:
+        raise ProviderFailure(
+            "pod_snapshot_failed",
+            "Could not snapshot active pods before creation",
+            details=_cleanup_details("NOT_REQUIRED", ()),
+        ) from exc
+    pod_ids: set[str] = set()
+    for pod in pods:
+        pod_name = _clean_text(_pod_field(pod, "name"))
+        pod_id = _clean_text(_pod_field(pod, "id"))
+        if pod_name == allocation_name:
+            raise ProviderFailure(
+                "allocation_name_in_use",
+                "An active pod already uses the signed allocation name",
+                details=_cleanup_details("NOT_REQUIRED", ()),
+            )
+        if not pod_id:
+            raise ProviderFailure(
+                "pod_snapshot_invalid",
+                "Active pod metadata is missing an ID",
+                details=_cleanup_details("NOT_REQUIRED", ()),
+            )
+        pod_ids.add(pod_id)
+    return frozenset(pod_ids)
+
+
+def _recover_ambiguous_creation(
+    client: Any,
+    *,
+    allocation_name: str,
+    preexisting_pod_ids: frozenset[str],
+) -> dict[str, Any]:
+    candidates: dict[str, Any] = {}
+    lookup_failed = False
+    attribution_ambiguous = False
+    successful_lookups = 0
+    for _ in range(RECOVERY_LOOKUP_ATTEMPTS):
+        try:
+            pods = _list_active_pods(client)
+        except Exception:
+            lookup_failed = True
+            continue
+        successful_lookups += 1
+        for pod in pods:
+            if _clean_text(_pod_field(pod, "name")) != allocation_name:
+                continue
+            pod_id = _clean_text(_pod_field(pod, "id"))
+            if not pod_id:
+                attribution_ambiguous = True
+                continue
+            if pod_id not in preexisting_pod_ids:
+                candidates[pod_id] = pod
+
+    cleanup_failed = False
+    for pod_id in sorted(candidates):
+        try:
+            client.down(candidates[pod_id])
+        except Exception:
+            cleanup_failed = True
+    confirmed = (
+        successful_lookups == RECOVERY_LOOKUP_ATTEMPTS
+        and not lookup_failed
+        and not attribution_ambiguous
+        and bool(candidates)
+        and not cleanup_failed
+    )
+    return _cleanup_details(
+        "CONFIRMED" if confirmed else "UNCONFIRMED",
+        tuple(candidates),
+    )
+
+
+def _raise_after_ambiguous_creation(
+    client: Any,
+    *,
+    allocation_name: str,
+    preexisting_pod_ids: frozenset[str],
+    confirmed_error: str,
+    confirmed_message: str,
+) -> NoReturn:
+    cleanup = _recover_ambiguous_creation(
+        client,
+        allocation_name=allocation_name,
+        preexisting_pod_ids=preexisting_pod_ids,
+    )
+    if cleanup["cleanup_status"] != "CONFIRMED":
+        raise ProviderFailure(
+            "pod_create_cleanup_unconfirmed",
+            "Ambiguous pod creation cleanup could not be confirmed",
+            details=cleanup,
+        )
+    raise ProviderFailure(confirmed_error, confirmed_message, details=cleanup)
 
 
 def _validate_ready_pod(

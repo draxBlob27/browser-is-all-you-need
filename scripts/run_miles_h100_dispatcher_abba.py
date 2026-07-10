@@ -54,6 +54,13 @@ DATA_DIR = Path("/data/glm47-pie-profile-long128-oracle-v2")
 TASKS_DIR = Path("/data/pie-tasks-full-20260706")
 HF_CHECKPOINT = Path("/root/models/GLM-4.7-Flash")
 REF_LOAD_DIR = Path("/root/models/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8")
+CANONICAL_RUN_ROOT = Path("/tmp/w8-issue32-t1")
+GATE1_CONSUMPTION_ROOT = Path("/data/w8-biayn/control-plane/gate1-consumption/v1")
+SETUP_ATTESTATION_PATH = Path(
+    "/data/w8-biayn/control-plane/setup/issue32-t1-setup-attestation.json"
+)
+SETUP_ATTESTATION_SCHEMA = "w8-h100-setup-attestation/v1"
+HF_REVISION_MARKER_PATH = HF_CHECKPOINT / ".w8-hf-revision"
 
 TRAINING_BASE_SHA = "cd83e3c8780f09e38e5b58558d84580e74afbcf6"
 TRAIN_SHA256 = "f1f5f70b1e77dbb6da51d075a35b2e48f784f4080873f356c9c4bd3c83a3d783"
@@ -72,6 +79,11 @@ HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
 FAILURE_RE = re.compile(
     r"(?:CUDA out of memory|OutOfMemoryError|RayTaskError|ChildFailedError|"
     r"Traceback \(most recent call last\)|NCCL[^\n]*(?:error|failure))",
+    re.IGNORECASE,
+)
+RELEVANT_PROCESS_RE = re.compile(
+    r"(?:raylet|gcs_server|ray::|sglang|torchrun|megatron|actor_train|"
+    r"(?:^|[/\s])train(?:ing)?(?:[._/-]|\s|$))",
     re.IGNORECASE,
 )
 TELEMETRY_COLUMNS = (
@@ -138,8 +150,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         command.add_argument("--sentry-public-key", required=True)
         command.add_argument("--sentry-principal", required=True)
         command.add_argument("--executor-principal", required=True)
-        command.add_argument("--approval-ledger", required=True)
     return parser.parse_args(argv)
+
+
+def _require_canonical_run_root(run_root: Path) -> None:
+    if run_root.expanduser().resolve() != CANONICAL_RUN_ROOT.expanduser().resolve():
+        raise SystemExit(f"run root must be exactly {CANONICAL_RUN_ROOT}")
 
 
 def _sha256(path: Path) -> str:
@@ -271,7 +287,59 @@ def collect_hardware_receipt(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def checkpoint_receipt() -> dict[str, Any]:
+def load_setup_attestation(path: Path = SETUP_ATTESTATION_PATH) -> dict[str, Any]:
+    attestation = _read_json_object(path, "setup attestation")
+    required = {
+        "schema",
+        "created_at_utc",
+        "hf_checkpoint_path",
+        "hf_model",
+        "hf_revision",
+        "hf_revision_marker_path",
+        "hf_revision_marker_sha256",
+        "container_image_reference",
+        "container_image_digest",
+        "container_platform",
+    }
+    if set(attestation) != required or attestation.get("schema") != SETUP_ATTESTATION_SCHEMA:
+        raise RuntimeError("setup attestation schema mismatch")
+    _parse_utc(attestation.get("created_at_utc"), "setup attestation created_at_utc")
+    if attestation.get("hf_checkpoint_path") != str(HF_CHECKPOINT):
+        raise RuntimeError("setup attestation HF checkpoint mismatch")
+    if attestation.get("hf_revision_marker_path") != str(HF_REVISION_MARKER_PATH):
+        raise RuntimeError("setup attestation HF revision marker path mismatch")
+    if re.fullmatch(r"[0-9a-f]{40}", str(attestation.get("hf_revision") or "")) is None:
+        raise RuntimeError("setup attestation HF revision is not pinned")
+    container_digest = str(attestation.get("container_image_digest") or "")
+    container_reference = str(attestation.get("container_image_reference") or "")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", container_digest) is None:
+        raise RuntimeError("setup attestation container digest is invalid")
+    if not container_reference.endswith(f"@{container_digest}"):
+        raise RuntimeError("setup attestation container reference does not bind its digest")
+    runtime_pins = load_acceptance_contract().get("runtime_pins", {})
+    expected = {
+        "hf_model": runtime_pins.get("hf_model"),
+        "hf_revision": runtime_pins.get("hf_revision"),
+        "container_image_reference": runtime_pins.get("container_image"),
+        "container_platform": runtime_pins.get("container_platform"),
+    }
+    if any(attestation.get(field) != value for field, value in expected.items()):
+        raise RuntimeError("setup attestation does not match acceptance runtime pins")
+    if not HF_REVISION_MARKER_PATH.is_file():
+        raise RuntimeError("HF revision marker is missing")
+    if _sha256(HF_REVISION_MARKER_PATH) != attestation["hf_revision_marker_sha256"]:
+        raise RuntimeError("HF revision marker hash mismatch")
+    if HF_REVISION_MARKER_PATH.read_text(encoding="utf-8").strip() != attestation["hf_revision"]:
+        raise RuntimeError("HF revision marker content mismatch")
+    return attestation
+
+
+def checkpoint_receipt(
+    setup: dict[str, Any] | None = None,
+    *,
+    setup_path: Path = SETUP_ATTESTATION_PATH,
+) -> dict[str, Any]:
+    setup = setup or load_setup_attestation(setup_path)
     marker = REF_LOAD_DIR / "latest_checkpointed_iteration.txt"
     if not marker.is_file():
         raise RuntimeError(f"missing checkpoint tracker: {marker}")
@@ -284,7 +352,7 @@ def checkpoint_receipt() -> dict[str, Any]:
     if not metadata.is_file():
         raise RuntimeError(f"incomplete distributed checkpoint: {metadata}")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "root": str(REF_LOAD_DIR),
         "layout": "TP4/PP1/EP8/ETP1",
         "tag": tag,
@@ -292,6 +360,42 @@ def checkpoint_receipt() -> dict[str, Any]:
         "metadata_path": str(metadata),
         "metadata_sha256": _sha256(metadata),
         "metadata_size": metadata.stat().st_size,
+        "hf_checkpoint_path": setup["hf_checkpoint_path"],
+        "hf_model": setup["hf_model"],
+        "hf_revision": setup["hf_revision"],
+        "hf_revision_marker_path": setup["hf_revision_marker_path"],
+        "hf_revision_marker_sha256": setup["hf_revision_marker_sha256"],
+        "container_image_reference": setup["container_image_reference"],
+        "container_image_digest": setup["container_image_digest"],
+        "container_platform": setup["container_platform"],
+        "setup_attestation_path": str(setup_path),
+        "setup_attestation_sha256": _sha256(setup_path),
+    }
+
+
+def runtime_receipt(
+    setup: dict[str, Any],
+    *,
+    setup_path: Path,
+) -> dict[str, Any]:
+    check = _run_capture([sys.executable, str(RUNTIME_CHECK)], cwd=REPO_ROOT)
+    return {
+        "schema_version": 2,
+        "ok": check["returncode"] == 0,
+        "returncode": check["returncode"],
+        "stdout": check["stdout"],
+        "stderr": check["stderr"],
+        "runtime_check": check,
+        "hf_checkpoint_path": setup["hf_checkpoint_path"],
+        "hf_model": setup["hf_model"],
+        "container_image_reference": setup["container_image_reference"],
+        "container_image_digest": setup["container_image_digest"],
+        "container_platform": setup["container_platform"],
+        "hf_revision": setup["hf_revision"],
+        "hf_revision_marker_path": setup["hf_revision_marker_path"],
+        "hf_revision_marker_sha256": setup["hf_revision_marker_sha256"],
+        "setup_attestation_path": str(setup_path),
+        "setup_attestation_sha256": _sha256(setup_path),
     }
 
 
@@ -728,6 +832,82 @@ def _ray_stop(env: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def collect_process_cleanliness() -> dict[str, Any]:
+    gpu = _run_capture(
+        [
+            "nvidia-smi",
+            "--query-compute-apps=pid,process_name,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        ],
+        timeout=15,
+    )
+    processes = _run_capture(["ps", "-axo", "pid=,lstart=,args="], timeout=15)
+    errors: list[str] = []
+    gpu_inventory: list[dict[str, Any]] = []
+    if gpu["returncode"] != 0:
+        errors.append("gpu_process_inventory_failed")
+    else:
+        for row in csv.reader(gpu["stdout"].splitlines()):
+            if not row or not row[0].strip() or row[0].startswith("No running"):
+                continue
+            if len(row) != 3 or not row[0].strip().isdigit():
+                errors.append("gpu_process_inventory_malformed")
+                continue
+            gpu_inventory.append(
+                {
+                    "pid": int(row[0].strip()),
+                    "process_name": row[1].strip(),
+                    "used_gpu_memory_mib": row[2].strip(),
+                }
+            )
+    process_rows: dict[int, dict[str, Any]] = {}
+    if processes["returncode"] != 0:
+        errors.append("process_inventory_failed")
+    else:
+        pattern = re.compile(
+            r"^\s*(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+"
+            r"\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$"
+        )
+        for line in processes["stdout"].splitlines():
+            match = pattern.match(line)
+            if match is None:
+                continue
+            pid = int(match.group(1))
+            process_rows[pid] = {
+                "pid": pid,
+                "start_time": match.group(2),
+                "args": match.group(3),
+            }
+    relevant: dict[int, dict[str, Any]] = {}
+    for pid, row in process_rows.items():
+        if pid != os.getpid() and RELEVANT_PROCESS_RE.search(str(row["args"])):
+            relevant[pid] = {**row, "sources": ["process_inventory"]}
+    for gpu_row in gpu_inventory:
+        pid = int(gpu_row["pid"])
+        row = process_rows.get(
+            pid,
+            {"pid": pid, "start_time": None, "args": gpu_row["process_name"]},
+        )
+        sources = list(relevant.get(pid, {}).get("sources", []))
+        if "gpu_process_inventory" not in sources:
+            sources.append("gpu_process_inventory")
+        relevant[pid] = {**row, "sources": sources}
+    if relevant:
+        errors.append("surviving_relevant_processes")
+    return {
+        "schema": "h100-process-cleanliness/v1",
+        "checked_at_utc": _utc_now(),
+        "ok": not errors,
+        "errors": sorted(set(errors)),
+        "gpu_process_inventory": gpu_inventory,
+        "relevant_processes": [relevant[pid] for pid in sorted(relevant)],
+        "commands": {
+            "gpu_process_inventory_returncode": gpu["returncode"],
+            "process_inventory_returncode": processes["returncode"],
+        },
+    }
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -789,6 +969,8 @@ def summarize_two_warmup(
     launcher_exit_code: int,
     pre_cleanup: dict[str, Any],
     post_cleanup: dict[str, Any],
+    pre_process_cleanliness: dict[str, Any],
+    post_process_cleanliness: dict[str, Any],
     telemetry: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     receipt = read_key_value(receipt_path) if receipt_path.is_file() else {}
@@ -856,6 +1038,10 @@ def summarize_two_warmup(
         reasons.append("pre_leg_ray_cleanup_failed")
     if not post_cleanup.get("ok"):
         reasons.append("post_leg_ray_cleanup_failed")
+    if not pre_process_cleanliness.get("ok"):
+        reasons.append("pre_leg_process_cleanliness_failed")
+    if not post_process_cleanliness.get("ok"):
+        reasons.append("post_leg_process_cleanliness_failed")
     if not telemetry.get("ok"):
         reasons.append("telemetry_monitor_failed")
     if len(perf) != TOTAL_PERF_STEPS or [event["step"] for event in perf] != list(range(16)):
@@ -888,6 +1074,8 @@ def summarize_two_warmup(
             "global_actor_tok_s_median": median_value("global_actor_tok_s"),
             "pre_ray_cleanup": pre_cleanup,
             "post_ray_cleanup": post_cleanup,
+            "pre_process_cleanliness": pre_process_cleanliness,
+            "post_process_cleanliness": post_process_cleanliness,
             "telemetry": telemetry,
         },
         records,
@@ -904,6 +1092,8 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
     write_json(leg_root / "leg_spec.json", {"leg": asdict(spec), "controlled_env": controlled})
     pre_cleanup = _ray_stop(env)
     write_json(leg_root / "ray_cleanup_before.json", pre_cleanup)
+    pre_process_cleanliness = collect_process_cleanliness()
+    write_json(leg_root / "process_cleanliness_before.json", pre_process_cleanliness)
     before_nvlink = nvlink_snapshot()
     write_json(leg_root / "nvlink_before.json", before_nvlink)
     monitor = TelemetryMonitor(stage / "gpu_telemetry.csv")
@@ -915,7 +1105,7 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
     try:
         monitor.start()
         monitor_started = True
-        if pre_cleanup["ok"]:
+        if pre_cleanup["ok"] and pre_process_cleanliness["ok"]:
             launcher_exit_code = subprocess.run(
                 ["bash", str(RUNNER)], env=env, check=False
             ).returncode
@@ -942,10 +1132,12 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
                 }
         finally:
             post_cleanup = _ray_stop(env)
+            post_process_cleanliness = collect_process_cleanliness()
         run_finished_at_utc = _utc_now()
         after_nvlink = nvlink_snapshot()
         write_json(leg_root / "nvlink_after.json", after_nvlink)
         write_json(leg_root / "ray_cleanup_after.json", post_cleanup)
+        write_json(leg_root / "process_cleanliness_after.json", post_process_cleanliness)
         _append_receipt_evidence(
             receipt_path,
             tranche_id=tranche_id,
@@ -972,6 +1164,8 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
         launcher_exit_code=launcher_exit_code,
         pre_cleanup=pre_cleanup,
         post_cleanup=post_cleanup,
+        pre_process_cleanliness=pre_process_cleanliness,
+        post_process_cleanliness=post_process_cleanliness,
         telemetry=telemetry,
     )
     if not canonical.get("accepted"):
@@ -995,6 +1189,8 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
         "gpu_telemetry": stage / "gpu_telemetry.csv",
         "nvlink_before": leg_root / "nvlink_before.json",
         "nvlink_after": leg_root / "nvlink_after.json",
+        "process_cleanliness_before": leg_root / "process_cleanliness_before.json",
+        "process_cleanliness_after": leg_root / "process_cleanliness_after.json",
         "wandb_readback": wandb_readback_path,
         "wandb_evidence_summary": stage
         / f"{controlled['MILES_WANDB_RUN_ID']}.evidence_summary.json",
@@ -1175,12 +1371,12 @@ def _validate_gate0_chain(
     booking_request = _read_json_object(paths["booking_request"], "Gate0 booking request")
     provider_output = _read_json_object(paths["provider_output"], "Gate0 provider output")
     payload = permit.get("payload")
-    if permit.get("schema") != "h100-lium-signed-permit-envelope/v3" or not isinstance(
+    if permit.get("schema") != "h100-lium-signed-permit-envelope/v4" or not isinstance(
         payload, dict
     ):
         raise RuntimeError("Gate0 permit envelope schema is invalid")
     if (
-        payload.get("schema") != "h100-lium-booking-permit/v3"
+        payload.get("schema") != "h100-lium-booking-permit/v4"
         or payload.get("stage") != "lium-booking"
         or payload.get("decision") != Decision.PROMOTABLE.value
     ):
@@ -1196,7 +1392,7 @@ def _validate_gate0_chain(
         raise RuntimeError("Gate0 key_id is missing")
     issued_at = _parse_utc(payload.get("issued_at"), "Gate0 issued_at")
     expires_at = _parse_utc(payload.get("expires_at"), "Gate0 expires_at")
-    if expires_at <= issued_at or expires_at - issued_at > REQUEST_LIFETIME:
+    if expires_at <= issued_at or expires_at - issued_at > timedelta(minutes=10):
         raise RuntimeError("Gate0 permit lifetime is invalid")
     if require_current_permit:
         now = _utc_now()
@@ -1227,15 +1423,23 @@ def _validate_gate0_chain(
         payload.get("provider") != "lium"
         or payload.get("gpu_type") != "H100"
         or payload.get("gpu_count") != 8
+        or payload.get("credential_transport") != "stdin-line/v1"
     ):
         raise RuntimeError("Gate0 provider or 8x H100 binding is invalid")
+    ssh_public_key_path = payload.get("ssh_public_key_path")
+    if (
+        not isinstance(ssh_public_key_path, str)
+        or not Path(ssh_public_key_path).is_absolute()
+        or HEX_256_RE.fullmatch(str(payload.get("ssh_public_key_sha256") or "")) is None
+    ):
+        raise RuntimeError("Gate0 SSH public-key permit binding is invalid")
 
     hashes = _artifact_hashes(paths)
     if payload.get("parent_request_sha256") != hashes["booking_request"]:
         raise RuntimeError("Gate0 permit booking-request hash mismatch")
     execution = receipt.get("execution") if isinstance(receipt.get("execution"), dict) else {}
     if (
-        receipt.get("schema") != "h100-lium-launch-receipt/v1"
+        receipt.get("schema") != "h100-lium-launch-receipt/v2"
         or receipt.get("status") != "COMPLETED"
         or execution.get("exit_code") != 0
         or execution.get("wrapper_exit_code") != 0
@@ -1275,12 +1479,13 @@ def _validate_gate0_chain(
     allocation_name = str(pod.get("name") or "")
     gpu_label = f"{executor.get('gpu_type', '')} {executor.get('gpu_model', '')}".upper()
     if (
-        provider_output.get("schema") != "lium-h100-pod-create/v1"
+        provider_output.get("schema") != "lium-h100-pod-create/v2"
         or provider_output.get("status") != "RUNNING"
         or not allocation_id
         or not allocation_name
         or executor.get("gpu_count") != 8
         or "H100" not in gpu_label
+        or executor.get("observed_rate_status") != payload.get("observed_node_hourly_rate_status")
         or schedule.get("confirmed") is not True
     ):
         raise RuntimeError("Gate0 provider output does not prove a running 8x H100 allocation")
@@ -1312,6 +1517,56 @@ def _validate_gate0_chain(
         or receipt_provider.get("executor_id") != selector
     ):
         raise RuntimeError("Gate0 launch receipt provider binding mismatch")
+    receipt_execution = (
+        receipt.get("execution") if isinstance(receipt.get("execution"), dict) else {}
+    )
+    if receipt_execution.get("credential_transport") != payload.get("credential_transport"):
+        raise RuntimeError("Gate0 credential transport binding mismatch")
+    expected_access = {
+        "ssh_public_key_path": payload.get("ssh_public_key_path"),
+        "ssh_public_key_sha256": payload.get("ssh_public_key_sha256"),
+    }
+    output_access = (
+        provider_output.get("access") if isinstance(provider_output.get("access"), dict) else {}
+    )
+    receipt_access = receipt.get("access") if isinstance(receipt.get("access"), dict) else {}
+    if output_access != expected_access or receipt_access != expected_access:
+        raise RuntimeError("Gate0 SSH public-key binding mismatch")
+    output_template = (
+        provider_output.get("template") if isinstance(provider_output.get("template"), dict) else {}
+    )
+    expected_template = {
+        "id": payload.get("template_id"),
+        "docker_image": payload.get("template_image"),
+        "docker_image_tag": payload.get("template_tag"),
+        "status": payload.get("template_status"),
+    }
+    if any(output_template.get(field) != value for field, value in expected_template.items()):
+        raise RuntimeError("Gate0 provider template binding mismatch")
+    output_runtime = (
+        provider_output.get("runtime_evidence")
+        if isinstance(provider_output.get("runtime_evidence"), dict)
+        else {}
+    )
+    interpreter = (
+        output_runtime.get("interpreter")
+        if isinstance(output_runtime.get("interpreter"), dict)
+        else {}
+    )
+    sdk = output_runtime.get("lium_sdk") if isinstance(output_runtime.get("lium_sdk"), dict) else {}
+    cli = output_runtime.get("lium_cli") if isinstance(output_runtime.get("lium_cli"), dict) else {}
+    if (
+        output_runtime.get("provider_version") != payload.get("provider_version")
+        or interpreter.get("path") != payload.get("provider_interpreter")
+        or interpreter.get("sha256") != payload.get("provider_interpreter_sha256")
+        or interpreter.get("version") != payload.get("provider_interpreter_version")
+        or sdk.get("distribution") != payload.get("lium_sdk_distribution")
+        or sdk.get("version") != payload.get("lium_sdk_version")
+        or cli.get("path") != payload.get("lium_cli_path")
+        or cli.get("sha256") != payload.get("lium_cli_sha256")
+        or cli.get("version") != payload.get("lium_cli_version")
+    ):
+        raise RuntimeError("Gate0 provider runtime evidence mismatch")
     receipt_allocation = (
         receipt.get("allocation") if isinstance(receipt.get("allocation"), dict) else {}
     )
@@ -1327,6 +1582,7 @@ def _validate_gate0_chain(
         "max_cost_usd",
         "max_node_hourly_rate_usd",
         "observed_node_hourly_rate_usd",
+        "observed_node_hourly_rate_status",
         "max_node_hours",
     ):
         if receipt_budget.get(field) != payload.get(field):
@@ -1360,14 +1616,18 @@ def prepare_phase(
     gate0_booking_request: Path,
     gate0_provider_output: Path,
 ) -> int:
+    _require_canonical_run_root(run_root)
     if run_root.exists() and any(run_root.iterdir()):
         raise SystemExit(f"prepare requires a new or empty run root: {run_root}")
     run_root.mkdir(parents=True, exist_ok=True)
     receipts = run_root / "receipts"
     receipts.mkdir()
     budget_copy = run_root / "budget.json"
+    setup_copy = receipts / "setup_attestation.json"
     try:
         _copy_exact(budget_receipt, budget_copy)
+        _copy_exact(SETUP_ATTESTATION_PATH, setup_copy)
+        setup = load_setup_attestation(setup_copy)
         source_gate0 = {
             "permit": gate0_permit,
             "launch_receipt": gate0_launch_receipt,
@@ -1394,14 +1654,16 @@ def prepare_phase(
     hardware = collect_hardware_receipt(source)
     write_json(hardware_path, hardware)
     try:
-        write_json(checkpoint_path, checkpoint_receipt())
-        write_json(data_path, data_receipt())
+        checkpoint = checkpoint_receipt(setup, setup_path=setup_copy)
+        data = data_receipt()
+        write_json(checkpoint_path, checkpoint)
+        write_json(data_path, data)
     except RuntimeError as exc:
         write_json(run_root / "prepare_result.json", {"status": "failed", "error": str(exc)})
         return 2
     wandb = check_wandb_authenticated_read()
     write_json(wandb_path, wandb)
-    runtime = _run_capture([sys.executable, str(RUNTIME_CHECK)], cwd=REPO_ROOT)
+    runtime = runtime_receipt(setup, setup_path=setup_copy)
     write_json(runtime_path, runtime)
     immutable = {
         "protocol": protocol_path,
@@ -1415,7 +1677,7 @@ def prepare_phase(
     }
     hashes = _artifact_hashes(immutable)
     gate0_hashes = _artifact_hashes(copied_gate0)
-    prepare_ok = source["ok"] and hardware["ok"] and wandb["ok"] and runtime["returncode"] == 0
+    prepare_ok = source["ok"] and hardware["ok"] and wandb["ok"] and runtime["ok"]
     manifest_path = run_root / "prepare_manifest.json"
     write_json(
         manifest_path,
@@ -1427,6 +1689,8 @@ def prepare_phase(
             "sha256": hashes,
             "gate0_artifacts": {name: str(path) for name, path in copied_gate0.items()},
             "gate0_sha256": gate0_hashes,
+            "supporting_artifacts": {"setup_attestation": str(setup_copy)},
+            "supporting_sha256": {"setup_attestation": _sha256(setup_copy)},
         },
     )
     if not prepare_ok:
@@ -1453,6 +1717,12 @@ def prepare_phase(
         "parent_request_sha256": gate0["booking_request_sha256"],
         "gate0": gate0,
         "gate1_trust": gate0["gate1_trust"],
+        "prepared_evidence": {
+            "source": source,
+            "runtime": runtime,
+            "data": data,
+            "checkpoint": checkpoint,
+        },
     }
     request_path = run_root / "preflight_request.json"
     write_json(request_path, request)
@@ -1475,6 +1745,7 @@ def _verify_prepare_immutability(run_root: Path) -> dict[str, Any]:
     for paths_key, hashes_key in (
         ("artifacts", "sha256"),
         ("gate0_artifacts", "gate0_sha256"),
+        ("supporting_artifacts", "supporting_sha256"),
     ):
         paths = manifest.get(paths_key)
         hashes = manifest.get(hashes_key)
@@ -1517,6 +1788,16 @@ def _verify_preflight_request(
     }
     if request.get("source_identity") != expected_source:
         raise SystemExit("preflight request source identity mismatch")
+    prepared_evidence = {
+        "source": source,
+        "runtime": _read_json_object(run_root / "receipts/runtime.json", "runtime receipt"),
+        "data": _read_json_object(run_root / "receipts/data.json", "data receipt"),
+        "checkpoint": _read_json_object(
+            run_root / "receipts/checkpoint.json", "checkpoint receipt"
+        ),
+    }
+    if request.get("prepared_evidence") != prepared_evidence:
+        raise SystemExit("preflight request prepared evidence mismatch")
     gate0 = _validate_gate0_chain(_gate0_paths(run_root), require_current_permit=False)
     if request.get("gate0") != gate0:
         raise SystemExit("preflight request Gate0 chain mismatch")
@@ -1560,7 +1841,6 @@ def _verify_consume_and_preserve_approval(
     *,
     approval_path: Path,
     public_key_path: Path,
-    ledger_dir: Path,
     destination: Path,
     expected_stage: Stage,
     expected_sentry_principal: str,
@@ -1605,7 +1885,7 @@ def _verify_consume_and_preserve_approval(
             raise DecisionSecurityError("trusted sentry public key changed during verification")
         if _sha256(request_path) != request_hash_before:
             raise DecisionSecurityError("stage request changed during verification")
-        consume_signed_decision_once(verified, ledger_dir)
+        consume_signed_decision_once(verified, GATE1_CONSUMPTION_ROOT)
         _write_state(run_root, consumed_phase, approval_consumed=True)
     except DecisionReplayError as exc:
         raise SystemExit(f"signed sentry approval rejected: {exc}") from exc
@@ -1690,8 +1970,8 @@ def first_pair_phase(
     sentry_public_key: Path,
     sentry_principal: str,
     executor_principal: str,
-    approval_ledger: Path,
 ) -> int:
+    _require_canonical_run_root(run_root)
     _read_state(run_root, "prepared")
     request_path = run_root / "preflight_request.json"
     _, gate0 = _verify_preflight_request(
@@ -1711,7 +1991,6 @@ def first_pair_phase(
     approval_sha256 = _verify_consume_and_preserve_approval(
         approval_path=approval_path,
         public_key_path=sentry_public_key,
-        ledger_dir=approval_ledger,
         destination=approval_copy,
         expected_stage=Stage.PREFLIGHT,
         expected_sentry_principal=sentry_principal,
@@ -1854,8 +2133,8 @@ def second_pair_phase(
     sentry_public_key: Path,
     sentry_principal: str,
     executor_principal: str,
-    approval_ledger: Path,
 ) -> int:
+    _require_canonical_run_root(run_root)
     _read_state(run_root, "first_pair_complete")
     request_path = run_root / "screen_request.json"
     _verify_screen_request(
@@ -1878,7 +2157,6 @@ def second_pair_phase(
     approval_sha256 = _verify_consume_and_preserve_approval(
         approval_path=approval_path,
         public_key_path=sentry_public_key,
-        ledger_dir=approval_ledger,
         destination=approval_copy,
         expected_stage=Stage.SCREEN,
         expected_sentry_principal=sentry_principal,
@@ -1932,6 +2210,7 @@ def second_pair_phase(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     run_root = Path(args.run_root).resolve()
+    _require_canonical_run_root(run_root)
     if args.phase == "prepare":
         return prepare_phase(
             run_root,
@@ -1948,7 +2227,6 @@ def main(argv: list[str] | None = None) -> int:
             sentry_public_key=Path(args.sentry_public_key).resolve(),
             sentry_principal=args.sentry_principal,
             executor_principal=args.executor_principal,
-            approval_ledger=Path(args.approval_ledger).resolve(),
         )
     if args.phase == "second-pair":
         return second_pair_phase(
@@ -1957,7 +2235,6 @@ def main(argv: list[str] | None = None) -> int:
             sentry_public_key=Path(args.sentry_public_key).resolve(),
             sentry_principal=args.sentry_principal,
             executor_principal=args.executor_principal,
-            approval_ledger=Path(args.approval_ledger).resolve(),
         )
     raise AssertionError(args.phase)
 

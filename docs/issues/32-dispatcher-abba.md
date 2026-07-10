@@ -74,6 +74,8 @@ GRPO and independent audit follow only after that confirmation passes.
   telemetry.
 - Adapter fingerprints before update, after update, and after SGLang
   synchronization.
+- Exact OCI/Hugging Face setup attestation and model-revision marker.
+- Per-leg pre/post GPU and Ray/SGLang/training process-cleanliness receipts.
 - Consistent local and W&B `timing_status=verified`.
 - W&B tables, cost receipt, termination receipt, and checksummed immutable
   artifact bundle.

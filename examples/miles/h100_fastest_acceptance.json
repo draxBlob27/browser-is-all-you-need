@@ -94,7 +94,7 @@
     "hf_model": "zai-org/GLM-4.7-Flash",
     "hf_revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
     "lium_cli_version": "0.0.3",
-    "lium_provider_version": "1.0.0"
+    "lium_provider_version": "1.1.0"
   },
   "current_experiment": {
     "issue": "https://github.com/tokenbender/browser-is-all-you-need/issues/32",
@@ -163,12 +163,18 @@
     "gate0_required_before_provider_mutation": true,
     "gate0_single_use": true,
     "gate1_single_use": true,
-    "maximum_gate0_ttl_seconds": 7200,
+    "maximum_gate0_permit_validity_seconds": 600,
+    "maximum_provider_ttl_seconds": 7200,
     "maximum_gate1_ttl_seconds": 1800,
+    "provider_credential_transport": "stdin-line/v1",
+    "canonical_t1_run_root": "/tmp/w8-issue32-t1",
+    "gate1_consumption_root": "/data/w8-biayn/control-plane/gate1-consumption/v1",
     "require_domain_separation": true,
     "require_exact_parent_digest_chain": true,
     "require_distinct_sentry_and_auditor_keys": true,
-    "private_keys_may_be_committed": false
+    "private_keys_may_be_committed": false,
+    "local_administrative_trust_boundary": "shared_same_uid_codex_account",
+    "paid_node_receives_private_keys_or_provider_credentials": false
   },
   "issues": {
     "master": "https://github.com/tokenbender/browser-is-all-you-need/issues/31",

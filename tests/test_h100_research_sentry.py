@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import platform
 import sys
 import base64
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from w8_biayn.integrations.h100_research_sentry import (
     AUDIT_DECISION_DOMAIN,
+    BOOKING_REQUEST_SCHEMA,
     T2_AUTHORIZATION_DOMAIN,
     DecisionReplayError,
     DecisionSecurityError,
@@ -34,12 +36,15 @@ from w8_biayn.integrations.h100_research_sentry import (
     verify_signed_decision,
 )
 from w8_biayn.integrations.h100_signed_approval import (
+    CREDENTIAL_TRANSPORT,
     ENVELOPE_SCHEMA,
+    LAUNCH_RECEIPT_SCHEMA,
     PERMIT_SCHEMA,
     PUBLIC_KEY_SCHEMA,
     SIGNATURE_DOMAIN,
     domain_separated_message,
     key_id_for_public_key,
+    load_public_key_document,
 )
 from w8_biayn.integrations.miles_mfu import (
     summarize_miles_mfu_trial,
@@ -136,21 +141,174 @@ def _write_gate0_chain(
     now: datetime = TEST_NOW,
 ) -> dict[str, Path]:
     issued_at = now.astimezone(timezone.utc).replace(microsecond=0) - timedelta(minutes=1)
-    expires_at = issued_at + timedelta(hours=1)
+    expires_at = issued_at + timedelta(minutes=10)
     consumed_at = issued_at + timedelta(seconds=30)
+    contract_path = Path(__file__).parents[1] / "examples/miles/h100_fastest_acceptance.json"
+    contract_payload = json.loads(contract_path.read_text(encoding="utf-8"))
+    gate0_private_path, gate0_public_path = _write_test_key(root, "gate0")
+    gate0_public_document = json.loads(gate0_public_path.read_text(encoding="utf-8"))
+    gate1_public_document = json.loads(
+        Path(security.sentry_public_key_path).read_text(encoding="utf-8")
+    )
+    intent_root = root / "gate0/intent"
+    intent_payloads = {
+        "source": {
+            "schema": "h100-booking-source-intent/v1",
+            "repo_sha": CURRENT_REPO_SHA,
+            "training_base_sha": TRAINING_BASE_SHA,
+            "acceptance_contract_sha256": _sha256(contract_path),
+        },
+        "runtime": {
+            "schema": "h100-booking-runtime-intent/v1",
+            "miles_sha": MILES_SHA,
+            "megatron_sha": MEGATRON_SHA,
+            "runtime_pins": contract_payload["runtime_pins"],
+        },
+        "data": {
+            "schema": "h100-booking-data-intent/v1",
+            "train_sha256": contract_payload["fixed_workload"]["dataset_sha256"],
+            "row_count": contract_payload["fixed_workload"]["dataset_rows"],
+        },
+        "checkpoint": {
+            "schema": "h100-booking-checkpoint-intent/v1",
+            "root": "/root/models/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8",
+            "layout": "TP4/PP1/EP8/ETP1",
+            "hf_model": contract_payload["runtime_pins"]["hf_model"],
+            "hf_revision": contract_payload["runtime_pins"]["hf_revision"],
+        },
+    }
+    intent_paths = {
+        name: _json(intent_root / f"{name}.json", payload)
+        for name, payload in intent_payloads.items()
+    }
+    budget = {
+        "ttl_seconds": 7200,
+        "max_cost_usd": "36",
+        "max_node_hourly_rate_usd": "18",
+        "observed_node_hourly_rate_usd": "18",
+        "observed_node_hourly_rate_status": "provider_reported_nonzero",
+        "max_node_hours": "2",
+    }
     booking = _json(
         root / "gate0/booking_request.json",
-        {"issue_number": 32, "allocation_name": "issue-32-dispatcher"},
+        {
+            "schema": BOOKING_REQUEST_SCHEMA,
+            "issue_number": 32,
+            "allocation_name": "issue-32-dispatcher",
+            "provider": "lium",
+            "provider_version": "1.1.0",
+            "profile": "h100-sxm",
+            "executor_id": "golden-shark-c6",
+            "sentry_principal": security.sentry_principal,
+            "executor_principal": security.executor_principal,
+            "gate1_trust": {
+                "public_key_sha256": _sha256(Path(security.sentry_public_key_path)),
+                "key_id": gate1_public_document["key_id"],
+                "sentry_principal": security.sentry_principal,
+                "executor_principal": security.executor_principal,
+            },
+            "hardware": {"gpu_type": "H100", "gpu_count": 8},
+            "budget": budget,
+            "intent_artifacts": {
+                name: {"path": str(path.resolve()), "sha256": _sha256(path)}
+                for name, path in intent_paths.items()
+            },
+        },
     )
+    interpreter = Path(sys.executable).resolve()
+    provider_executable = root / "gate0/lium_create_h100_pod.py"
+    provider_executable.write_text(f"#!{interpreter}\n", encoding="utf-8")
+    provider_executable.chmod(0o755)
+    lium_cli = root / "gate0/lium"
+    lium_cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    lium_cli.chmod(0o755)
+    ssh_public_key = root / "gate0/id_ed25519.pub"
+    ssh_public_key.write_text("ssh-ed25519 AAAATEST sentry-test\n", encoding="utf-8")
+    template = {
+        "template_id": "template-h100",
+        "template_image": "daturaai/pytorch",
+        "template_tag": "2.12.0",
+        "template_status": "VERIFY_SUCCESS",
+    }
+    argv = [
+        str(provider_executable.resolve()),
+        "up",
+        "golden-shark-c6",
+        "--ttl",
+        "2h",
+        "--name",
+        "issue-32-dispatcher",
+        "--yes",
+        "--template-id",
+        template["template_id"],
+        "--template-image",
+        template["template_image"],
+        "--template-tag",
+        template["template_tag"],
+        "--template-status",
+        template["template_status"],
+        "--expected-provider-version",
+        "1.1.0",
+        "--expected-interpreter-path",
+        str(interpreter),
+        "--expected-interpreter-sha256",
+        _sha256(interpreter),
+        "--expected-interpreter-version",
+        platform.python_version(),
+        "--expected-lium-sdk-version",
+        "1.2.3",
+        "--expected-lium-cli-path",
+        str(lium_cli.resolve()),
+        "--expected-lium-cli-sha256",
+        _sha256(lium_cli),
+        "--expected-lium-cli-version",
+        "0.0.3",
+        "--ssh-public-key-path",
+        str(ssh_public_key.resolve()),
+        "--ssh-public-key-sha256",
+        _sha256(ssh_public_key),
+        "--max-rate",
+        "18",
+    ]
+    termination = (issued_at + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     provider_output = _json(
         root / "gate0/provider_output.json",
-        {"allocation": {"id": "alloc-h100-001", "name": "issue-32-dispatcher"}},
+        {
+            "schema": "lium-h100-pod-create/v1",
+            "status": "RUNNING",
+            "pod": {
+                "id": "pod-h100-001",
+                "name": "issue-32-dispatcher",
+                "huid": "steady-host-42",
+                "ssh_cmd": "ssh root@203.0.113.10 -p 2222",
+            },
+            "executor": {
+                "id": "executor-h100-001",
+                "huid": "golden-shark-c6",
+                "gpu_count": 8,
+                "gpu_type": "H100",
+                "gpu_model": "NVIDIA H100 80GB HBM3",
+                "observed_rate_usd_per_hour": 18.0,
+                "observed_rate_usd_per_gpu_hour": 2.25,
+                "max_rate_usd_per_hour": 18.0,
+            },
+            "template": {"id": "template-h100", "name": "Pytorch CUDA"},
+            "access": {
+                "ssh_public_key_path": str(ssh_public_key.resolve()),
+                "ssh_public_key_sha256": _sha256(ssh_public_key),
+            },
+            "schedule": {
+                "confirmed": True,
+                "termination_time": termination,
+                "server_removal_scheduled_at": termination,
+                "verified_termination_time": termination,
+                "ttl_seconds": 7200,
+            },
+            "poll": {"timeout_seconds": 240, "interval_seconds": 5},
+        },
     )
-    private = serialization.load_pem_private_key(
-        Path(security.signing_private_key_path).read_bytes(), password=None
-    )
+    private = serialization.load_pem_private_key(gate0_private_path.read_bytes(), password=None)
     assert isinstance(private, Ed25519PrivateKey)
-    public_document = json.loads(Path(security.sentry_public_key_path).read_text(encoding="utf-8"))
     permit_payload = {
         "schema": PERMIT_SCHEMA,
         "stage": "lium-booking",
@@ -161,22 +319,44 @@ def _write_gate0_chain(
         "expires_at": expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sentry_principal": security.sentry_principal,
         "executor_principal": security.executor_principal,
+        "source_sha256": _sha256(intent_paths["source"]),
+        "runtime_sha256": _sha256(intent_paths["runtime"]),
+        "data_sha256": _sha256(intent_paths["data"]),
+        "checkpoint_sha256": _sha256(intent_paths["checkpoint"]),
         "parent_request_sha256": _sha256(booking),
+        "executor_id": "golden-shark-c6",
         "provider": "lium",
         "profile": "h100-sxm",
+        "provider_executable": str(provider_executable.resolve()),
+        "provider_executable_sha256": _sha256(provider_executable),
+        "provider_version": "1.1.0",
+        "provider_interpreter": str(interpreter),
+        "provider_interpreter_sha256": _sha256(interpreter),
+        "provider_interpreter_version": platform.python_version(),
+        "lium_sdk_distribution": "lium.io",
+        "lium_sdk_version": "1.2.3",
+        "lium_cli_path": str(lium_cli.resolve()),
+        "lium_cli_sha256": _sha256(lium_cli),
+        "lium_cli_version": "0.0.3",
+        "working_directory": str(root.resolve()),
+        "environment": {},
+        "credential_transport": CREDENTIAL_TRANSPORT,
+        "ssh_public_key_path": str(ssh_public_key.resolve()),
+        "ssh_public_key_sha256": _sha256(ssh_public_key),
+        **template,
         "issue_number": 32,
         "allocation_name": "issue-32-dispatcher",
+        "argv": argv,
         "gpu_type": "H100",
         "gpu_count": 8,
-        "ttl_seconds": 7200,
-        "max_cost_usd": "36",
-        "max_node_hours": "2",
+        **budget,
+        "provider_timeout_seconds": 300,
     }
     permit = _json(
         root / "gate0/permit.json",
         {
             "schema": ENVELOPE_SCHEMA,
-            "key_id": public_document["key_id"],
+            "key_id": gate0_public_document["key_id"],
             "payload": permit_payload,
             "signature_base64": base64.b64encode(
                 private.sign(domain_separated_message(SIGNATURE_DOMAIN, permit_payload))
@@ -186,7 +366,7 @@ def _write_gate0_chain(
     claim = _json(
         root / "gate0/claim.consumed.json",
         {
-            "key_id": public_document["key_id"],
+            "key_id": gate0_public_document["key_id"],
             "nonce": permit_payload["nonce"],
             "permit_sha256": _sha256(permit),
             "request_id": permit_payload["request_id"],
@@ -196,12 +376,12 @@ def _write_gate0_chain(
     receipt = _json(
         root / "gate0/launch_receipt.json",
         {
-            "schema": "h100-lium-launch-receipt/v1",
+            "schema": LAUNCH_RECEIPT_SCHEMA,
             "status": "COMPLETED",
             "permit": {
                 "path": str(permit),
                 "sha256": _sha256(permit),
-                "key_id": public_document["key_id"],
+                "key_id": gate0_public_document["key_id"],
                 "request_id": permit_payload["request_id"],
                 "nonce": permit_payload["nonce"],
                 "issued_at": permit_payload["issued_at"],
@@ -213,20 +393,66 @@ def _write_gate0_chain(
                 "consumed_at": consumed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
             "parent_request": {"path": str(booking), "sha256": _sha256(booking)},
+            "provider": {
+                "name": "lium",
+                "profile": "h100-sxm",
+                "executor_id": "golden-shark-c6",
+                "executable": str(provider_executable.resolve()),
+                "executable_sha256": _sha256(provider_executable),
+                "declared_version": "1.1.0",
+                "interpreter": str(interpreter),
+                "interpreter_sha256": _sha256(interpreter),
+                "interpreter_version": platform.python_version(),
+                "fd_loader_sha256": "0" * 64,
+                "execution_boundary": "script-fd-bound-interpreter-path-rechecked",
+            },
+            "runtime_evidence": {
+                "provider_version": "1.1.0",
+                "lium_sdk_distribution": "lium.io",
+                "lium_sdk_version": "1.2.3",
+                "lium_cli_path": str(lium_cli.resolve()),
+                "lium_cli_sha256": _sha256(lium_cli),
+                "lium_cli_version": "0.0.3",
+            },
+            "template": {
+                "id": template["template_id"],
+                "image": template["template_image"],
+                "tag": template["template_tag"],
+                "status": template["template_status"],
+            },
+            "access": {
+                "ssh_public_key_path": str(ssh_public_key.resolve()),
+                "ssh_public_key_sha256": _sha256(ssh_public_key),
+            },
             "provider_output": {
                 "path": str(provider_output),
                 "sha256": _sha256(provider_output),
                 "size_bytes": provider_output.stat().st_size,
             },
             "allocation": {"issue_number": 32, "name": "issue-32-dispatcher"},
+            "execution": {
+                "cwd": str(root.resolve()),
+                "argv": argv,
+                "sanitized_environment_sha256": "0" * 64,
+                "sanitized_environment_names": [],
+                "credential_transport": CREDENTIAL_TRANSPORT,
+                "started_at": issued_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "finished_at": consumed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "exit_code": 0,
+                "wrapper_exit_code": 0,
+                "timed_out": False,
+                "provider_timeout_seconds": 300,
+            },
+            "budget": budget,
         },
     )
     return {
         "permit": permit,
-        "public_key": Path(security.sentry_public_key_path),
+        "public_key": gate0_public_path,
         "launch_receipt": receipt,
         "booking_request": booking,
         "provider_output": provider_output,
+        **{f"{name}_intent": path for name, path in intent_paths.items()},
     }
 
 
@@ -294,11 +520,25 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
         "hardware": hardware,
         "checkpoint": _json(
             root / "receipts/checkpoint.json",
-            {"schema_version": 1, "checkpoint": "fixed"},
+            {
+                "schema_version": 1,
+                "root": "/root/models/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8",
+                "layout": "TP4/PP1/EP8/ETP1",
+                "tag": "release",
+                "marker_sha256": "2" * 64,
+                "metadata_path": "/root/models/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8/release/.metadata",
+                "metadata_sha256": "3" * 64,
+                "metadata_size": 1024,
+            },
         ),
         "data": _json(
             root / "receipts/data.json",
-            {"schema_version": 1, "sha256": "1" * 64, "row_count": 128},
+            {
+                "schema_version": 1,
+                "path": "/data/glm47-pie-profile-long128-oracle-v2/sft/train.jsonl",
+                "sha256": "f1f5f70b1e77dbb6da51d075a35b2e48f784f4080873f356c9c4bd3c83a3d783",
+                "row_count": 128,
+            },
         ),
         "wandb_auth": _json(
             root / "receipts/wandb_auth.json",
@@ -335,6 +575,23 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
         },
     )
     return contract, hardware, budget, request
+
+
+def _refresh_prepare_bindings(root: Path) -> None:
+    manifest_path = root / "prepare_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sha256"] = {name: _sha256(Path(path)) for name, path in manifest["artifacts"].items()}
+    _json(manifest_path, manifest)
+    request_path = root / "preflight_request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    source = json.loads((root / "receipts/source.json").read_text(encoding="utf-8"))
+    request["input_hashes"] = manifest["sha256"]
+    request["prepare_manifest_sha256"] = _sha256(manifest_path)
+    request["source_identity"] = {
+        "repo_sha": source["repo_sha"],
+        "training_base_sha": source["training_base_sha"],
+    }
+    _json(request_path, request)
 
 
 def _write_telemetry(stage: Path) -> None:
@@ -832,11 +1089,26 @@ def _write_grpo(root: Path) -> Path:
     )
     checkpoint_root = root / "checkpoint"
     checkpoint_entries: list[dict[str, Any]] = []
-    for relative, content in (
-        ("iter/adapter/adapter_megatron_tp0_pp0.pt", b"megatron-adapter"),
-        ("iter/adapter/adapter_model.bin", b"hf-adapter"),
-        ("iter/adapter/training_state_rank0.pt", b"training-state"),
-    ):
+    checkpoint_files = [
+        ("latest_checkpointed_iteration.txt", b"0\n"),
+        ("iter_0000000/adapter/adapter_config.json", b"{}\n"),
+        ("iter_0000000/adapter/adapter_model.bin", b"hf-adapter"),
+        *[
+            (
+                f"iter_0000000/adapter/adapter_megatron_tp{rank}_pp0.pt",
+                f"megatron-adapter-{rank}".encode(),
+            )
+            for rank in range(4)
+        ],
+        *[
+            (
+                f"iter_0000000/adapter/training_state_rank{rank}.pt",
+                f"training-state-{rank}".encode(),
+            )
+            for rank in range(8)
+        ],
+    ]
+    for relative, content in checkpoint_files:
         checkpoint_file = checkpoint_root / relative
         checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
         checkpoint_file.write_bytes(content)
@@ -852,7 +1124,7 @@ def _write_grpo(root: Path) -> Path:
         {
             "schema_version": 1,
             "checkpoint_root": str(checkpoint_root),
-            "latest_iteration": "iter",
+            "latest_iteration": "iter_0000000",
             "files": checkpoint_entries,
         },
     )
@@ -910,12 +1182,15 @@ def _write_audit(
         {"schema_version": 1, "constituent_checksums": constituents},
     )
     security = _test_security(confirmation.parent)
+    auditor_public = load_public_key_document(security.auditor_public_key_path)  # type: ignore[arg-type]
     unsigned = {
         "decision": "ACCEPT",
         "auditor_role": "independent_auditor",
         "auditor_identity": "SD-REVIEW-02",
+        "auditor_key_id": auditor_public.key_id,
         "auditor_timestamp_utc": "2026-07-10T00:04:00Z",
         "bounded_claim": CLAIM,
+        "parent_decision_sha256": _sha256(grpo),
         "manifest_path": str(manifest),
         "manifest_sha256": _sha256(manifest),
         "constituent_checksums": constituents,
@@ -1011,6 +1286,216 @@ def test_preflight_provenance_and_sha_contract(tmp_path: Path) -> None:
     )
 
 
+def test_gate0_accepts_real_provider_shape_and_requires_server_verified_schedule(
+    tmp_path: Path,
+) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    accepted = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    assert accepted["decision"] == "PROMOTABLE"
+    assert accepted["context"]["gate0"]["allocation_id"] == provider["pod"]["id"]
+    assert provider["schema"] == "lium-h100-pod-create/v1"
+    assert "allocation" not in provider
+
+    provider["schedule"]["server_removal_scheduled_at"] = "2026-07-10T03:00:00Z"
+    _json(gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    _json(gate0["launch_receipt"], receipt)
+    rejected = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+    assert rejected["decision"] == "INVALID"
+    assert "gate0_provider_schedule_not_server_verified" in rejected["reasons"]
+
+
+def test_gate0_accepts_current_provider_v2_runtime_and_template_evidence(
+    tmp_path: Path,
+) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    permit = json.loads(gate0["permit"].read_text(encoding="utf-8"))["payload"]
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    provider["schema"] = "lium-h100-pod-create/v2"
+    provider["executor"].update(
+        {
+            "observed_rate_status": permit["observed_node_hourly_rate_status"],
+            "rate_authority": "signed_max_rate_cap",
+        }
+    )
+    provider["template"].update(
+        {
+            "docker_image": permit["template_image"],
+            "docker_image_tag": permit["template_tag"],
+            "status": permit["template_status"],
+        }
+    )
+    provider["runtime_evidence"] = {
+        "provider_version": permit["provider_version"],
+        "interpreter": {
+            "path": permit["provider_interpreter"],
+            "sha256": permit["provider_interpreter_sha256"],
+            "version": permit["provider_interpreter_version"],
+        },
+        "lium_sdk": {
+            "distribution": permit["lium_sdk_distribution"],
+            "version": permit["lium_sdk_version"],
+        },
+        "lium_cli": {
+            "path": permit["lium_cli_path"],
+            "sha256": permit["lium_cli_sha256"],
+            "version": permit["lium_cli_version"],
+            "version_source": "wrapper_verified_cli_version",
+        },
+    }
+    _json(gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    _json(gate0["launch_receipt"], receipt)
+
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+    assert result["decision"] == "PROMOTABLE"
+
+
+@pytest.mark.parametrize(
+    ("surface", "expected_reason"),
+    [
+        ("provider", "gate0_provider_ssh_access_mismatch"),
+        ("receipt", "gate0_launch_receipt_ssh_access_mismatch"),
+    ],
+)
+def test_gate0_ssh_public_key_binding_fails_closed(
+    tmp_path: Path, surface: str, expected_reason: str
+) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    artifact = gate0["provider_output"] if surface == "provider" else gate0["launch_receipt"]
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    payload["access"]["ssh_public_key_sha256"] = "f" * 64
+    _json(artifact, payload)
+    if surface == "provider":
+        receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+        receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+        receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+        _json(gate0["launch_receipt"], receipt)
+
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+
+    assert result["decision"] == "INVALID"
+    assert expected_reason in result["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("source", "preflight_source_intent_repo_sha_mismatch"),
+        ("runtime", "preflight_runtime_intent_miles_sha_mismatch"),
+        ("data", "preflight_data_intent_train_hash_mismatch"),
+        ("checkpoint", "preflight_checkpoint_intent_root_mismatch"),
+        ("contract", "preflight_source_intent_contract_hash_mismatch"),
+    ],
+)
+def test_preflight_reconciles_signed_booking_intent_to_prepared_evidence(
+    tmp_path: Path, mutation: str, expected_reason: str
+) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    if mutation == "source":
+        source_path = tmp_path / "receipts/source.json"
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        source["repo_sha"] = "e" * 40
+        _json(source_path, source)
+        hardware_payload = json.loads(hardware.read_text(encoding="utf-8"))
+        hardware_payload["repo_sha"] = "e" * 40
+        _json(hardware, hardware_payload)
+        budget_payload = json.loads(budget.read_text(encoding="utf-8"))
+        budget_payload["source_commit"] = "e" * 40
+        _json(budget, budget_payload)
+    elif mutation == "runtime":
+        hardware_payload = json.loads(hardware.read_text(encoding="utf-8"))
+        hardware_payload["miles_sha"] = "0" * 40
+        _json(hardware, hardware_payload)
+    elif mutation == "data":
+        data_path = tmp_path / "receipts/data.json"
+        data = json.loads(data_path.read_text(encoding="utf-8"))
+        data["sha256"] = "0" * 64
+        _json(data_path, data)
+    elif mutation == "checkpoint":
+        checkpoint_path = tmp_path / "receipts/checkpoint.json"
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        checkpoint["root"] = "/root/models/substituted"
+        _json(checkpoint_path, checkpoint)
+    else:
+        contract_payload = json.loads(contract.read_text(encoding="utf-8"))
+        contract_payload["non_semantic_substitution"] = True
+        _json(contract, contract_payload)
+    _refresh_prepare_bindings(tmp_path)
+
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+    assert result["decision"] == "INVALID"
+    assert expected_reason in result["reasons"]
+
+
 def test_signed_gate1_chain_binds_gate0_and_exact_screen_parents(tmp_path: Path) -> None:
     run_root = tmp_path / "chain"
     _run_screen(run_root)
@@ -1044,7 +1529,7 @@ def test_signed_gate1_chain_binds_gate0_and_exact_screen_parents(tmp_path: Path)
     )
     assert len(bytes.fromhex(verified_preflight.nonce)) == 32
     assert len(bytes.fromhex(verified_screen.nonce)) == 32
-    assert preflight["context"]["gate0"]["allocation_id"] == "alloc-h100-001"
+    assert preflight["context"]["gate0"]["allocation_id"] == "pod-h100-001"
     assert preflight["context"]["gate0"]["provider_output_sha256"] == _sha256(
         run_root / "gate0/provider_output.json"
     )
@@ -1320,6 +1805,40 @@ def test_confirmation_uses_four_independent_process_pair_ratios(tmp_path: Path) 
         assert stats[metric]["one_sided_95_percent_lower_log_bound"] > 0.0
 
 
+def test_confirmation_rejects_three_t1_pairs_and_only_one_t2_pair(tmp_path: Path) -> None:
+    _, controls, candidates, promotion, _ = _run_promotion(tmp_path)
+    for index, tranche in ((3, "T1"), (4, "T2")):
+        controls.append(
+            _write_trial(
+                tmp_path / f"A{index}",
+                name=f"A{index}",
+                ratio=1.0,
+                candidate=False,
+                tranche=tranche,
+            )
+        )
+        candidates.append(
+            _write_trial(
+                tmp_path / f"B{index}",
+                name=f"B{index}",
+                ratio=1.04,
+                candidate=True,
+                tranche=tranche,
+            )
+        )
+    request = _write_confirmation_request(tmp_path, promotion, controls, candidates)
+    result = evaluate_confirmation(
+        promotion_decision_path=promotion,
+        control_paths=controls,
+        candidate_paths=candidates,
+        request_path=request,
+        security=_test_security(tmp_path),
+    )
+
+    assert result["decision"] == "INVALID"
+    assert "confirmation_requires_exactly_two_T1_then_two_T2_pairs" in result["reasons"]
+
+
 def test_confirmation_requires_t2_authorization_and_every_candidate_hurdle(
     tmp_path: Path,
 ) -> None:
@@ -1364,7 +1883,7 @@ def test_confirmation_requires_t2_authorization_and_every_candidate_hurdle(
 def test_grpo_checkpoint_files_must_exist_and_match_manifest(tmp_path: Path) -> None:
     _, confirmation, _ = _run_confirmation(tmp_path / "chain")
     artifact = _write_grpo(tmp_path / "grpo")
-    checkpoint = artifact / "checkpoint/iter/adapter/adapter_model.bin"
+    checkpoint = artifact / "checkpoint/iter_0000000/adapter/adapter_model.bin"
     original = checkpoint.read_bytes()
 
     checkpoint.unlink()
@@ -1389,6 +1908,76 @@ def test_grpo_checkpoint_files_must_exist_and_match_manifest(tmp_path: Path) -> 
     assert any(
         reason.startswith("grpo_checkpoint_file_hash_mismatch") for reason in tampered["reasons"]
     )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_reason"),
+    [
+        (
+            "iter_0000000/adapter/adapter_megatron_tp3_pp0.pt",
+            "grpo_checkpoint_tp4_adapter_rank_set_incomplete",
+        ),
+        (
+            "iter_0000000/adapter/training_state_rank7.pt",
+            "grpo_checkpoint_training_state_rank_set_incomplete",
+        ),
+        (
+            "iter_0000000/adapter/adapter_config.json",
+            "grpo_checkpoint_adapter_config_missing",
+        ),
+        (
+            "iter_0000000/adapter/adapter_model.bin",
+            "grpo_checkpoint_hf_adapter_missing_or_ambiguous",
+        ),
+    ],
+)
+def test_grpo_requires_exact_complete_tp4_and_training_rank_set(
+    tmp_path: Path, relative_path: str, expected_reason: str
+) -> None:
+    _, confirmation, _ = _run_confirmation(tmp_path / "chain")
+    artifact = _write_grpo(tmp_path / "grpo")
+    checkpoint_root = artifact / "checkpoint"
+    (checkpoint_root / relative_path).unlink()
+    manifest_path = next(artifact.rglob("*.checkpoint_manifest.json"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"] = [item for item in manifest["files"] if item["path"] != relative_path]
+    _json(manifest_path, manifest)
+
+    result = evaluate_grpo(
+        confirmation_decision_path=confirmation,
+        grpo_path=artifact,
+        security=_test_security(tmp_path / "chain"),
+    )
+    assert result["decision"] == "INVALID"
+    assert expected_reason in result["reasons"]
+
+
+def test_grpo_requires_latest_iteration_and_complete_real_file_manifest(
+    tmp_path: Path,
+) -> None:
+    _, confirmation, _ = _run_confirmation(tmp_path / "chain")
+    artifact = _write_grpo(tmp_path / "grpo")
+    manifest_path = next(artifact.rglob("*.checkpoint_manifest.json"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["latest_iteration"] = "iter_0000001"
+    _json(manifest_path, manifest)
+    mismatched_iteration = evaluate_grpo(
+        confirmation_decision_path=confirmation,
+        grpo_path=artifact,
+        security=_test_security(tmp_path / "chain"),
+    )
+    assert "grpo_checkpoint_latest_iteration_mismatch" in mismatched_iteration["reasons"]
+
+    manifest["latest_iteration"] = "iter_0000000"
+    _json(manifest_path, manifest)
+    extra = artifact / "checkpoint/iter_0000000/adapter/unmanifested.pt"
+    extra.write_bytes(b"unmanifested")
+    incomplete_manifest = evaluate_grpo(
+        confirmation_decision_path=confirmation,
+        grpo_path=artifact,
+        security=_test_security(tmp_path / "chain"),
+    )
+    assert "grpo_checkpoint_manifest_real_file_set_mismatch" in incomplete_manifest["reasons"]
 
 
 def test_grpo_then_independent_audit_is_required_for_verified(tmp_path: Path) -> None:
@@ -1421,6 +2010,97 @@ def test_grpo_then_independent_audit_is_required_for_verified(tmp_path: Path) ->
     assert final["decision"] == "VERIFIED"
     assert final["accepted"] is True
     assert final["exit_status"] == 0
+    expected_contract_sha256 = _sha256(contract)
+    for decision_path in (
+        tmp_path / "preflight.json",
+        tmp_path / "screen.json",
+        tmp_path / "promotion.json",
+        confirmation,
+        grpo_decision,
+    ):
+        decision = json.loads(decision_path.read_text(encoding="utf-8"))
+        assert decision["acceptance_contract_sha256"] == expected_contract_sha256
+    assert final["acceptance_contract_sha256"] == expected_contract_sha256
+
+
+def test_final_rejects_substituted_contract_with_matching_identifiers(tmp_path: Path) -> None:
+    contract, confirmation, _ = _run_confirmation(tmp_path / "chain")
+    _, grpo, grpo_result = _run_grpo_stage(tmp_path / "grpo-stage", confirmation)
+    assert grpo_result["decision"] == "PROMOTABLE"
+    substituted_payload = json.loads(contract.read_text(encoding="utf-8"))
+    substituted_payload["non_semantic_substitution"] = "different artifact bytes"
+    substituted = _json(tmp_path / "substituted-contract.json", substituted_payload)
+    audit = _write_audit(
+        tmp_path / "audit",
+        contract=substituted,
+        confirmation=confirmation,
+        grpo=grpo,
+    )
+
+    result = evaluate_final(
+        confirmation_decision_path=confirmation,
+        grpo_decision_path=grpo,
+        audit_path=audit,
+        contract_path=substituted,
+        security=_test_security(tmp_path / "chain"),
+    )
+    assert result["decision"] == "INVALID"
+    assert "final_confirmation_acceptance_contract_hash_mismatch" in result["reasons"]
+    assert "final_grpo_acceptance_contract_hash_mismatch" in result["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("missing-auditor-key", "audit_auditor_key_id_mismatch"),
+        ("wrong-parent", "audit_parent_decision_sha256_mismatch"),
+    ],
+)
+def test_final_enforces_contract_required_auditor_key_and_parent_fields(
+    tmp_path: Path, mutation: str, expected_reason: str
+) -> None:
+    contract, confirmation, _ = _run_confirmation(tmp_path / "chain")
+    _, grpo, _ = _run_grpo_stage(tmp_path / "grpo-stage", confirmation)
+    valid_audit = _write_audit(
+        tmp_path / "audit-source",
+        contract=contract,
+        confirmation=confirmation,
+        grpo=grpo,
+    )
+    unsigned = {
+        key: value
+        for key, value in json.loads(valid_audit.read_text(encoding="utf-8")).items()
+        if key not in {"signature_base64", "signed_payload_sha256"}
+    }
+    if mutation == "missing-auditor-key":
+        unsigned.pop("auditor_key_id")
+    else:
+        unsigned["parent_decision_sha256"] = "0" * 64
+    security = _test_security(tmp_path / "chain")
+    resigned = _json(
+        tmp_path / f"{mutation}.json",
+        sign_bounded_payload(
+            unsigned,
+            private_key_path=_test_private_key(tmp_path / "chain", "auditor"),
+            public_key_path=security.auditor_public_key_path,  # type: ignore[arg-type]
+            domain=AUDIT_DECISION_DOMAIN,
+            signer_principal=security.auditor_principal or "",
+            verifier_principal=security.sentry_principal,
+            request_id=f"audit-{mutation}-0001",
+            nonce="4" * 64,
+            issued_at=TEST_NOW,
+            expires_at=TEST_NOW + timedelta(hours=1),
+        ),
+    )
+    result = evaluate_final(
+        confirmation_decision_path=confirmation,
+        grpo_decision_path=grpo,
+        audit_path=resigned,
+        contract_path=contract,
+        security=security,
+    )
+    assert result["decision"] == "INVALID"
+    assert expected_reason in result["reasons"]
 
 
 def test_final_rejects_cross_run_grpo_and_audit_splices(tmp_path: Path) -> None:
@@ -1537,13 +2217,8 @@ def test_runner_requests_validate_end_to_end_and_reject_tampering(
     runner = _runner_module()
     security = _test_security(run_root)
     public_key = Path(security.sentry_public_key_path)
-    gate0_permit = json.loads((run_root / "gate0/permit.json").read_text())
-    gate1_trust = {
-        "public_key_sha256": _sha256(public_key),
-        "key_id": gate0_permit["key_id"],
-        "sentry_principal": security.sentry_principal,
-        "executor_principal": security.executor_principal,
-    }
+    booking_request = json.loads((run_root / "gate0/booking_request.json").read_text())
+    gate1_trust = booking_request["gate1_trust"]
     runner["_verify_gate1_trust_anchor"](
         public_key,
         trust=gate1_trust,
@@ -1562,11 +2237,11 @@ def test_runner_requests_validate_end_to_end_and_reject_tampering(
     assert preflight_payload["parent_request_sha256"] == booking_request_sha256
 
     ledger = run_root / "approval-ledger"
+    runner["GATE1_CONSUMPTION_ROOT"] = ledger
     preserved_preflight = run_root / "runner-approvals/preflight.json"
     preflight_approval_sha256 = runner["_verify_consume_and_preserve_approval"](
         approval_path=preflight_path,
         public_key_path=public_key,
-        ledger_dir=ledger,
         destination=preserved_preflight,
         expected_stage=Stage.PREFLIGHT,
         expected_sentry_principal=security.sentry_principal,
@@ -1594,7 +2269,6 @@ def test_runner_requests_validate_end_to_end_and_reject_tampering(
     screen_approval_sha256 = runner["_verify_consume_and_preserve_approval"](
         approval_path=screen_path,
         public_key_path=public_key,
-        ledger_dir=ledger,
         destination=preserved_screen,
         expected_stage=Stage.SCREEN,
         expected_sentry_principal=security.sentry_principal,
@@ -1637,7 +2311,6 @@ def test_runner_requests_validate_end_to_end_and_reject_tampering(
         runner["_verify_consume_and_preserve_approval"](
             approval_path=screen_path,
             public_key_path=public_key,
-            ledger_dir=ledger,
             destination=rejected_copy,
             expected_stage=Stage.SCREEN,
             expected_sentry_principal=security.sentry_principal,

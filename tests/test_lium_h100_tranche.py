@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import pwd
 import secrets
 import subprocess
 import sys
@@ -14,6 +15,8 @@ from typing import Any, Callable
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+import w8_biayn.integrations.h100_signed_approval as signed_approval
 
 from w8_biayn.integrations.h100_signed_approval import (
     ENVELOPE_SCHEMA,
@@ -40,6 +43,12 @@ EXECUTOR_ID = "lium-executor-h100-0007"
 PROVIDER = "lium"
 PROFILE = "h100-sxm-80gb-8x"
 PROVIDER_VERSION = "lium-test-1.2.3"
+PROVIDER_INTERPRETER = Path("/opt/homebrew/opt/python@3.11/bin/python3.11").resolve()
+LIUM_SDK_VERSION = "0.0.3"
+TEMPLATE_ID = "345273fa-4818-46f7-a8fa-32f0e331713c"
+TEMPLATE_IMAGE = "daturaai/pytorch"
+TEMPLATE_TAG = "2.12.0-py3.12-cuda13.0.2-devel-ubuntu24.04-dind"
+TEMPLATE_STATUS = "VERIFY_SUCCESS"
 ISSUE_NUMBER = 32
 ALLOCATION_NAME = "issue-32-e04a-gate0"
 SOURCE_SHA256 = "1" * 64
@@ -94,13 +103,17 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
     fake_bin.mkdir()
     fake_lium = fake_bin / "lium"
     fake_lium.write_text(
-        f"#!{sys.executable}\n"
+        f"#!{PROVIDER_INTERPRETER}\n"
         "import json, os, sys, time\n"
+        f"if sys.argv[1:] == ['--version']:\n    print({PROVIDER_VERSION!r}); raise SystemExit(0)\n"
+        "credential = sys.stdin.buffer.readline(4098).rstrip(b'\\n')\n"
+        "if not credential: raise SystemExit(77)\n"
         "row = json.dumps({\n"
         "    'argv': sys.argv[1:],\n"
         "    'cwd': os.getcwd(),\n"
         "    'env_names': sorted(os.environ),\n"
-        "    'has_api_key': bool(os.environ.get('LIUM_API_KEY')),\n"
+        "    'has_api_key_env': bool(os.environ.get('LIUM_API_KEY')),\n"
+        "    'stdin_credential_received': bool(credential),\n"
         "}, separators=(',', ':')) + '\\n'\n"
         "fd = os.open(os.environ['FAKE_LIUM_LOG'], "
         "os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)\n"
@@ -108,14 +121,24 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "    os.write(fd, row.encode('utf-8'))\n"
         "finally:\n"
         "    os.close(fd)\n"
-        "if not os.environ.get('LIUM_API_KEY'):\n"
-        "    raise SystemExit(77)\n"
+        "state = os.environ['FAKE_ALLOCATION_STATE']\n"
+        "if os.path.exists(state): raise SystemExit(73)\n"
+        "open(state, 'xb').close()\n"
+        "with open(os.environ['FAKE_MUTATION_LOG'], 'ab') as h: h.write(b'up\\n')\n"
         "print('fake-lium-booking-output', flush=True)\n"
         "time.sleep(float(os.environ.get('FAKE_LIUM_SLEEP', '0')))\n",
         encoding="utf-8",
     )
     fake_lium.chmod(0o755)
+    fake_cli = fake_bin / "lium-cli"
+    fake_cli.write_text("#!/bin/sh\nprintf 'lium, version 0.0.3\\n'\n", encoding="utf-8")
+    fake_cli.chmod(0o755)
+    ssh_public_key = tmp_path / "id_ed25519.pub"
+    ssh_public_key.write_text("ssh-ed25519 AAAATEST gate0-test\n", encoding="utf-8")
+    ssh_public_key_sha256 = hashlib.sha256(ssh_public_key.read_bytes()).hexdigest()
     invocation_log = tmp_path / "provider-invocations.jsonl"
+    mutation_log = tmp_path / "provider-mutations.log"
+    allocation_state = tmp_path / "allocation.state"
     parent_request = tmp_path / "booking-request.json"
     parent_request.write_text(
         json.dumps({"request_id": "parent-e04a", "issue_number": ISSUE_NUMBER}) + "\n",
@@ -128,6 +151,8 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
     signed_environment = {
         "LC_CTYPE": "UTF-8",
         "FAKE_LIUM_LOG": str(invocation_log),
+        "FAKE_MUTATION_LOG": str(mutation_log),
+        "FAKE_ALLOCATION_STATE": str(allocation_state),
         "FAKE_LIUM_SLEEP": "0",
         "HOME": str(sterile_home),
         "SIGNED_ENV_MARKER": "gate0",
@@ -142,6 +167,41 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "--name",
         ALLOCATION_NAME,
         "--yes",
+        "--template-id",
+        TEMPLATE_ID,
+        "--template-image",
+        TEMPLATE_IMAGE,
+        "--template-tag",
+        TEMPLATE_TAG,
+        "--template-status",
+        TEMPLATE_STATUS,
+        "--expected-provider-version",
+        PROVIDER_VERSION,
+        "--expected-interpreter-path",
+        str(PROVIDER_INTERPRETER),
+        "--expected-interpreter-sha256",
+        hashlib.sha256(PROVIDER_INTERPRETER.read_bytes()).hexdigest(),
+        "--expected-interpreter-version",
+        subprocess.run(
+            [str(PROVIDER_INTERPRETER), "-c", "import platform;print(platform.python_version())"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip(),
+        "--expected-lium-sdk-version",
+        LIUM_SDK_VERSION,
+        "--expected-lium-cli-path",
+        str(fake_cli),
+        "--expected-lium-cli-sha256",
+        hashlib.sha256(fake_cli.read_bytes()).hexdigest(),
+        "--expected-lium-cli-version",
+        LIUM_SDK_VERSION,
+        "--ssh-public-key-path",
+        str(ssh_public_key),
+        "--ssh-public-key-sha256",
+        ssh_public_key_sha256,
+        "--max-rate",
+        "18",
     ]
     now = datetime.now(timezone.utc).replace(microsecond=0)
     payload = {
@@ -151,7 +211,7 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "request_id": f"gate0-request-{secrets.token_hex(8)}",
         "nonce": secrets.token_hex(32),
         "issued_at": (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "expires_at": (now + timedelta(minutes=59)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expires_at": (now + timedelta(minutes=9)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sentry_principal": SENTRY_PRINCIPAL,
         "executor_principal": EXECUTOR_PRINCIPAL,
         "source_sha256": SOURCE_SHA256,
@@ -165,9 +225,27 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "provider_executable": str(fake_lium),
         "provider_executable_sha256": hashlib.sha256(fake_lium.read_bytes()).hexdigest(),
         "provider_version": PROVIDER_VERSION,
+        "provider_interpreter": str(PROVIDER_INTERPRETER),
+        "provider_interpreter_sha256": hashlib.sha256(
+            PROVIDER_INTERPRETER.read_bytes()
+        ).hexdigest(),
+        "provider_interpreter_version": signed_argv[
+            signed_argv.index("--expected-interpreter-version") + 1
+        ],
+        "lium_sdk_distribution": "lium.io",
+        "lium_sdk_version": LIUM_SDK_VERSION,
+        "lium_cli_path": str(fake_cli),
+        "lium_cli_sha256": hashlib.sha256(fake_cli.read_bytes()).hexdigest(),
+        "lium_cli_version": LIUM_SDK_VERSION,
         "working_directory": str(working_directory),
         "environment": signed_environment,
-        "secret_env_names": ["LIUM_API_KEY"],
+        "credential_transport": "stdin-line/v1",
+        "ssh_public_key_path": str(ssh_public_key),
+        "ssh_public_key_sha256": ssh_public_key_sha256,
+        "template_id": TEMPLATE_ID,
+        "template_image": TEMPLATE_IMAGE,
+        "template_tag": TEMPLATE_TAG,
+        "template_status": TEMPLATE_STATUS,
         "issue_number": ISSUE_NUMBER,
         "allocation_name": ALLOCATION_NAME,
         "argv": signed_argv,
@@ -177,15 +255,24 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "max_cost_usd": 36,
         "max_node_hourly_rate_usd": 18,
         "observed_node_hourly_rate_usd": 0,
+        "observed_node_hourly_rate_status": "provider_reported_zero",
         "max_node_hours": 2,
         "provider_timeout_seconds": 300,
     }
     permit_path = tmp_path / "permit.json"
     _write_signed_permit(permit_path, private_key, key_id, payload)
     env = os.environ.copy()
-    env["LIUM_API_KEY"] = "lium-secret-test-value"
+    env["LIUM_API_KEY"] = "ambient-lium-key-must-not-be-used"
     env["AMBIENT_MUST_NOT_LEAK"] = "ambient-value"
     env["PYTHONPATH"] = str(ROOT / "src")
+    driver = tmp_path / "wrapper-driver.py"
+    driver.write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "import w8_biayn.integrations.h100_signed_approval as module\n"
+        "module.GATE0_CONSUMPTION_ROOT = Path(sys.argv[1])\n"
+        "raise SystemExit(module.wrapper_main(sys.argv[2:]))\n",
+        encoding="utf-8",
+    )
     return {
         "private_key": private_key,
         "key_id": key_id,
@@ -194,14 +281,21 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "payload": payload,
         "ledger": tmp_path / "ledger",
         "log": invocation_log,
+        "mutation_log": mutation_log,
+        "allocation_state": allocation_state,
+        "driver": driver,
         "env": env,
         "argv": signed_argv,
         "provider_executable": fake_lium,
+        "provider_interpreter": PROVIDER_INTERPRETER,
+        "lium_cli": fake_cli,
+        "ssh_public_key": ssh_public_key,
         "parent_request": parent_request,
         "working_directory": working_directory,
         "receipt": tmp_path / "launch-receipt.json",
         "provider_output": tmp_path / "provider-output.bin",
         "sterile_home": sterile_home,
+        "credential": "supervisor-stdin-lium-key",
     }
 
 
@@ -228,15 +322,14 @@ def _wrapper_argv(
 ) -> list[str]:
     return [
         sys.executable,
-        str(WRAPPER),
+        str(harness["driver"]),
+        str(harness["ledger"]),
         "--permit",
         str(harness["permit"]),
         "--public-key",
         str(public_key or harness["public_key"]),
         "--key-id",
         key_id or harness["key_id"],
-        "--ledger-dir",
-        str(harness["ledger"]),
         "--sentry-principal",
         sentry_principal,
         "--executor-principal",
@@ -274,12 +367,14 @@ def _run_wrapper(
     harness: dict[str, Any],
     **kwargs: Any,
 ) -> subprocess.CompletedProcess[str]:
+    credential = kwargs.pop("credential", harness["credential"])
     return subprocess.run(
         _wrapper_argv(harness, **kwargs),
         env=harness["env"],
         check=False,
         text=True,
         capture_output=True,
+        input=(credential + "\n") if credential else "",
     )
 
 
@@ -326,6 +421,19 @@ def test_production_verifier_accepts_canonical_ed25519_permit(tmp_path: Path) ->
     assert verified.request_id == harness["payload"]["request_id"]
     assert canonical_json_bytes({"b": 1, "a": 2}) == b'{"a":2,"b":1}'
     assert permit_signing_message(harness["payload"]).startswith(SIGNATURE_DOMAIN)
+
+
+def test_default_gate0_ledger_uses_real_account_home_not_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", "/tmp/attacker-home")
+    monkeypatch.setenv("XDG_STATE_HOME", "/tmp/attacker-xdg")
+    expected = (
+        Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+        / ".local/state/w8-biayn/control-plane/gate0-consumption/v1"
+    )
+
+    assert signed_approval.GATE0_CONSUMPTION_ROOT == expected
 
 
 def test_public_detached_verifier_supports_independent_sentry_domains(
@@ -398,10 +506,10 @@ def test_launch_receipt_binds_evidence_without_secret_values(tmp_path: Path) -> 
     assert receipt["execution"]["argv"] == harness["argv"]
     assert receipt["execution"]["exit_code"] == 0
     assert receipt["execution"]["wrapper_exit_code"] == 0
-    assert receipt["execution"]["secret_env_names"] == ["LIUM_API_KEY"]
+    assert receipt["execution"]["credential_transport"] == "stdin-line/v1"
     environment_binding = {
         "environment": harness["payload"]["environment"],
-        "secret_env_names": ["LIUM_API_KEY"],
+        "credential_transport": "stdin-line/v1",
     }
     assert (
         receipt["execution"]["sanitized_environment_sha256"]
@@ -409,9 +517,16 @@ def test_launch_receipt_binds_evidence_without_secret_values(tmp_path: Path) -> 
     )
     assert receipt["execution"]["started_at"] <= receipt["execution"]["finished_at"]
     assert receipt["budget"]["observed_node_hourly_rate_usd"] == 0
+    assert receipt["budget"]["observed_node_hourly_rate_status"] == ("provider_reported_zero")
     assert receipt["budget"]["max_node_hourly_rate_usd"] == 18
     assert len(receipt["claim"]["sha256"]) == 64
-    assert "lium-secret-test-value" not in receipt_text
+    assert harness["credential"] not in receipt_text
+    assert receipt["template"]["id"] == TEMPLATE_ID
+    assert receipt["runtime_evidence"]["lium_sdk_version"] == LIUM_SDK_VERSION
+    assert receipt["access"] == {
+        "ssh_public_key_path": str(harness["ssh_public_key"]),
+        "ssh_public_key_sha256": hashlib.sha256(harness["ssh_public_key"].read_bytes()).hexdigest(),
+    }
 
 
 def test_provider_timeout_preserves_output_and_durable_failure_receipt(
@@ -463,20 +578,24 @@ def test_credential_custody_blocks_direct_bypass_and_injects_only_declared_secre
         check=False,
         text=True,
         capture_output=True,
+        input="",
     )
     wrapped = _run_wrapper(harness)
     invocations = _invocations(harness)
 
     assert direct.returncode == 77
     assert wrapped.returncode == 0, wrapped.stderr
-    assert len(invocations) == 2
-    assert invocations[0]["has_api_key"] is False
-    assert invocations[1]["has_api_key"] is True
-    assert set(invocations[1]["env_names"]) == {
-        *harness["payload"]["environment"],
-        "LIUM_API_KEY",
-    }
-    assert "AMBIENT_MUST_NOT_LEAK" not in invocations[1]["env_names"]
+    assert len(invocations) == 1
+    assert invocations[0]["has_api_key_env"] is False
+    assert invocations[0]["stdin_credential_received"] is True
+    assert set(invocations[0]["env_names"]) == set(harness["payload"]["environment"])
+    assert "LIUM_API_KEY" not in invocations[0]["env_names"]
+    assert "AMBIENT_MUST_NOT_LEAK" not in invocations[0]["env_names"]
+    combined = direct.stdout + direct.stderr + wrapped.stdout + wrapped.stderr
+    assert harness["credential"] not in combined
+    assert harness["credential"] not in json.dumps(invocations)
+    assert harness["credential"] not in " ".join(_wrapper_argv(harness))
+    assert harness["credential"] not in harness["log"].read_text(encoding="utf-8")
 
 
 def _tamper(harness: dict[str, Any]) -> dict[str, Any]:
@@ -490,6 +609,17 @@ def _expire(harness: dict[str, Any]) -> dict[str, Any]:
     now = datetime.now(timezone.utc).replace(microsecond=0)
     harness["payload"]["issued_at"] = (now - timedelta(minutes=61)).strftime("%Y-%m-%dT%H:%M:%SZ")
     harness["payload"]["expires_at"] = (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _resign(harness)
+    return {}
+
+
+def _permit_too_long(harness: dict[str, Any]) -> dict[str, Any]:
+    issued = datetime.strptime(harness["payload"]["issued_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    harness["payload"]["expires_at"] = (issued + timedelta(minutes=11)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     _resign(harness)
     return {}
 
@@ -614,15 +744,28 @@ def _dangerous_environment(harness: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _unknown_secret_name(harness: dict[str, Any]) -> dict[str, Any]:
-    harness["payload"]["secret_env_names"] = ["LIUM_API_KEY", "AWS_SECRET_ACCESS_KEY"]
+def _wrong_credential_transport(harness: dict[str, Any]) -> dict[str, Any]:
+    harness["payload"]["credential_transport"] = "environment/v1"
+    _resign(harness)
+    return {}
+
+
+def _ssh_public_key_tamper(harness: dict[str, Any]) -> dict[str, Any]:
+    harness["ssh_public_key"].write_text("ssh-ed25519 AAAATAMPERED gate0-test\n", encoding="utf-8")
+    return {}
+
+
+def _ssh_public_key_payload_substitution(harness: dict[str, Any]) -> dict[str, Any]:
+    harness["payload"]["ssh_public_key_path"] = str(
+        harness["ssh_public_key"].with_name("substituted.pub")
+    )
     _resign(harness)
     return {}
 
 
 def _missing_credential(harness: dict[str, Any]) -> dict[str, Any]:
-    harness["env"].pop("LIUM_API_KEY")
-    return {}
+    del harness
+    return {"credential": ""}
 
 
 def _wrong_version(harness: dict[str, Any]) -> dict[str, Any]:
@@ -647,6 +790,7 @@ def _timeout_over_policy(harness: dict[str, Any]) -> dict[str, Any]:
 REJECTED_CASES: tuple[tuple[str, Callable[[dict[str, Any]], dict[str, Any]]], ...] = (
     ("tamper", _tamper),
     ("expiry", _expire),
+    ("permit-too-long", _permit_too_long),
     ("stage", _wrong_stage),
     ("principal", _wrong_principal),
     ("command", _wrong_command),
@@ -663,7 +807,9 @@ REJECTED_CASES: tuple[tuple[str, Callable[[dict[str, Any]], dict[str, Any]]], ..
     ("executable-path", _executable_path_substitution),
     ("cwd", _wrong_cwd),
     ("environment", _dangerous_environment),
-    ("unknown-secret", _unknown_secret_name),
+    ("credential-transport", _wrong_credential_transport),
+    ("ssh-public-key-tamper", _ssh_public_key_tamper),
+    ("ssh-public-key-payload", _ssh_public_key_payload_substitution),
     ("missing-credential", _missing_credential),
     ("version", _wrong_version),
     ("allocation-owner", _wrong_allocation_owner),
@@ -730,6 +876,102 @@ def test_replay_is_rejected_without_second_provider_invocation(tmp_path: Path) -
     assert len(_invocations(harness)) == before_replay
 
 
+def test_production_cli_rejects_fresh_ledger_selection(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    production_args = _wrapper_argv(harness)[3:]
+    command = [
+        sys.executable,
+        str(WRAPPER),
+        "--ledger-dir",
+        str(tmp_path / "attacker-fresh-ledger"),
+        *production_args,
+    ]
+
+    completed = subprocess.run(
+        command,
+        env=harness["env"],
+        input=harness["credential"] + "\n",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert _invocations(harness) == []
+    assert not (tmp_path / "attacker-fresh-ledger").exists()
+
+
+def test_deleted_claim_still_cannot_mutate_same_allocation_twice(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    first = _run_wrapper(harness)
+    for claim in harness["ledger"].glob("*.consumed.json"):
+        claim.unlink()
+    harness["receipt"].unlink()
+    harness["provider_output"].unlink()
+    second = _run_wrapper(harness)
+
+    assert first.returncode == 0
+    assert second.returncode == 73
+    assert harness["mutation_log"].read_text(encoding="utf-8").splitlines() == ["up"]
+    assert len(_invocations(harness)) == 2
+
+
+def test_script_path_swap_immediately_before_popen_executes_held_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _make_harness(tmp_path)
+    permit = load_and_verify_permit(
+        harness["permit"],
+        harness["public_key"],
+        expected_key_id=harness["key_id"],
+        expected_sentry_principal=SENTRY_PRINCIPAL,
+        expected_executor_principal=EXECUTOR_PRINCIPAL,
+        expected_executor_id=EXECUTOR_ID,
+        expected_provider=PROVIDER,
+        expected_profile=PROFILE,
+        expected_source_sha256=SOURCE_SHA256,
+        expected_runtime_sha256=RUNTIME_SHA256,
+        expected_data_sha256=DATA_SHA256,
+        expected_checkpoint_sha256=CHECKPOINT_SHA256,
+        parent_request_path=harness["parent_request"],
+        expected_provider_version=PROVIDER_VERSION,
+        expected_working_directory=harness["working_directory"],
+        expected_argv=harness["argv"],
+    )
+    script_fd = signed_approval._open_verified_executable(permit)
+    interpreter_fd = signed_approval._open_verified_interpreter(permit, script_fd)
+    replacement = tmp_path / "swapped-provider"
+    replacement.write_text(
+        f"#!{PROVIDER_INTERPRETER}\nprint('SWAPPED-BYTES-EXECUTED')\n",
+        encoding="utf-8",
+    )
+    replacement.chmod(0o755)
+    real_popen = subprocess.Popen
+
+    def swap_then_popen(*args, **kwargs):
+        os.replace(replacement, harness["provider_executable"])
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(signed_approval.subprocess, "Popen", swap_then_popen)
+    try:
+        process = signed_approval._start_provider_process(
+            permit,
+            executable_descriptor=script_fd,
+            interpreter_descriptor=interpreter_fd,
+            provider_environment=harness["payload"]["environment"],
+        )
+        output, _ = process.communicate(input=(harness["credential"] + "\n").encode(), timeout=10)
+    finally:
+        os.close(interpreter_fd)
+        os.close(script_fd)
+
+    assert process.returncode == 0
+    assert output == b"fake-lium-booking-output\n"
+    assert b"SWAPPED-BYTES-EXECUTED" not in output
+
+
 def test_concurrent_use_invokes_provider_at_most_once(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     harness["payload"]["environment"]["FAKE_LIUM_SLEEP"] = "0.2"
@@ -741,12 +983,15 @@ def test_concurrent_use_invokes_provider_at_most_once(tmp_path: Path) -> None:
             command,
             env=harness["env"],
             text=True,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         for _ in range(2)
     ]
-    outputs = [process.communicate(timeout=10) for process in processes]
+    outputs = [
+        process.communicate(input=harness["credential"] + "\n", timeout=10) for process in processes
+    ]
 
     assert sorted(process.returncode for process in processes) == [0, 2]
     assert len(_invocations(harness)) == 1

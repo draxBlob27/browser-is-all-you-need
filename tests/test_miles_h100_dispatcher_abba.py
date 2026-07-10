@@ -77,7 +77,8 @@ def _write_leg_fixture(
         lines.append("ray.exceptions.RayTaskError: synthetic failure")
     log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    expected = module["expected_receipt_config"](spec)
+    receipt_config = module.get("expected_receipt_config")
+    expected = receipt_config(spec) if receipt_config is not None else {}
     receipt = {
         "status": "success",
         "ray_status": 0,
@@ -376,6 +377,12 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
     executable = root / "lium-provider"
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o755)
+    interpreter = Path("/bin/sh")
+    cli = root / "lium-cli"
+    cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cli.chmod(0o755)
+    ssh_public_key = root / "id_ed25519.pub"
+    ssh_public_key.write_text("ssh-ed25519 AAAATEST dispatcher-test\n", encoding="utf-8")
     working_directory = root / "provider-cwd"
     working_directory.mkdir()
     provider_output = root / "provider_output.json"
@@ -384,7 +391,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
     provider_output.write_text(
         json.dumps(
             {
-                "schema": "lium-h100-pod-create/v1",
+                "schema": "lium-h100-pod-create/v2",
                 "status": "RUNNING",
                 "pod": {
                     "id": "pod-issue32-001",
@@ -399,9 +406,34 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "gpu_type": "H100",
                     "gpu_model": "H100 SXM",
                     "observed_rate_usd_per_hour": 0.0,
+                    "observed_rate_status": "provider_reported_zero",
                     "max_rate_usd_per_hour": 18.0,
                 },
-                "template": {"id": "template-001", "name": "Pytorch"},
+                "template": {
+                    "id": "template-001",
+                    "name": "Pytorch",
+                    "docker_image": "daturaai/pytorch",
+                    "docker_image_tag": "cuda13-test",
+                    "status": "VERIFY_SUCCESS",
+                },
+                "runtime_evidence": {
+                    "provider_version": "1.1.0",
+                    "interpreter": {
+                        "path": str(interpreter),
+                        "sha256": _sha256(interpreter),
+                        "version": "3.11.14",
+                    },
+                    "lium_sdk": {"distribution": "lium.io", "version": "0.0.3"},
+                    "lium_cli": {
+                        "path": str(cli.resolve()),
+                        "sha256": _sha256(cli),
+                        "version": "0.0.3",
+                    },
+                },
+                "access": {
+                    "ssh_public_key_path": str(ssh_public_key.resolve()),
+                    "ssh_public_key_sha256": _sha256(ssh_public_key),
+                },
                 "schedule": {
                     "confirmed": True,
                     "termination_time": "2026-07-10T14:00:00Z",
@@ -423,7 +455,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
         "request_id": f"gate0-{secrets.token_hex(12)}",
         "nonce": secrets.token_hex(32),
         "issued_at": (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "expires_at": (now + timedelta(minutes=59)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expires_at": (now + timedelta(minutes=9)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sentry_principal": SENTRY_PRINCIPAL,
         "executor_principal": EXECUTOR_PRINCIPAL,
         "source_sha256": "1" * 64,
@@ -436,10 +468,24 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
         "profile": "h100-8x",
         "provider_executable": str(executable.resolve()),
         "provider_executable_sha256": _sha256(executable),
-        "provider_version": "0.0.3",
+        "provider_version": "1.1.0",
+        "provider_interpreter": str(interpreter),
+        "provider_interpreter_sha256": _sha256(interpreter),
+        "provider_interpreter_version": "3.11.14",
+        "lium_sdk_distribution": "lium.io",
+        "lium_sdk_version": "0.0.3",
+        "lium_cli_path": str(cli.resolve()),
+        "lium_cli_sha256": _sha256(cli),
+        "lium_cli_version": "0.0.3",
         "working_directory": str(working_directory.resolve()),
         "environment": {"HOME": str((root / "home").resolve())},
-        "secret_env_names": ["LIUM_API_KEY"],
+        "credential_transport": "stdin-line/v1",
+        "ssh_public_key_path": str(ssh_public_key.resolve()),
+        "ssh_public_key_sha256": _sha256(ssh_public_key),
+        "template_id": "template-001",
+        "template_image": "daturaai/pytorch",
+        "template_tag": "cuda13-test",
+        "template_status": "VERIFY_SUCCESS",
         "issue_number": 32,
         "allocation_name": allocation_name,
         "argv": [
@@ -451,6 +497,36 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
             "--name",
             allocation_name,
             "--yes",
+            "--template-id",
+            "template-001",
+            "--template-image",
+            "daturaai/pytorch",
+            "--template-tag",
+            "cuda13-test",
+            "--template-status",
+            "VERIFY_SUCCESS",
+            "--expected-provider-version",
+            "1.1.0",
+            "--expected-interpreter-path",
+            str(interpreter),
+            "--expected-interpreter-sha256",
+            _sha256(interpreter),
+            "--expected-interpreter-version",
+            "3.11.14",
+            "--expected-lium-sdk-version",
+            "0.0.3",
+            "--expected-lium-cli-path",
+            str(cli.resolve()),
+            "--expected-lium-cli-sha256",
+            _sha256(cli),
+            "--expected-lium-cli-version",
+            "0.0.3",
+            "--ssh-public-key-path",
+            str(ssh_public_key.resolve()),
+            "--ssh-public-key-sha256",
+            _sha256(ssh_public_key),
+            "--max-rate",
+            "18",
         ],
         "gpu_type": "H100",
         "gpu_count": 8,
@@ -458,6 +534,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
         "max_cost_usd": 36,
         "max_node_hourly_rate_usd": 18,
         "observed_node_hourly_rate_usd": 0,
+        "observed_node_hourly_rate_status": "provider_reported_zero",
         "max_node_hours": 2,
         "provider_timeout_seconds": 300,
     }
@@ -495,7 +572,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
     receipt.write_text(
         json.dumps(
             {
-                "schema": "h100-lium-launch-receipt/v1",
+                "schema": "h100-lium-launch-receipt/v2",
                 "status": "COMPLETED",
                 "permit": {
                     "path": str(permit.resolve()),
@@ -515,7 +592,11 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "executor_id": executor_huid,
                     "executable": str(executable.resolve()),
                     "executable_sha256": _sha256(executable),
-                    "declared_version": "0.0.3",
+                    "declared_version": "1.1.0",
+                },
+                "access": {
+                    "ssh_public_key_path": str(ssh_public_key.resolve()),
+                    "ssh_public_key_sha256": _sha256(ssh_public_key),
                 },
                 "provider_output": {
                     "path": str(provider_output.resolve()),
@@ -529,12 +610,14 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "exit_code": 0,
                     "wrapper_exit_code": 0,
                     "timed_out": False,
+                    "credential_transport": "stdin-line/v1",
                 },
                 "budget": {
                     "ttl_seconds": 7200,
                     "max_cost_usd": 36,
                     "max_node_hourly_rate_usd": 18,
                     "observed_node_hourly_rate_usd": 0,
+                    "observed_node_hourly_rate_status": "provider_reported_zero",
                     "max_node_hours": 2,
                 },
             },
@@ -558,6 +641,39 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
 def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
     root.mkdir(parents=True, exist_ok=True)
     run_root = root / "run"
+    module["CANONICAL_RUN_ROOT"] = run_root.resolve()
+    module["GATE1_CONSUMPTION_ROOT"] = root / "gate1-consumption/v1"
+    hf_checkpoint = root / "hf-checkpoint"
+    hf_checkpoint.mkdir()
+    runtime_pins = module["load_acceptance_contract"]()["runtime_pins"]
+    hf_revision = runtime_pins["hf_revision"]
+    container_reference = runtime_pins["container_image"]
+    container_digest = container_reference.rsplit("@", 1)[1]
+    revision_marker = hf_checkpoint / ".w8-hf-revision"
+    revision_marker.write_text(hf_revision + "\n", encoding="utf-8")
+    setup_attestation = root / "issue32-t1-setup-attestation.json"
+    setup_attestation.write_text(
+        json.dumps(
+            {
+                "schema": module["SETUP_ATTESTATION_SCHEMA"],
+                "created_at_utc": "2026-07-10T12:00:00Z",
+                "hf_checkpoint_path": str(hf_checkpoint),
+                "hf_model": runtime_pins["hf_model"],
+                "hf_revision": hf_revision,
+                "hf_revision_marker_path": str(revision_marker),
+                "hf_revision_marker_sha256": _sha256(revision_marker),
+                "container_image_reference": container_reference,
+                "container_image_digest": container_digest,
+                "container_platform": runtime_pins["container_platform"],
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    module["HF_CHECKPOINT"] = hf_checkpoint
+    module["HF_REVISION_MARKER_PATH"] = revision_marker
+    module["SETUP_ATTESTATION_PATH"] = setup_attestation
     budget = root / "budget.json"
     budget.write_text('{"tranche_id":"T1"}\n', encoding="utf-8")
     gate0 = _write_gate0_chain(root / "gate0-source")
@@ -572,7 +688,19 @@ def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
         "repo_sha": value["repo_sha"],
         "training_base_sha": value["training_base_sha"],
     }
-    module["checkpoint_receipt"] = lambda: {"checkpoint": "fixed", "sha256": "1" * 64}
+    module["checkpoint_receipt"] = lambda setup, setup_path: {
+        "schema_version": 2,
+        "checkpoint": "fixed",
+        "sha256": "1" * 64,
+        "hf_model": setup["hf_model"],
+        "hf_revision": setup["hf_revision"],
+        "hf_revision_marker_sha256": setup["hf_revision_marker_sha256"],
+        "container_image_reference": setup["container_image_reference"],
+        "container_image_digest": setup["container_image_digest"],
+        "container_platform": setup["container_platform"],
+        "setup_attestation_path": str(setup_path),
+        "setup_attestation_sha256": _sha256(setup_path),
+    }
     module["data_receipt"] = lambda: {
         "sha256": module["TRAIN_SHA256"],
         "row_count": 128,
@@ -581,6 +709,23 @@ def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
         "ok": True,
         "mode": "online",
         "authenticated_api_read": True,
+    }
+    module["runtime_receipt"] = lambda setup, setup_path: {
+        "schema_version": 2,
+        "ok": True,
+        "returncode": 0,
+        "stdout": "ok",
+        "stderr": "",
+        "hf_checkpoint_path": setup["hf_checkpoint_path"],
+        "hf_model": setup["hf_model"],
+        "hf_revision": setup["hf_revision"],
+        "hf_revision_marker_path": setup["hf_revision_marker_path"],
+        "hf_revision_marker_sha256": setup["hf_revision_marker_sha256"],
+        "container_image_reference": setup["container_image_reference"],
+        "container_image_digest": setup["container_image_digest"],
+        "container_platform": setup["container_platform"],
+        "setup_attestation_path": str(setup_path),
+        "setup_attestation_sha256": _sha256(setup_path),
     }
     module["_run_capture"] = lambda *args, **kwargs: {
         "command": args[0],
@@ -671,12 +816,12 @@ def _install_fake_run_leg(
     module["run_leg"] = fake_run_leg
 
 
-def _phase_kwargs(public_key: Path, ledger: Path) -> dict:
+def _phase_kwargs(public_key: Path, ledger: Path | None = None) -> dict:
+    del ledger
     return {
         "sentry_public_key": public_key,
         "sentry_principal": SENTRY_PRINCIPAL,
         "executor_principal": EXECUTOR_PRINCIPAL,
-        "approval_ledger": ledger,
     }
 
 
@@ -684,6 +829,12 @@ def test_ea02_cli_and_protocol_are_strictly_staged(tmp_path: Path) -> None:
     module = _module()
     protocol = module["build_protocol"](tmp_path)
 
+    assert module["CANONICAL_RUN_ROOT"] == Path("/tmp/w8-issue32-t1")
+    assert module["GATE1_CONSUMPTION_ROOT"] == Path(
+        "/data/w8-biayn/control-plane/gate1-consumption/v1"
+    )
+    with pytest.raises(SystemExit, match="run root must be exactly"):
+        module["_require_canonical_run_root"](tmp_path)
     assert protocol["phases"] == ["prepare", "first-pair", "second-pair"]
     assert protocol["phase_legs"] == {
         "first-pair": ["a1", "b1"],
@@ -696,6 +847,24 @@ def test_ea02_cli_and_protocol_are_strictly_staged(tmp_path: Path) -> None:
         module["parse_args"](["--run-root", str(tmp_path)])
     with pytest.raises(SystemExit):
         module["parse_args"](["first-pair", "--run-root", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        module["parse_args"](
+            [
+                "first-pair",
+                "--run-root",
+                str(tmp_path),
+                "--sentry-approval",
+                "approval.json",
+                "--sentry-public-key",
+                "sentry.json",
+                "--sentry-principal",
+                SENTRY_PRINCIPAL,
+                "--executor-principal",
+                EXECUTOR_PRINCIPAL,
+                "--approval-ledger",
+                str(tmp_path / "fresh-ledger"),
+            ]
+        )
 
 
 def test_runner_never_authors_or_invokes_scientific_decisions() -> None:
@@ -727,6 +896,44 @@ def test_prepare_writes_immutable_receipts_without_training(
     assert request["gate0"]["allocation_name"] == "issue-32-dispatcher-abba"
     booking = json.loads(gate0["booking_request"].read_text(encoding="utf-8"))
     assert request["gate1_trust"] == booking["gate1_trust"]
+    manifest = json.loads((run_root / "prepare_manifest.json").read_text())
+    for name in ("source", "runtime", "data", "checkpoint"):
+        receipt_path = run_root / "receipts" / f"{name}.json"
+        assert request["prepared_evidence"][name] == json.loads(receipt_path.read_text())
+        assert request["input_hashes"][name] == _sha256(receipt_path)
+        assert manifest["sha256"][name] == _sha256(receipt_path)
+    runtime_pins = module["load_acceptance_contract"]()["runtime_pins"]
+    assert request["prepared_evidence"]["runtime"]["hf_revision"] == runtime_pins["hf_revision"]
+    assert request["prepared_evidence"]["runtime"]["returncode"] == 0
+    assert (
+        request["prepared_evidence"]["runtime"]["container_image_reference"]
+        == (runtime_pins["container_image"])
+    )
+    assert (
+        request["prepared_evidence"]["runtime"]["container_image_digest"]
+        == (runtime_pins["container_image"].rsplit("@", 1)[1])
+    )
+    assert request["prepared_evidence"]["checkpoint"]["hf_revision"] == runtime_pins["hf_revision"]
+    assert (
+        request["prepared_evidence"]["checkpoint"]["container_image_reference"]
+        == (runtime_pins["container_image"])
+    )
+    setup_path = Path(manifest["supporting_artifacts"]["setup_attestation"])
+    assert setup_path == run_root / "receipts/setup_attestation.json"
+    assert manifest["supporting_sha256"]["setup_attestation"] == _sha256(setup_path)
+    setup = json.loads(setup_path.read_text())
+    assert set(setup) == {
+        "schema",
+        "created_at_utc",
+        "hf_checkpoint_path",
+        "hf_model",
+        "hf_revision",
+        "hf_revision_marker_path",
+        "hf_revision_marker_sha256",
+        "container_image_reference",
+        "container_image_digest",
+        "container_platform",
+    }
     copied_paths = module["_gate0_paths"](run_root)
     for name, source in gate0.items():
         if name not in copied_paths:
@@ -955,7 +1162,7 @@ def test_concurrent_signed_approval_consumption_runs_at_most_one_pair(tmp_path: 
 
     assert sorted(outcomes, key=str) == [0, "rejected"]
     assert calls == ["a1", "b1"]
-    assert len(list(ledger.glob("*.consumed.json"))) == 1
+    assert len(list(module["GATE1_CONSUMPTION_ROOT"].glob("*.consumed.json"))) == 1
 
 
 @pytest.mark.parametrize(
@@ -1064,6 +1271,21 @@ def test_gate0_schedule_and_budget_bindings_fail_closed(tmp_path: Path) -> None:
     receipt["budget"]["max_cost_usd"] = 35
     module["write_json"](gate0["launch_receipt"], receipt)
     with pytest.raises(RuntimeError, match="budget binding mismatch"):
+        module["_validate_gate0_chain"](gate0, require_current_permit=True)
+
+
+def test_gate0_ssh_public_key_binding_fails_closed(tmp_path: Path) -> None:
+    module = _module()
+    gate0 = _write_gate0_chain(tmp_path / "gate0")
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    provider["access"]["ssh_public_key_sha256"] = "f" * 64
+    module["write_json"](gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    module["write_json"](gate0["launch_receipt"], receipt)
+
+    with pytest.raises(RuntimeError, match="SSH public-key binding mismatch"):
         module["_validate_gate0_chain"](gate0, require_current_permit=True)
 
 
@@ -1216,6 +1438,19 @@ def test_run_leg_cleans_up_after_launcher_exception(
     ray_calls: list[str] = []
     module["_ray_stop"] = lambda env: ray_calls.append("stop") or {"ok": True}
     module["nvlink_snapshot"] = lambda: {"supported": True}
+    process_calls: list[str] = []
+
+    def clean_process_inventory():
+        process_calls.append("inventory")
+        return {
+            "schema": "h100-process-cleanliness/v1",
+            "ok": True,
+            "errors": [],
+            "gpu_process_inventory": [],
+            "relevant_processes": [],
+        }
+
+    module["collect_process_cleanliness"] = clean_process_inventory
 
     class FakeMonitor:
         def __init__(self, path):
@@ -1249,6 +1484,9 @@ def test_run_leg_cleans_up_after_launcher_exception(
 
     assert monitor_holder["monitor"].stopped is True
     assert ray_calls == ["stop", "stop"]
+    assert process_calls == ["inventory", "inventory"]
+    assert (leg_root / "process_cleanliness_before.json").is_file()
+    assert (leg_root / "process_cleanliness_after.json").is_file()
     receipt = module["read_key_value"](leg_root / "sft_lora_r16/run_receipt.txt")
     assert receipt["tranche_id"] == "T1"
     assert receipt["run_started_at_utc"]
@@ -1313,6 +1551,8 @@ def test_canonical_and_two_warmup_artifacts_are_interoperable(tmp_path: Path) ->
         launcher_exit_code=0,
         pre_cleanup={"ok": True},
         post_cleanup={"ok": True},
+        pre_process_cleanliness={"ok": True},
+        post_process_cleanliness={"ok": True},
         telemetry={"ok": True},
     )
 
@@ -1320,6 +1560,93 @@ def test_canonical_and_two_warmup_artifacts_are_interoperable(tmp_path: Path) ->
     assert supplementary["valid"] is True
     assert supplementary["measured_step_count"] == 14
     assert len(records) == 16
+
+
+def test_process_cleanliness_records_gpu_and_training_survivors() -> None:
+    module = _module()
+
+    def fake_capture(command, **kwargs):
+        del kwargs
+        if command[0] == "nvidia-smi":
+            return {
+                "returncode": 0,
+                "stdout": "4321, python3, 1234\n",
+                "stderr": "",
+            }
+        return {
+            "returncode": 0,
+            "stdout": (
+                " 4321 Wed Jul 10 12:34:56 2026 python3 actor_train.py\n"
+                " 9876 Wed Jul 10 12:35:01 2026 raylet --node-ip-address=127.0.0.1\n"
+            ),
+            "stderr": "",
+        }
+
+    module["_run_capture"] = fake_capture
+    receipt = module["collect_process_cleanliness"]()
+
+    assert receipt["ok"] is False
+    assert receipt["errors"] == ["surviving_relevant_processes"]
+    assert [row["pid"] for row in receipt["relevant_processes"]] == [4321, 9876]
+    assert receipt["relevant_processes"][0]["start_time"] == "Wed Jul 10 12:34:56 2026"
+
+
+def test_process_survivor_invalidates_leg_evidence_and_stops_next_leg(tmp_path: Path) -> None:
+    module = _module()
+    log, receipt, _ = _write_leg_fixture(
+        tmp_path / "fixture",
+        module,
+        module["LEG_SPECS"]["a1"],
+    )
+    summary, _ = module["summarize_two_warmup"](
+        module["LEG_SPECS"]["a1"],
+        log,
+        receipt,
+        launcher_exit_code=0,
+        pre_cleanup={"ok": True},
+        post_cleanup={"ok": True},
+        pre_process_cleanliness={"ok": True},
+        post_process_cleanliness={
+            "ok": False,
+            "errors": ["surviving_relevant_processes"],
+            "relevant_processes": [{"pid": 4321, "args": "raylet"}],
+        },
+        telemetry={"ok": True},
+    )
+    assert summary["valid"] is False
+    assert "post_leg_process_cleanliness_failed" in summary["rejection_reasons"]
+
+    calls: list[str] = []
+
+    def fake_run_leg(spec, run_root):
+        del run_root
+        calls.append(spec.leg_id)
+        return {
+            "leg_id": spec.leg_id,
+            "valid": False,
+            "process_cleanliness_after": {
+                "ok": False,
+                "errors": ["surviving_relevant_processes"],
+            },
+        }
+
+    module["run_leg"] = fake_run_leg
+    legs, complete = module["_run_pair_sequential"](
+        tmp_path / "run",
+        leg_ids=("a1", "b1"),
+        result_name="first_pair_result.json",
+        complete_status="first_pair_complete",
+        repair_state="first_pair_repair_needed",
+        approval_sha256="a" * 64,
+        request_sha256="b" * 64,
+    )
+
+    assert complete is False
+    assert calls == ["a1"]
+    assert legs[0]["valid"] is False
+    result = json.loads((tmp_path / "run/first_pair_result.json").read_text())
+    assert result["not_run"] == ["b1"]
+    assert result["repair_required"] is True
 
 
 def test_source_provenance_enforces_clean_ancestor_and_allowlist() -> None:

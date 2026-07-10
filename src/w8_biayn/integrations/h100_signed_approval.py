@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import pwd
 import re
 import stat
 import subprocess
@@ -23,22 +24,40 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
-ENVELOPE_SCHEMA = "h100-lium-signed-permit-envelope/v3"
-PERMIT_SCHEMA = "h100-lium-booking-permit/v3"
+ENVELOPE_SCHEMA = "h100-lium-signed-permit-envelope/v4"
+PERMIT_SCHEMA = "h100-lium-booking-permit/v4"
 PUBLIC_KEY_SCHEMA = "h100-lium-ed25519-public-key/v1"
-SIGNATURE_DOMAIN = b"w8-biayn/h100-lium-booking-permit/ed25519/v3\x00"
-LAUNCH_RECEIPT_SCHEMA = "h100-lium-launch-receipt/v1"
+SIGNATURE_DOMAIN = b"w8-biayn/h100-lium-booking-permit/ed25519/v4\x00"
+LAUNCH_RECEIPT_SCHEMA = "h100-lium-launch-receipt/v2"
 REQUIRED_STAGE = "lium-booking"
 REQUIRED_DECISION = "PROMOTABLE"
 REQUIRED_PROVIDER = "lium"
 REQUIRED_GPU_TYPE = "H100"
 REQUIRED_GPU_COUNT = 8
 MAX_TTL_SECONDS = 2 * 60 * 60
+MAX_PERMIT_VALIDITY_SECONDS = 10 * 60
 MAX_COST_USD = Decimal("36")
 MAX_NODE_HOURLY_RATE_USD = Decimal("18")
 MAX_NODE_HOURS = Decimal("2")
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 300
 MAX_PROVIDER_TIMEOUT_SECONDS = 300
+CREDENTIAL_TRANSPORT = "stdin-line/v1"
+MAX_CREDENTIAL_BYTES = 4096
+GATE0_CONSUMPTION_ROOT = (
+    Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    / ".local/state/w8-biayn/control-plane/gate0-consumption/v1"
+)
+PROVIDER_FD_LOADER = (
+    "import sys\n"
+    "fd_path, display_path, *script_args = sys.argv[1:]\n"
+    "with open(fd_path, 'rb', buffering=0) as handle:\n"
+    "    handle.seek(0)\n"
+    "    source = handle.read()\n"
+    "sys.argv = [display_path, *script_args]\n"
+    "scope = {'__name__': '__main__', '__file__': display_path, "
+    "'__package__': None, '__cached__': None}\n"
+    "exec(compile(source, display_path, 'exec'), scope, scope)\n"
+)
 
 _HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/-]{2,127}\Z")
@@ -51,7 +70,6 @@ _ALLOCATION_RE = re.compile(r"issue-([1-9][0-9]*)-[a-z0-9][a-z0-9-]{2,62}\Z")
 _SECRETISH_ENV_RE = re.compile(
     r"(?:^|_)(?:API_KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY)(?:$|_)"
 )
-_ALLOWED_SECRET_ENV_NAMES = ("LIUM_API_KEY",)
 _FORBIDDEN_ENV_NAMES = frozenset(
     {
         "BASH_ENV",
@@ -86,9 +104,23 @@ _PAYLOAD_FIELDS = frozenset(
         "provider_executable",
         "provider_executable_sha256",
         "provider_version",
+        "provider_interpreter",
+        "provider_interpreter_sha256",
+        "provider_interpreter_version",
+        "lium_sdk_distribution",
+        "lium_sdk_version",
+        "lium_cli_path",
+        "lium_cli_sha256",
+        "lium_cli_version",
         "working_directory",
         "environment",
-        "secret_env_names",
+        "credential_transport",
+        "template_id",
+        "template_image",
+        "template_tag",
+        "template_status",
+        "ssh_public_key_path",
+        "ssh_public_key_sha256",
         "issue_number",
         "allocation_name",
         "argv",
@@ -98,6 +130,7 @@ _PAYLOAD_FIELDS = frozenset(
         "max_cost_usd",
         "max_node_hourly_rate_usd",
         "observed_node_hourly_rate_usd",
+        "observed_node_hourly_rate_status",
         "max_node_hours",
         "provider_timeout_seconds",
     }
@@ -132,6 +165,7 @@ class VerifiedPermit:
     permit_sha256: str
     parent_request_path: str = ""
     provider_executable: str = ""
+    provider_interpreter: str = ""
     working_directory: str = ""
     environment_sha256: str = ""
 
@@ -278,10 +312,29 @@ def load_and_verify_permit(
     )
     if executable_digest != verified.payload["provider_executable_sha256"]:
         raise PermitVerificationError("provider executable digest mismatch")
+    interpreter = Path(verified.payload["provider_interpreter"])
+    if (
+        _sha256_bound_file(interpreter, label="provider interpreter", require_executable=True)
+        != verified.payload["provider_interpreter_sha256"]
+    ):
+        raise PermitVerificationError("provider interpreter digest mismatch")
+    cli_path = Path(verified.payload["lium_cli_path"])
+    if (
+        _sha256_bound_file(cli_path, label="Lium CLI", require_executable=True)
+        != verified.payload["lium_cli_sha256"]
+    ):
+        raise PermitVerificationError("Lium CLI digest mismatch")
+    ssh_public_key_path = Path(verified.payload["ssh_public_key_path"])
+    if (
+        _sha256_bound_file(ssh_public_key_path, label="SSH public key")
+        != verified.payload["ssh_public_key_sha256"]
+    ):
+        raise PermitVerificationError("SSH public key digest mismatch")
     return replace(
         verified,
         parent_request_path=str(parent_path.resolve()),
         provider_executable=str(executable),
+        provider_interpreter=str(interpreter),
         working_directory=str(verified.payload["working_directory"]),
         environment_sha256=_environment_binding_sha256(verified.payload),
     )
@@ -410,7 +463,6 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--permit", required=True)
     parser.add_argument("--public-key", required=True)
     parser.add_argument("--key-id", required=True)
-    parser.add_argument("--ledger-dir", required=True)
     parser.add_argument("--sentry-principal", required=True)
     parser.add_argument("--executor-principal", required=True)
     parser.add_argument("--executor-id", required=True)
@@ -452,15 +504,31 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
             expected_working_directory=args.working_directory,
             expected_argv=command,
         )
-        provider_environment = _build_provider_environment(permit.payload, os.environ)
+        provider_environment = _build_provider_environment(permit.payload)
         executable_descriptor = _open_verified_executable(permit)
-        executable_launch_path = _verified_execution_path(permit, executable_descriptor)
-        claim_path = consume_permit_once(permit, args.ledger_dir)
+        interpreter_descriptor = _open_verified_interpreter(permit, executable_descriptor)
+        cli_descriptor = _open_verified_cli(permit)
+        _verify_runtime_evidence(
+            permit,
+            executable_descriptor=executable_descriptor,
+            interpreter_descriptor=interpreter_descriptor,
+            cli_descriptor=cli_descriptor,
+            provider_environment=provider_environment,
+        )
+        credential = _read_stdin_credential()
+        claim_path = consume_permit_once(permit, GATE0_CONSUMPTION_ROOT)
         _reserve_receipt(Path(args.receipt), permit)
         _reserve_provider_output(Path(args.provider_output))
     except PermitError as exc:
-        if "executable_descriptor" in locals():
-            os.close(executable_descriptor)
+        for descriptor_name in (
+            "cli_descriptor",
+            "interpreter_descriptor",
+            "executable_descriptor",
+        ):
+            if descriptor_name in locals():
+                os.close(locals()[descriptor_name])
+        if "credential" in locals():
+            _wipe_bytearray(credential)
         _print_failure(type(exc).__name__, str(exc))
         return 2
 
@@ -469,19 +537,16 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
     execution_error = False
     timed_out = False
     try:
-        _verified_execution_path(permit, executable_descriptor)
-        process = subprocess.Popen(
-            list(permit.argv),
-            executable=executable_launch_path,
-            cwd=permit.working_directory,
-            env=provider_environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            close_fds=True,
+        process = _start_provider_process(
+            permit,
+            executable_descriptor=executable_descriptor,
+            interpreter_descriptor=interpreter_descriptor,
+            provider_environment=provider_environment,
         )
+        credential.append(10)
         try:
             provider_output, _ = process.communicate(
-                timeout=int(permit.payload["provider_timeout_seconds"])
+                input=credential, timeout=int(permit.payload["provider_timeout_seconds"])
             )
             exit_code: int | None = process.returncode
         except subprocess.TimeoutExpired:
@@ -493,6 +558,9 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
         execution_error = True
         exit_code = None
     finally:
+        _wipe_bytearray(credential)
+        os.close(cli_descriptor)
+        os.close(interpreter_descriptor)
         os.close(executable_descriptor)
     finished_at = _utc_timestamp()
     if execution_error:
@@ -597,12 +665,36 @@ def _validate_payload(
         raise PermitVerificationError("working_directory mismatch")
     _validate_working_directory(Path(working_directory))
     environment = _validate_environment(payload)
+    _require_equal(payload, "credential_transport", CREDENTIAL_TRANSPORT)
+    _require_absolute_path(payload, "ssh_public_key_path")
+    _require_string(payload, "ssh_public_key_sha256", _HEX_256_RE)
+    _require_string(payload, "provider_interpreter_sha256", _HEX_256_RE)
+    _require_string(payload, "lium_cli_sha256", _HEX_256_RE)
+    _require_absolute_path(payload, "provider_interpreter")
+    _require_absolute_path(payload, "lium_cli_path")
+    _require_string(payload, "provider_interpreter_version", _VERSION_RE)
+    _require_equal(payload, "lium_sdk_distribution", "lium.io")
+    _require_string(payload, "lium_sdk_version", _VERSION_RE)
+    _require_string(payload, "lium_cli_version", _VERSION_RE)
+    _require_string(payload, "template_id", _IDENTIFIER_RE)
+    _require_string(payload, "template_image", _IDENTIFIER_RE)
+    _require_string(payload, "template_tag", _VERSION_RE)
+    template_status = _require_string(payload, "template_status", _IDENTIFIER_RE)
+    if template_status not in {
+        "ACTIVE",
+        "AVAILABLE",
+        "READY",
+        "SUCCESS",
+        "VERIFIED",
+        "VERIFY_SUCCESS",
+    }:
+        raise PermitVerificationError("template_status is not usable")
 
     issued_at = _parse_utc(payload.get("issued_at"), "issued_at")
     expires_at = _parse_utc(payload.get("expires_at"), "expires_at")
     lifetime_seconds = (expires_at - issued_at).total_seconds()
-    if lifetime_seconds <= 0 or lifetime_seconds > MAX_TTL_SECONDS:
-        raise PermitVerificationError("permit lifetime must be in (0, 2h]")
+    if lifetime_seconds <= 0 or lifetime_seconds > MAX_PERMIT_VALIDITY_SECONDS:
+        raise PermitVerificationError("permit validity must be in (0, 10m]")
     current = _utc_now(now)
     if current < issued_at:
         raise PermitVerificationError("permit is not yet valid")
@@ -622,6 +714,9 @@ def _validate_payload(
     max_cost = _require_decimal(payload, "max_cost_usd")
     max_hourly_rate = _require_decimal(payload, "max_node_hourly_rate_usd")
     observed_hourly_rate = _require_decimal(payload, "observed_node_hourly_rate_usd")
+    observed_rate_status = _require_string(
+        payload, "observed_node_hourly_rate_status", _IDENTIFIER_RE
+    )
     max_node_hours = _require_decimal(payload, "max_node_hours")
     if not Decimal("0") < max_cost <= MAX_COST_USD:
         raise PermitVerificationError("max_cost_usd exceeds the $36 tranche")
@@ -629,6 +724,11 @@ def _validate_payload(
         raise PermitVerificationError("max_node_hourly_rate_usd exceeds $18")
     if not Decimal("0") <= observed_hourly_rate <= max_hourly_rate:
         raise PermitVerificationError("observed node rate must be between zero and the cap")
+    expected_rate_status = (
+        "provider_reported_zero" if observed_hourly_rate == 0 else "provider_reported_nonzero"
+    )
+    if observed_rate_status != expected_rate_status:
+        raise PermitVerificationError("observed node rate status does not match the API value")
     if not Decimal("0") < max_node_hours <= MAX_NODE_HOURS:
         raise PermitVerificationError("max_node_hours exceeds 2h")
     ttl_hours = Decimal(ttl_seconds) / Decimal(3600)
@@ -648,6 +748,7 @@ def _validate_payload(
         expected_executor_id,
         executable,
         allocation_name,
+        payload,
     )
     if _command_ttl_seconds(argv) != ttl_seconds:
         raise PermitVerificationError("signed command TTL does not match ttl_seconds")
@@ -662,6 +763,7 @@ def _validate_command(
     expected_executor_id: str,
     provider_executable: str,
     allocation_name: str,
+    payload: Mapping[str, Any],
 ) -> tuple[str, ...]:
     if not isinstance(value, list) or not value:
         raise PermitFormatError("argv must be a non-empty JSON array")
@@ -686,6 +788,30 @@ def _validate_command(
         raise PermitVerificationError(
             "signed command must contain the exact issue-owned allocation name"
         )
+    expected_options = {
+        "--template-id": str(payload["template_id"]),
+        "--template-image": str(payload["template_image"]),
+        "--template-tag": str(payload["template_tag"]),
+        "--template-status": str(payload["template_status"]),
+        "--expected-provider-version": str(payload["provider_version"]),
+        "--expected-interpreter-path": str(payload["provider_interpreter"]),
+        "--expected-interpreter-sha256": str(payload["provider_interpreter_sha256"]),
+        "--expected-interpreter-version": str(payload["provider_interpreter_version"]),
+        "--expected-lium-sdk-version": str(payload["lium_sdk_version"]),
+        "--expected-lium-cli-path": str(payload["lium_cli_path"]),
+        "--expected-lium-cli-sha256": str(payload["lium_cli_sha256"]),
+        "--expected-lium-cli-version": str(payload["lium_cli_version"]),
+        "--ssh-public-key-path": str(payload["ssh_public_key_path"]),
+        "--ssh-public-key-sha256": str(payload["ssh_public_key_sha256"]),
+    }
+    for option, expected in expected_options.items():
+        if _command_option_values(argv, option) != [expected]:
+            raise PermitVerificationError(f"signed command {option} mismatch")
+    max_rates = _command_option_values(argv, "--max-rate")
+    if len(max_rates) != 1 or _require_decimal(
+        {"value": max_rates[0]}, "value"
+    ) != _require_decimal(payload, "max_node_hourly_rate_usd"):
+        raise PermitVerificationError("signed command --max-rate mismatch")
     return argv
 
 
@@ -767,35 +893,20 @@ def _validate_environment(payload: Mapping[str, Any]) -> dict[str, str]:
             raise PermitFormatError(f"environment value for {name} is not sanitized text")
         sanitized[name] = value
 
-    secret_names = payload.get("secret_env_names")
-    if not isinstance(secret_names, list) or any(
-        not isinstance(name, str) for name in secret_names
-    ):
-        raise PermitFormatError("secret_env_names must be a JSON string array")
-    if tuple(secret_names) != _ALLOWED_SECRET_ENV_NAMES:
-        raise PermitVerificationError("secret_env_names must be exactly ['LIUM_API_KEY']")
-    if set(secret_names) & set(sanitized):
-        raise PermitVerificationError("secret values must not appear in signed environment")
     return sanitized
 
 
 def _environment_binding_sha256(payload: Mapping[str, Any]) -> str:
     binding = {
         "environment": _validate_environment(payload),
-        "secret_env_names": payload["secret_env_names"],
+        "credential_transport": payload["credential_transport"],
     }
     return hashlib.sha256(canonical_json_bytes(binding)).hexdigest()
 
 
-def _build_provider_environment(
-    payload: Mapping[str, Any], ambient_environment: Mapping[str, str]
-) -> dict[str, str]:
+def _build_provider_environment(payload: Mapping[str, Any]) -> dict[str, str]:
     provider_environment = dict(_validate_environment(payload))
-    for name in payload["secret_env_names"]:
-        value = ambient_environment.get(name)
-        if not isinstance(value, str) or not value or "\x00" in value:
-            raise PermitVerificationError(f"required secret environment variable is absent: {name}")
-        provider_environment[name] = value
+    provider_environment.pop("LIUM_API_KEY", None)
     return provider_environment
 
 
@@ -851,24 +962,230 @@ def _open_verified_executable(permit: VerifiedPermit) -> int:
     return descriptor
 
 
-def _verified_execution_path(permit: VerifiedPermit, descriptor: int) -> str:
-    path = Path(permit.provider_executable)
+def _read_shebang_interpreter(descriptor: int) -> str:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    first_line = os.read(descriptor, 4096).splitlines()[:1]
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if not first_line or not first_line[0].startswith(b"#!"):
+        raise PermitVerificationError("provider executable has no absolute shebang")
+    try:
+        shebang = first_line[0][2:].decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise PermitVerificationError("provider shebang is not ASCII") from exc
+    if not shebang or any(character.isspace() for character in shebang):
+        raise PermitVerificationError("provider shebang must contain one interpreter path")
+    if not Path(shebang).is_absolute():
+        raise PermitVerificationError("provider shebang interpreter must be absolute")
+    return shebang
+
+
+def _open_verified_interpreter(permit: VerifiedPermit, script_descriptor: int) -> int:
+    if _read_shebang_interpreter(script_descriptor) != permit.provider_interpreter:
+        raise PermitVerificationError("provider shebang interpreter mismatch")
+    descriptor = _open_bound_file(
+        Path(permit.provider_interpreter),
+        label="provider interpreter",
+        require_executable=True,
+    )
+    if _sha256_descriptor(descriptor) != permit.payload["provider_interpreter_sha256"]:
+        os.close(descriptor)
+        raise PermitVerificationError("provider interpreter changed after verification")
+    return descriptor
+
+
+def _open_verified_cli(permit: VerifiedPermit) -> int:
+    descriptor = _open_bound_file(
+        Path(str(permit.payload["lium_cli_path"])),
+        label="Lium CLI",
+        require_executable=True,
+    )
+    if _sha256_descriptor(descriptor) != permit.payload["lium_cli_sha256"]:
+        os.close(descriptor)
+        raise PermitVerificationError("Lium CLI changed after verification")
+    return descriptor
+
+
+def _recheck_path_identity(
+    path: Path,
+    descriptor: int,
+    expected_sha256: str,
+    *,
+    label: str,
+) -> None:
     try:
         path_metadata = path.lstat()
         descriptor_metadata = os.fstat(descriptor)
     except OSError as exc:
-        raise PermitVerificationError(f"provider executable identity check failed: {exc}") from exc
+        raise PermitVerificationError(f"{label} identity check failed: {exc}") from exc
     if stat.S_ISLNK(path_metadata.st_mode) or not stat.S_ISREG(path_metadata.st_mode):
-        raise PermitVerificationError("provider executable path was substituted")
+        raise PermitVerificationError(f"{label} path was substituted")
     identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
     if any(
         getattr(path_metadata, field) != getattr(descriptor_metadata, field)
         for field in identity_fields
     ):
-        raise PermitVerificationError("provider executable changed before launch")
-    if _sha256_descriptor(descriptor) != permit.payload["provider_executable_sha256"]:
-        raise PermitVerificationError("provider executable digest changed before launch")
-    return permit.provider_executable
+        raise PermitVerificationError(f"{label} changed before launch")
+    if _sha256_descriptor(descriptor) != expected_sha256:
+        raise PermitVerificationError(f"{label} digest changed before launch")
+
+
+def _provider_loader_command(
+    permit: VerifiedPermit,
+    executable_descriptor: int,
+    script_args: Sequence[str],
+) -> list[str]:
+    return [
+        permit.provider_interpreter,
+        "-I",
+        "-c",
+        PROVIDER_FD_LOADER,
+        f"/dev/fd/{executable_descriptor}",
+        permit.provider_executable,
+        *script_args,
+    ]
+
+
+def _run_probe(
+    command: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    cwd: str,
+    pass_fds: Sequence[int] = (),
+) -> str:
+    try:
+        result = subprocess.run(
+            list(command),
+            cwd=cwd,
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=15,
+            pass_fds=tuple(pass_fds),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PermitVerificationError("runtime evidence probe failed") from exc
+    output = result.stdout.decode("utf-8", errors="replace").strip()
+    if result.returncode != 0 or not output or "\n" in output:
+        raise PermitVerificationError("runtime evidence probe returned invalid output")
+    return output
+
+
+def _verify_runtime_evidence(
+    permit: VerifiedPermit,
+    *,
+    executable_descriptor: int,
+    interpreter_descriptor: int,
+    cli_descriptor: int,
+    provider_environment: Mapping[str, str],
+) -> None:
+    _recheck_path_identity(
+        Path(permit.provider_interpreter),
+        interpreter_descriptor,
+        str(permit.payload["provider_interpreter_sha256"]),
+        label="provider interpreter",
+    )
+    interpreter_version = _run_probe(
+        [
+            permit.provider_interpreter,
+            "-I",
+            "-c",
+            "import platform;print(platform.python_version())",
+        ],
+        env=provider_environment,
+        cwd=permit.working_directory,
+    )
+    sdk_version = _run_probe(
+        [
+            permit.provider_interpreter,
+            "-I",
+            "-c",
+            "import importlib.metadata as m;print(m.version('lium.io'))",
+        ],
+        env=provider_environment,
+        cwd=permit.working_directory,
+    )
+    provider_version = _run_probe(
+        _provider_loader_command(permit, executable_descriptor, ["--version"]),
+        env=provider_environment,
+        cwd=permit.working_directory,
+        pass_fds=(executable_descriptor,),
+    )
+    _recheck_path_identity(
+        Path(str(permit.payload["lium_cli_path"])),
+        cli_descriptor,
+        str(permit.payload["lium_cli_sha256"]),
+        label="Lium CLI",
+    )
+    cli_version = _run_probe(
+        [str(permit.payload["lium_cli_path"]), "--version"],
+        env=provider_environment,
+        cwd=permit.working_directory,
+    )
+    if cli_version.startswith("lium, version "):
+        cli_version = cli_version.removeprefix("lium, version ")
+    expected = {
+        "provider interpreter": str(permit.payload["provider_interpreter_version"]),
+        "Lium SDK": str(permit.payload["lium_sdk_version"]),
+        "provider executable": str(permit.payload["provider_version"]),
+        "Lium CLI": str(permit.payload["lium_cli_version"]),
+    }
+    actual = {
+        "provider interpreter": interpreter_version,
+        "Lium SDK": sdk_version,
+        "provider executable": provider_version,
+        "Lium CLI": cli_version,
+    }
+    for label, expected_value in expected.items():
+        if actual[label] != expected_value:
+            raise PermitVerificationError(f"{label} version evidence mismatch")
+
+
+def _start_provider_process(
+    permit: VerifiedPermit,
+    *,
+    executable_descriptor: int,
+    interpreter_descriptor: int,
+    provider_environment: Mapping[str, str],
+) -> subprocess.Popen[bytes]:
+    # macOS lacks a usable fexecve path for this Python interpreter. A same-UID
+    # replacement between this final identity check and posix_spawn is the
+    # irreducible interpreter-path boundary; provider script bytes use the held fd.
+    _recheck_path_identity(
+        Path(permit.provider_interpreter),
+        interpreter_descriptor,
+        str(permit.payload["provider_interpreter_sha256"]),
+        label="provider interpreter",
+    )
+    return subprocess.Popen(
+        _provider_loader_command(permit, executable_descriptor, permit.argv[1:]),
+        executable=permit.provider_interpreter,
+        cwd=permit.working_directory,
+        env=dict(provider_environment),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        close_fds=True,
+        pass_fds=(executable_descriptor,),
+    )
+
+
+def _read_stdin_credential() -> bytearray:
+    line = sys.stdin.buffer.readline(MAX_CREDENTIAL_BYTES + 2)
+    tail = sys.stdin.buffer.read(1)
+    if tail or len(line) > MAX_CREDENTIAL_BYTES + 1:
+        raise PermitVerificationError("stdin credential exceeds the bounded single line")
+    if line.endswith(b"\n"):
+        line = line[:-1]
+    if not line or b"\n" in line or b"\r" in line or b"\x00" in line:
+        raise PermitVerificationError("stdin credential must be one non-empty sanitized line")
+    return bytearray(line)
+
+
+def _wipe_bytearray(value: bytearray) -> None:
+    for index in range(len(value)):
+        value[index] = 0
 
 
 def _utc_timestamp() -> str:
@@ -972,6 +1289,29 @@ def _build_launch_receipt(
             "executable": permit.provider_executable,
             "executable_sha256": permit.payload["provider_executable_sha256"],
             "declared_version": permit.payload["provider_version"],
+            "interpreter": permit.provider_interpreter,
+            "interpreter_sha256": permit.payload["provider_interpreter_sha256"],
+            "interpreter_version": permit.payload["provider_interpreter_version"],
+            "fd_loader_sha256": hashlib.sha256(PROVIDER_FD_LOADER.encode("utf-8")).hexdigest(),
+            "execution_boundary": "script-fd-bound-interpreter-path-rechecked",
+        },
+        "runtime_evidence": {
+            "provider_version": permit.payload["provider_version"],
+            "lium_sdk_distribution": permit.payload["lium_sdk_distribution"],
+            "lium_sdk_version": permit.payload["lium_sdk_version"],
+            "lium_cli_path": permit.payload["lium_cli_path"],
+            "lium_cli_sha256": permit.payload["lium_cli_sha256"],
+            "lium_cli_version": permit.payload["lium_cli_version"],
+        },
+        "template": {
+            "id": permit.payload["template_id"],
+            "image": permit.payload["template_image"],
+            "tag": permit.payload["template_tag"],
+            "status": permit.payload["template_status"],
+        },
+        "access": {
+            "ssh_public_key_path": permit.payload["ssh_public_key_path"],
+            "ssh_public_key_sha256": permit.payload["ssh_public_key_sha256"],
         },
         "provider_output": {
             "path": str(provider_output_path.resolve()),
@@ -987,7 +1327,7 @@ def _build_launch_receipt(
             "argv": list(permit.argv),
             "sanitized_environment_sha256": permit.environment_sha256,
             "sanitized_environment_names": sorted(permit.payload["environment"]),
-            "secret_env_names": list(permit.payload["secret_env_names"]),
+            "credential_transport": permit.payload["credential_transport"],
             "started_at": started_at,
             "finished_at": finished_at,
             "exit_code": exit_code,
@@ -1000,6 +1340,7 @@ def _build_launch_receipt(
             "max_cost_usd": permit.payload["max_cost_usd"],
             "max_node_hourly_rate_usd": permit.payload["max_node_hourly_rate_usd"],
             "observed_node_hourly_rate_usd": permit.payload["observed_node_hourly_rate_usd"],
+            "observed_node_hourly_rate_status": permit.payload["observed_node_hourly_rate_status"],
             "max_node_hours": permit.payload["max_node_hours"],
         },
     }
@@ -1218,10 +1559,13 @@ def _print_failure(kind: str, message: str) -> None:
 
 
 __all__ = [
+    "CREDENTIAL_TRANSPORT",
     "DEFAULT_PROVIDER_TIMEOUT_SECONDS",
     "ENVELOPE_SCHEMA",
+    "GATE0_CONSUMPTION_ROOT",
     "LAUNCH_RECEIPT_SCHEMA",
     "MAX_PROVIDER_TIMEOUT_SECONDS",
+    "MAX_PERMIT_VALIDITY_SECONDS",
     "PERMIT_SCHEMA",
     "PUBLIC_KEY_SCHEMA",
     "SIGNATURE_DOMAIN",

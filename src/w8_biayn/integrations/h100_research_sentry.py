@@ -25,6 +25,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence, TypeVar
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from w8_biayn.integrations import h100_signed_approval as _gate0_approval
 from w8_biayn.integrations.h100_signed_approval import (
     ENVELOPE_SCHEMA as GATE0_ENVELOPE_SCHEMA,
     LAUNCH_RECEIPT_SCHEMA,
@@ -154,6 +155,61 @@ class _Trial:
 _OUTPUT_SCHEMA = "h100-research-sentry-decision/v3"
 _AUTHOR = "h100_research_sentry"
 _SIGNATURE_SCHEMA = "h100-research-detached-signature/v1"
+BOOKING_REQUEST_SCHEMA = "h100-lium-booking-request/v1"
+_INTENT_SCHEMAS = {
+    "source": "h100-booking-source-intent/v1",
+    "runtime": "h100-booking-runtime-intent/v1",
+    "data": "h100-booking-data-intent/v1",
+    "checkpoint": "h100-booking-checkpoint-intent/v1",
+}
+_BOOKING_REQUEST_FIELDS = frozenset(
+    {
+        "schema",
+        "issue_number",
+        "allocation_name",
+        "provider",
+        "provider_version",
+        "profile",
+        "executor_id",
+        "sentry_principal",
+        "executor_principal",
+        "gate1_trust",
+        "hardware",
+        "budget",
+        "intent_artifacts",
+    }
+)
+_GATE1_TRUST_FIELDS = frozenset(
+    {"public_key_sha256", "key_id", "sentry_principal", "executor_principal"}
+)
+_BOOKING_HARDWARE_FIELDS = frozenset({"gpu_type", "gpu_count"})
+_BOOKING_BUDGET_FIELDS = frozenset(
+    {
+        "ttl_seconds",
+        "max_cost_usd",
+        "max_node_hourly_rate_usd",
+        "observed_node_hourly_rate_usd",
+        "observed_node_hourly_rate_status",
+        "max_node_hours",
+    }
+)
+_INTENT_DESCRIPTOR_FIELDS = frozenset({"path", "sha256"})
+_INTENT_PAYLOAD_FIELDS = {
+    "source": frozenset({"schema", "repo_sha", "training_base_sha", "acceptance_contract_sha256"}),
+    "runtime": frozenset({"schema", "miles_sha", "megatron_sha", "runtime_pins"}),
+    "data": frozenset({"schema", "train_sha256", "row_count"}),
+    "checkpoint": frozenset({"schema", "root", "layout", "hf_model", "hf_revision"}),
+}
+_RUNTIME_PIN_FIELDS = frozenset(
+    {
+        "container_image",
+        "container_platform",
+        "hf_model",
+        "hf_revision",
+        "lium_cli_version",
+        "lium_provider_version",
+    }
+)
 _DECISION_DOMAINS = {
     stage: f"w8-biayn/h100-research-{stage.value}-decision/ed25519/v1\0".encode() for stage in Stage
 }
@@ -162,44 +218,7 @@ AUDIT_DECISION_DOMAIN = b"w8-biayn/h100-research-independent-audit/ed25519/v1\0"
 _SIGNATURE_FIELDS = frozenset({"signature_base64", "signed_payload_sha256"})
 _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}\Z")
 _HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
-_GATE0_PAYLOAD_FIELDS = frozenset(
-    {
-        "schema",
-        "stage",
-        "decision",
-        "request_id",
-        "nonce",
-        "issued_at",
-        "expires_at",
-        "sentry_principal",
-        "executor_principal",
-        "source_sha256",
-        "runtime_sha256",
-        "data_sha256",
-        "checkpoint_sha256",
-        "parent_request_sha256",
-        "executor_id",
-        "provider",
-        "profile",
-        "provider_executable",
-        "provider_executable_sha256",
-        "provider_version",
-        "working_directory",
-        "environment",
-        "secret_env_names",
-        "issue_number",
-        "allocation_name",
-        "argv",
-        "gpu_type",
-        "gpu_count",
-        "ttl_seconds",
-        "max_cost_usd",
-        "max_node_hourly_rate_usd",
-        "observed_node_hourly_rate_usd",
-        "max_node_hours",
-        "provider_timeout_seconds",
-    }
-)
+_GATE0_PAYLOAD_FIELDS = frozenset(_gate0_approval._PAYLOAD_FIELDS)  # noqa: SLF001
 _FATAL_RE = re.compile(
     r"(?:CUDA out of memory|OutOfMemoryError|RayTaskError|ChildFailedError)"
     r"|(?:NCCL[^\n]*(?:unhandled|error|failed))",
@@ -256,11 +275,192 @@ _ONE_SIDED_T95 = {
 _CallbackResult = TypeVar("_CallbackResult")
 
 
+def _validate_gate0_booking_request(
+    request_path: str | Path,
+    permit_payload: Mapping[str, Any],
+    public_key_path: str | Path,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    supplied = Path(request_path).expanduser()
+    try:
+        metadata = supplied.lstat()
+    except OSError:
+        metadata = None
+    if metadata is None or stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        return {
+            "passed": False,
+            "reasons": ["gate0_booking_request_not_regular"],
+            "intent_artifacts": {},
+        }
+    source = supplied.resolve()
+    try:
+        request = read_json(source)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "passed": False,
+            "reasons": ["gate0_booking_request_malformed"],
+            "intent_artifacts": {},
+        }
+    if request.get("schema") != BOOKING_REQUEST_SCHEMA:
+        reasons.append("gate0_booking_request_schema_invalid")
+    if set(request) != _BOOKING_REQUEST_FIELDS:
+        reasons.append("gate0_booking_request_fields_invalid")
+
+    bindings = {
+        "issue_number": "issue_number",
+        "allocation_name": "allocation_name",
+        "provider": "provider",
+        "provider_version": "provider_version",
+        "profile": "profile",
+        "executor_id": "executor_id",
+        "sentry_principal": "sentry_principal",
+        "executor_principal": "executor_principal",
+    }
+    for request_field, permit_field in bindings.items():
+        if request.get(request_field) != permit_payload.get(permit_field):
+            reasons.append(f"gate0_booking_request_{request_field}_mismatch")
+
+    hardware = request.get("hardware")
+    if not isinstance(hardware, dict) or set(hardware) != _BOOKING_HARDWARE_FIELDS:
+        reasons.append("gate0_booking_request_hardware_invalid")
+    elif hardware.get("gpu_type") != permit_payload.get("gpu_type") or hardware.get(
+        "gpu_count"
+    ) != permit_payload.get("gpu_count"):
+        reasons.append("gate0_booking_request_hardware_mismatch")
+
+    budget = request.get("budget")
+    if not isinstance(budget, dict) or set(budget) != _BOOKING_BUDGET_FIELDS:
+        reasons.append("gate0_booking_request_budget_invalid")
+    else:
+        for field in sorted(_BOOKING_BUDGET_FIELDS):
+            if budget.get(field) != permit_payload.get(field):
+                reasons.append(f"gate0_booking_request_budget_mismatch:{field}")
+
+    trust = request.get("gate1_trust")
+    try:
+        public_key = load_public_key_document(public_key_path)
+        expected_public_hash = _hash_file(Path(public_key_path).expanduser().resolve())
+    except (OSError, PermitError):
+        public_key = None
+        expected_public_hash = ""
+        reasons.append("gate0_booking_request_gate1_public_key_invalid")
+    expected_trust = {
+        "public_key_sha256": expected_public_hash,
+        "key_id": public_key.key_id if public_key is not None else "",
+        "sentry_principal": permit_payload.get("sentry_principal"),
+        "executor_principal": permit_payload.get("executor_principal"),
+    }
+    if not isinstance(trust, dict) or set(trust) != _GATE1_TRUST_FIELDS or trust != expected_trust:
+        reasons.append("gate0_booking_request_gate1_trust_mismatch")
+
+    descriptors = request.get("intent_artifacts")
+    expected_names = set(_INTENT_SCHEMAS)
+    if not isinstance(descriptors, dict) or set(descriptors) != expected_names:
+        reasons.append("gate0_booking_request_intent_map_invalid")
+        descriptors = {}
+    resolved_paths: set[Path] = {source}
+    artifacts: dict[str, dict[str, Any]] = {}
+    for name in sorted(expected_names):
+        descriptor = descriptors.get(name)
+        if not isinstance(descriptor, dict) or set(descriptor) != _INTENT_DESCRIPTOR_FIELDS:
+            reasons.append(f"gate0_intent_descriptor_invalid:{name}")
+            continue
+        path_value = descriptor.get("path")
+        path = Path(str(path_value or "")).expanduser()
+        if not isinstance(path_value, str) or not path.is_absolute():
+            reasons.append(f"gate0_intent_path_not_absolute:{name}")
+            continue
+        try:
+            artifact_metadata = path.lstat()
+        except OSError:
+            artifact_metadata = None
+        if (
+            artifact_metadata is None
+            or stat.S_ISLNK(artifact_metadata.st_mode)
+            or not stat.S_ISREG(artifact_metadata.st_mode)
+        ):
+            reasons.append(f"gate0_intent_artifact_not_regular:{name}")
+            continue
+        resolved = path.resolve()
+        if resolved in resolved_paths:
+            reasons.append(f"gate0_intent_artifact_not_external:{name}")
+            continue
+        resolved_paths.add(resolved)
+        actual_hash = _hash_file(resolved)
+        permit_hash = permit_payload.get(f"{name}_sha256")
+        if not _valid_sha256(descriptor.get("sha256")):
+            reasons.append(f"gate0_intent_sha256_invalid:{name}")
+        if descriptor.get("sha256") != actual_hash:
+            reasons.append(f"gate0_intent_artifact_hash_mismatch:{name}")
+        if permit_hash != actual_hash:
+            reasons.append(f"gate0_intent_permit_hash_mismatch:{name}")
+        try:
+            intent = read_json(resolved)
+        except (OSError, ValueError, json.JSONDecodeError):
+            reasons.append(f"gate0_intent_artifact_malformed:{name}")
+            continue
+        if set(intent) != _INTENT_PAYLOAD_FIELDS[name]:
+            reasons.append(f"gate0_intent_payload_fields_invalid:{name}")
+        if intent.get("schema") != _INTENT_SCHEMAS[name]:
+            reasons.append(f"gate0_intent_payload_schema_invalid:{name}")
+        artifacts[name] = {
+            "path": str(resolved),
+            "sha256": actual_hash,
+            "payload": intent,
+        }
+
+    source_intent = (artifacts.get("source") or {}).get("payload") or {}
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", str(source_intent.get("repo_sha") or "")) is None
+        or re.fullmatch(r"[0-9a-f]{40}", str(source_intent.get("training_base_sha") or "")) is None
+        or not _valid_sha256(source_intent.get("acceptance_contract_sha256"))
+    ):
+        reasons.append("gate0_source_intent_values_invalid")
+    runtime_intent = (artifacts.get("runtime") or {}).get("payload") or {}
+    runtime_pins = runtime_intent.get("runtime_pins")
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", str(runtime_intent.get("miles_sha") or "")) is None
+        or re.fullmatch(r"[0-9a-f]{40}", str(runtime_intent.get("megatron_sha") or "")) is None
+        or not isinstance(runtime_pins, dict)
+        or set(runtime_pins) != _RUNTIME_PIN_FIELDS
+        or any(not isinstance(value, str) or not value for value in runtime_pins.values())
+    ):
+        reasons.append("gate0_runtime_intent_values_invalid")
+    elif runtime_pins.get("lium_provider_version") != request.get(
+        "provider_version"
+    ) or runtime_pins.get("lium_cli_version") != permit_payload.get("lium_cli_version"):
+        reasons.append("gate0_runtime_intent_provider_version_mismatch")
+    data_intent = (artifacts.get("data") or {}).get("payload") or {}
+    if (
+        not _valid_sha256(data_intent.get("train_sha256"))
+        or type(data_intent.get("row_count")) is not int
+        or data_intent.get("row_count", 0) <= 0
+    ):
+        reasons.append("gate0_data_intent_values_invalid")
+    checkpoint_intent = (artifacts.get("checkpoint") or {}).get("payload") or {}
+    if (
+        not Path(str(checkpoint_intent.get("root") or "")).is_absolute()
+        or not str(checkpoint_intent.get("layout") or "")
+        or not str(checkpoint_intent.get("hf_model") or "")
+        or re.fullmatch(r"[0-9a-f]{40}", str(checkpoint_intent.get("hf_revision") or "")) is None
+    ):
+        reasons.append("gate0_checkpoint_intent_values_invalid")
+    return {
+        "passed": not reasons,
+        "reasons": sorted(set(reasons)),
+        "artifact": str(source),
+        "sha256": _hash_file(source),
+        "gate1_trust": trust if isinstance(trust, dict) else {},
+        "intent_artifacts": artifacts,
+    }
+
+
 def sign_gate0_permit_payload(
     payload: Mapping[str, Any],
     *,
     private_key_path: str | Path,
     public_key_path: str | Path,
+    gate1_public_key_path: str | Path,
     parent_request_path: str | Path,
     expected_sentry_principal: str,
     expected_executor_principal: str,
@@ -284,6 +484,11 @@ def sign_gate0_permit_payload(
     parent = parent_input.resolve()
     if payload.get("parent_request_sha256") != _hash_file(parent):
         raise DecisionSecurityError("Gate0 parent request digest mismatch")
+    booking = _validate_gate0_booking_request(parent, payload, gate1_public_key_path)
+    if not booking["passed"]:
+        raise DecisionSecurityError(
+            "Gate0 booking request invalid: " + ", ".join(booking["reasons"])
+        )
     executable_input = Path(str(payload.get("provider_executable"))).expanduser()
     try:
         executable_stat = executable_input.lstat()
@@ -298,6 +503,24 @@ def sign_gate0_permit_payload(
     executable = executable_input.resolve()
     if payload.get("provider_executable_sha256") != _hash_file(executable):
         raise DecisionSecurityError("Gate0 provider executable digest mismatch")
+    for path_field, hash_field, label in (
+        ("provider_interpreter", "provider_interpreter_sha256", "provider interpreter"),
+        ("lium_cli_path", "lium_cli_sha256", "Lium CLI"),
+    ):
+        bound_input = Path(str(payload.get(path_field) or "")).expanduser()
+        try:
+            bound_metadata = bound_input.lstat()
+        except OSError as exc:
+            raise DecisionSecurityError(f"Gate0 {label} unavailable: {exc}") from exc
+        if (
+            not bound_input.is_absolute()
+            or stat.S_ISLNK(bound_metadata.st_mode)
+            or not stat.S_ISREG(bound_metadata.st_mode)
+            or bound_metadata.st_mode & 0o111 == 0
+        ):
+            raise DecisionSecurityError(f"Gate0 {label} must be executable and regular")
+        if payload.get(hash_field) != _hash_file(bound_input.resolve()):
+            raise DecisionSecurityError(f"Gate0 {label} digest mismatch")
     body = dict(payload)
     validation_key = Ed25519PrivateKey.generate()
     validation_raw = validation_key.public_key().public_bytes(
@@ -327,6 +550,7 @@ def sign_gate0_permit_payload(
     )
     private_key = _load_external_private_key(private_key_path)
     public_key = load_public_key_document(public_key_path)
+    gate1_public_key = load_public_key_document(gate1_public_key_path)
     public_raw = private_key.public_key().public_bytes(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
@@ -334,6 +558,8 @@ def sign_gate0_permit_payload(
     key_id = key_id_for_public_key(public_raw)
     if key_id != public_key.key_id:
         raise DecisionSecurityError("private key does not match Gate0 public key")
+    if key_id == gate1_public_key.key_id:
+        raise DecisionSecurityError("Gate0 and Gate1 keys must be distinct")
     signature = private_key.sign(domain_separated_message(GATE0_SIGNATURE_DOMAIN, body))
     envelope = {
         "schema": GATE0_ENVELOPE_SCHEMA,
@@ -709,6 +935,106 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _reconcile_preflight_intent(
+    *,
+    gate0: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    request: Mapping[str, Any],
+    hardware: Mapping[str, Any],
+    policy: SentryPolicy,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    artifacts = gate0.get("intent_artifacts")
+    if not isinstance(artifacts, Mapping) or set(artifacts) != set(_INTENT_SCHEMAS):
+        return {
+            "passed": False,
+            "reasons": ["preflight_gate0_intent_artifacts_incomplete"],
+        }
+    intents = {
+        name: item.get("payload", {}) if isinstance(item, Mapping) else {}
+        for name, item in artifacts.items()
+    }
+    prepared = request.get("prepared_evidence")
+    if not isinstance(prepared, Mapping):
+        prepared = {}
+        reasons.append("preflight_prepared_evidence_missing")
+    contract_payload = contract.get("payload")
+    if not isinstance(contract_payload, Mapping):
+        contract_payload = {}
+    source_pins = contract_payload.get("source_pins")
+    runtime_pins = contract_payload.get("runtime_pins")
+    fixed_workload = contract_payload.get("fixed_workload")
+    source_pins = source_pins if isinstance(source_pins, Mapping) else {}
+    runtime_pins = runtime_pins if isinstance(runtime_pins, Mapping) else {}
+    fixed_workload = fixed_workload if isinstance(fixed_workload, Mapping) else {}
+
+    source_intent = intents.get("source", {})
+    source_receipt = prepared.get("source")
+    source_receipt = source_receipt if isinstance(source_receipt, Mapping) else {}
+    source_identity = request.get("source_identity")
+    source_identity = source_identity if isinstance(source_identity, Mapping) else {}
+    if source_intent.get("repo_sha") != source_identity.get("repo_sha") or source_intent.get(
+        "repo_sha"
+    ) != source_receipt.get("repo_sha"):
+        reasons.append("preflight_source_intent_repo_sha_mismatch")
+    if (
+        source_intent.get("training_base_sha") != policy.training_base_sha
+        or source_intent.get("training_base_sha") != source_identity.get("training_base_sha")
+        or source_intent.get("training_base_sha") != source_receipt.get("training_base_sha")
+    ):
+        reasons.append("preflight_source_intent_training_base_mismatch")
+    if source_intent.get("acceptance_contract_sha256") != contract.get("sha256"):
+        reasons.append("preflight_source_intent_contract_hash_mismatch")
+
+    runtime_intent = intents.get("runtime", {})
+    if runtime_intent.get("miles_sha") != hardware.get("miles_sha") or runtime_intent.get(
+        "miles_sha"
+    ) != source_pins.get("miles_sha"):
+        reasons.append("preflight_runtime_intent_miles_sha_mismatch")
+    if runtime_intent.get("megatron_sha") != hardware.get("megatron_sha") or runtime_intent.get(
+        "megatron_sha"
+    ) != source_pins.get("megatron_sha"):
+        reasons.append("preflight_runtime_intent_megatron_sha_mismatch")
+    if runtime_intent.get("runtime_pins") != dict(runtime_pins):
+        reasons.append("preflight_runtime_intent_pins_mismatch")
+    runtime_receipt = prepared.get("runtime")
+    if not isinstance(runtime_receipt, Mapping) or _integer(runtime_receipt.get("returncode")) != 0:
+        reasons.append("preflight_runtime_receipt_not_successful")
+
+    data_intent = intents.get("data", {})
+    data_receipt = prepared.get("data")
+    data_receipt = data_receipt if isinstance(data_receipt, Mapping) else {}
+    if data_intent.get("train_sha256") != data_receipt.get("sha256") or data_intent.get(
+        "train_sha256"
+    ) != fixed_workload.get("dataset_sha256"):
+        reasons.append("preflight_data_intent_train_hash_mismatch")
+    if data_intent.get("row_count") != data_receipt.get("row_count") or data_intent.get(
+        "row_count"
+    ) != fixed_workload.get("dataset_rows"):
+        reasons.append("preflight_data_intent_row_count_mismatch")
+
+    checkpoint_intent = intents.get("checkpoint", {})
+    checkpoint_receipt = prepared.get("checkpoint")
+    checkpoint_receipt = checkpoint_receipt if isinstance(checkpoint_receipt, Mapping) else {}
+    if checkpoint_intent.get("root") != checkpoint_receipt.get("root"):
+        reasons.append("preflight_checkpoint_intent_root_mismatch")
+    if checkpoint_intent.get("layout") != checkpoint_receipt.get("layout"):
+        reasons.append("preflight_checkpoint_intent_layout_mismatch")
+    if checkpoint_intent.get("hf_model") != runtime_pins.get("hf_model"):
+        reasons.append("preflight_checkpoint_intent_model_mismatch")
+    if checkpoint_intent.get("hf_revision") != runtime_pins.get("hf_revision"):
+        reasons.append("preflight_checkpoint_intent_revision_mismatch")
+    return {
+        "passed": not reasons,
+        "reasons": sorted(set(reasons)),
+        "contract_sha256": contract.get("sha256"),
+        "intent_artifact_sha256": {
+            name: item.get("sha256") if isinstance(item, Mapping) else None
+            for name, item in artifacts.items()
+        },
+    }
+
+
 def evaluate_preflight(
     *,
     contract_path: str | Path,
@@ -743,12 +1069,20 @@ def evaluate_preflight(
         provider_output_path=provider_output_path,
         security=security,
     )
+    intent = _reconcile_preflight_intent(
+        gate0=gate0,
+        contract=contract,
+        request=request,
+        hardware=hardware,
+        policy=policy,
+    )
     invalid = [
         *contract["reasons"],
         *hardware["reasons"],
         *budget["invalid_reasons"],
         *request["reasons"],
         *gate0["reasons"],
+        *intent["reasons"],
     ]
     if invalid:
         decision, reasons = Decision.INVALID, invalid
@@ -763,9 +1097,11 @@ def evaluate_preflight(
         "budget": budget,
         "request": request,
         "gate0": gate0,
+        "intent": intent,
     }
     result["context"] = {
         "contract_id": policy.contract_id,
+        "acceptance_contract_sha256": contract.get("sha256"),
         "claim_boundary": contract.get("claim_boundary"),
         "hardware": hardware,
         "source_identity": request.get("source_identity"),
@@ -789,6 +1125,11 @@ def evaluate_preflight(
         if path is not None:
             inputs.append((role, path))
     inputs.extend(_request_provenance_inputs(request))
+    inputs.extend(
+        (f"gate0_intent:{name}", item["path"])
+        for name, item in sorted((gate0.get("intent_artifacts") or {}).items())
+        if isinstance(item, dict) and item.get("path")
+    )
     return _finish(
         result,
         Stage.PREFLIGHT,
@@ -995,10 +1336,7 @@ def evaluate_confirmation(
         result["request_validation"] = request
         _apply_request_binding(result, request)
         return _finish(result, Stage.CONFIRMATION, inputs, command, security)
-    count_ok = (
-        len(control_paths) == len(candidate_paths)
-        and len(control_paths) >= policy.confirmation_min_pairs
-    )
+    count_ok = len(control_paths) == len(candidate_paths) == policy.confirmation_min_pairs
     inherited_ok = count_ok and all(
         _prior_input_matches(prior["payload"], f"control:A{index}", control_paths[index - 1])
         and _prior_input_matches(
@@ -1010,7 +1348,7 @@ def evaluate_confirmation(
         result = _envelope(
             Stage.CONFIRMATION,
             Decision.INVALID,
-            ["confirmation_requires_at_least_four_pairs_and_preserved_T1_inputs"],
+            ["confirmation_requires_exactly_four_pairs_and_preserved_T1_inputs"],
             policy,
         )
         result["prior_stage"] = prior
@@ -1023,9 +1361,9 @@ def evaluate_confirmation(
         for index, (control, candidate) in enumerate(zip(control_paths, candidate_paths), 1)
     ]
     invalid = [reason for pair in pairs if not pair["valid"] for reason in pair["reasons"]]
-    tranches = {pair.get("tranche_id") for pair in pairs if pair.get("tranche_id")}
-    if not {"T1", "T2"}.issubset(tranches):
-        invalid.append("confirmation_requires_independent_pairs_across_T1_and_T2")
+    tranches = [pair.get("tranche_id") for pair in pairs]
+    if tranches != ["T1", "T1", "T2", "T2"]:
+        invalid.append("confirmation_requires_exactly_two_T1_then_two_T2_pairs")
     stats = _confirmation_statistics(pairs, policy) if not invalid else {}
     if invalid:
         decision, reasons = Decision.INVALID, invalid
@@ -1142,6 +1480,15 @@ def evaluate_final(
         confirmation_decision_path,
     ):
         chain_reasons.append("grpo_confirmation_chain_mismatch")
+    contract_sha256 = contract.get("sha256")
+    for label, validated in (("confirmation", confirmation), ("grpo", grpo)):
+        payload = validated.get("payload") or {}
+        context = payload.get("context") or {}
+        if (
+            payload.get("acceptance_contract_sha256") != contract_sha256
+            or context.get("acceptance_contract_sha256") != contract_sha256
+        ):
+            chain_reasons.append(f"final_{label}_acceptance_contract_hash_mismatch")
     reasons = [
         *([] if confirmation["passed"] else confirmation["reasons"]),
         *([] if grpo["passed"] else grpo["reasons"]),
@@ -1154,6 +1501,8 @@ def evaluate_final(
     result["confirmation"] = confirmation
     result["grpo"] = grpo
     result["audit"] = audit
+    result["context"] = (confirmation.get("payload") or {}).get("context", {})
+    result["acceptance_contract_sha256"] = contract_sha256
     return _finish(result, Stage.FINAL, inputs, command, security)
 
 
@@ -1823,13 +2172,60 @@ def _validate_grpo_checkpoint_manifest(
                 "sha256": actual_hash,
             }
         )
-    paths = [str(item.get("path") or "") for item in entries if isinstance(item, dict)]
-    if not (
-        any("adapter_megatron_" in item for item in paths)
-        and any(item.endswith(("adapter_model.bin", "adapter_model.safetensors")) for item in paths)
-        and any("training_state_rank" in item for item in paths)
+    latest_iteration = str(payload.get("latest_iteration") or "")
+    iteration_dirs = sorted(path for path in root.glob("iter_*") if path.is_dir())
+    actual_latest = iteration_dirs[-1].name if iteration_dirs else ""
+    if (
+        re.fullmatch(r"iter_[0-9]{7}", latest_iteration) is None
+        or latest_iteration != actual_latest
     ):
-        reasons.append("grpo_checkpoint_manifest_incomplete")
+        reasons.append("grpo_checkpoint_latest_iteration_mismatch")
+    manifest_paths = set(seen)
+    selected_files: set[Path] = set()
+    if iteration_dirs:
+        selected_files.update(
+            path
+            for path in iteration_dirs[-1].rglob("*")
+            if path.is_file() and not path.is_symlink()
+        )
+        selected_files.update(
+            path for path in root.iterdir() if path.is_file() and not path.is_symlink()
+        )
+        rollout_dir = root / "rollout"
+        if rollout_dir.is_dir():
+            rollout_files = sorted(
+                path for path in rollout_dir.rglob("*") if path.is_file() and not path.is_symlink()
+            )
+            if rollout_files:
+                selected_files.add(rollout_files[-1])
+    expected_manifest_paths = {path.relative_to(root).as_posix() for path in selected_files}
+    if manifest_paths != expected_manifest_paths:
+        reasons.append("grpo_checkpoint_manifest_real_file_set_mismatch")
+
+    adapter_prefix = f"{latest_iteration}/adapter/"
+    adapter_paths = {
+        path.removeprefix(adapter_prefix)
+        for path in manifest_paths
+        if path.startswith(adapter_prefix)
+    }
+    required_native = {f"adapter_megatron_tp{rank}_pp0.pt" for rank in range(4)}
+    required_training_state = {f"training_state_rank{rank}.pt" for rank in range(8)}
+    native = {path for path in adapter_paths if path.startswith("adapter_megatron_")}
+    training_state = {path for path in adapter_paths if path.startswith("training_state_rank")}
+    hf_adapters = adapter_paths & {"adapter_model.bin", "adapter_model.safetensors"}
+    if native != required_native:
+        reasons.append("grpo_checkpoint_tp4_adapter_rank_set_incomplete")
+    if training_state != required_training_state:
+        reasons.append("grpo_checkpoint_training_state_rank_set_incomplete")
+    if len(hf_adapters) != 1:
+        reasons.append("grpo_checkpoint_hf_adapter_missing_or_ambiguous")
+    if "adapter_config.json" not in adapter_paths:
+        reasons.append("grpo_checkpoint_adapter_config_missing")
+    expected_adapter_paths = (
+        required_native | required_training_state | {"adapter_config.json"} | hf_adapters
+    )
+    if adapter_paths != expected_adapter_paths:
+        reasons.append("grpo_checkpoint_adapter_file_set_unexpected")
     return {
         "passed": not reasons,
         "reasons": sorted(set(reasons)),
@@ -1919,6 +2315,26 @@ def _validate_gate0_chain(
         or _integer(payload.get("gpu_count")) != 8
     ):
         reasons.append("gate0_provider_or_hardware_mismatch")
+    ssh_public_key_path = payload.get("ssh_public_key_path")
+    if (
+        not isinstance(ssh_public_key_path, str)
+        or not Path(ssh_public_key_path).is_absolute()
+        or _HEX_256_RE.fullmatch(str(payload.get("ssh_public_key_sha256") or "")) is None
+    ):
+        reasons.append("gate0_ssh_access_binding_invalid")
+    gate1_public_key_path = (
+        security.sentry_public_key_path if security is not None else paths["public_key"]
+    )
+    booking = _validate_gate0_booking_request(
+        paths["booking_request"], payload, gate1_public_key_path
+    )
+    reasons.extend(booking["reasons"])
+    try:
+        gate1_public_key = load_public_key_document(gate1_public_key_path)
+        if gate1_public_key.key_id == public_key.key_id:
+            reasons.append("gate0_gate1_key_reuse_forbidden")
+    except PermitError:
+        reasons.append("gate1_public_key_invalid")
     booking_hash = (
         _hash_file(paths["booking_request"]) if paths["booking_request"].is_file() else None
     )
@@ -1928,7 +2344,14 @@ def _validate_gate0_chain(
     )
     if booking_hash is None or payload.get("parent_request_sha256") != booking_hash:
         reasons.append("gate0_booking_request_hash_mismatch")
-    if receipt.get("schema") != LAUNCH_RECEIPT_SCHEMA or receipt.get("status") != "COMPLETED":
+    execution = receipt.get("execution") if isinstance(receipt.get("execution"), dict) else {}
+    if (
+        receipt.get("schema") != LAUNCH_RECEIPT_SCHEMA
+        or receipt.get("status") != "COMPLETED"
+        or _integer(execution.get("exit_code")) != 0
+        or _integer(execution.get("wrapper_exit_code")) != 0
+        or execution.get("timed_out") is not False
+    ):
         reasons.append("gate0_launch_receipt_status_invalid")
     receipt_permit = receipt.get("permit") if isinstance(receipt.get("permit"), dict) else {}
     if (
@@ -1970,7 +2393,134 @@ def _validate_gate0_chain(
         or _parse_time(claim_payload.get("consumed_at")) is None
     ):
         reasons.append("gate0_single_use_claim_invalid")
+    executor = (
+        provider_output.get("executor") if isinstance(provider_output.get("executor"), dict) else {}
+    )
+    schedule = (
+        provider_output.get("schedule") if isinstance(provider_output.get("schedule"), dict) else {}
+    )
     allocation_id, allocation_name = _extract_provider_allocation(provider_output)
+    gpu_label = f"{executor.get('gpu_type', '')} {executor.get('gpu_model', '')}".upper()
+    provider_schema = provider_output.get("schema")
+    if (
+        provider_schema not in {"lium-h100-pod-create/v1", "lium-h100-pod-create/v2"}
+        or provider_output.get("status") != "RUNNING"
+        or not allocation_id
+        or not allocation_name
+        or _integer(executor.get("gpu_count")) != 8
+        or "H100" not in gpu_label
+        or schedule.get("confirmed") is not True
+    ):
+        reasons.append("gate0_provider_output_schema_or_hardware_invalid")
+    if provider_schema == "lium-h100-pod-create/v2":
+        provider_template = (
+            provider_output.get("template")
+            if isinstance(provider_output.get("template"), dict)
+            else {}
+        )
+        expected_template = {
+            "id": payload.get("template_id"),
+            "docker_image": payload.get("template_image"),
+            "docker_image_tag": payload.get("template_tag"),
+            "status": payload.get("template_status"),
+        }
+        if any(provider_template.get(key) != value for key, value in expected_template.items()):
+            reasons.append("gate0_provider_template_mismatch")
+        runtime_evidence = provider_output.get("runtime_evidence")
+        expected_runtime = {
+            "provider_version": payload.get("provider_version"),
+            "interpreter": {
+                "path": payload.get("provider_interpreter"),
+                "sha256": payload.get("provider_interpreter_sha256"),
+                "version": payload.get("provider_interpreter_version"),
+            },
+            "lium_sdk": {
+                "distribution": payload.get("lium_sdk_distribution"),
+                "version": payload.get("lium_sdk_version"),
+            },
+            "lium_cli": {
+                "path": payload.get("lium_cli_path"),
+                "sha256": payload.get("lium_cli_sha256"),
+                "version": payload.get("lium_cli_version"),
+                "version_source": "wrapper_verified_cli_version",
+            },
+        }
+        if runtime_evidence != expected_runtime:
+            reasons.append("gate0_provider_runtime_evidence_mismatch")
+        if (
+            executor.get("observed_rate_status") != payload.get("observed_node_hourly_rate_status")
+            or executor.get("rate_authority") != "signed_max_rate_cap"
+        ):
+            reasons.append("gate0_provider_rate_authority_mismatch")
+    expected_access = {
+        "ssh_public_key_path": payload.get("ssh_public_key_path"),
+        "ssh_public_key_sha256": payload.get("ssh_public_key_sha256"),
+    }
+    provider_access = (
+        provider_output.get("access") if isinstance(provider_output.get("access"), dict) else {}
+    )
+    if provider_access != expected_access:
+        reasons.append("gate0_provider_ssh_access_mismatch")
+    termination = _parse_time(schedule.get("termination_time"))
+    server_termination = _parse_time(schedule.get("server_removal_scheduled_at"))
+    verified_termination = _parse_time(schedule.get("verified_termination_time"))
+    if (
+        termination is None
+        or server_termination is None
+        or verified_termination is None
+        or termination != server_termination
+        or termination != verified_termination
+        or _integer(schedule.get("ttl_seconds")) != _integer(payload.get("ttl_seconds"))
+    ):
+        reasons.append("gate0_provider_schedule_not_server_verified")
+    selector = str(payload.get("executor_id") or "")
+    if selector not in {str(executor.get("id") or ""), str(executor.get("huid") or "")}:
+        reasons.append("gate0_provider_executor_mismatch")
+    if not math.isclose(
+        _finite(executor.get("observed_rate_usd_per_hour")) or -1.0,
+        _finite(payload.get("observed_node_hourly_rate_usd")) or -2.0,
+    ) or not math.isclose(
+        _finite(executor.get("max_rate_usd_per_hour")) or -1.0,
+        _finite(payload.get("max_node_hourly_rate_usd")) or -2.0,
+    ):
+        reasons.append("gate0_provider_rate_mismatch")
+    receipt_provider = receipt.get("provider") if isinstance(receipt.get("provider"), dict) else {}
+    if (
+        receipt_provider.get("name") != payload.get("provider")
+        or receipt_provider.get("profile") != payload.get("profile")
+        or receipt_provider.get("executor_id") != selector
+    ):
+        reasons.append("gate0_launch_receipt_provider_mismatch")
+    if receipt.get("schema") == LAUNCH_RECEIPT_SCHEMA:
+        receipt_runtime = (
+            receipt.get("runtime_evidence")
+            if isinstance(receipt.get("runtime_evidence"), dict)
+            else {}
+        )
+        if receipt_runtime != {
+            "provider_version": payload.get("provider_version"),
+            "lium_sdk_distribution": payload.get("lium_sdk_distribution"),
+            "lium_sdk_version": payload.get("lium_sdk_version"),
+            "lium_cli_path": payload.get("lium_cli_path"),
+            "lium_cli_sha256": payload.get("lium_cli_sha256"),
+            "lium_cli_version": payload.get("lium_cli_version"),
+        }:
+            reasons.append("gate0_launch_receipt_runtime_evidence_mismatch")
+        receipt_template = (
+            receipt.get("template") if isinstance(receipt.get("template"), dict) else {}
+        )
+        if receipt_template != {
+            "id": payload.get("template_id"),
+            "image": payload.get("template_image"),
+            "tag": payload.get("template_tag"),
+            "status": payload.get("template_status"),
+        }:
+            reasons.append("gate0_launch_receipt_template_mismatch")
+        if execution.get("credential_transport") != payload.get("credential_transport"):
+            reasons.append("gate0_launch_receipt_credential_transport_mismatch")
+        receipt_access = receipt.get("access") if isinstance(receipt.get("access"), dict) else {}
+        if receipt_access != expected_access:
+            reasons.append("gate0_launch_receipt_ssh_access_mismatch")
     receipt_allocation = (
         receipt.get("allocation") if isinstance(receipt.get("allocation"), dict) else {}
     )
@@ -1982,6 +2532,10 @@ def _validate_gate0_chain(
         or _integer(receipt_allocation.get("issue_number")) != _integer(payload.get("issue_number"))
     ):
         reasons.append("gate0_allocation_identity_mismatch")
+    receipt_budget = receipt.get("budget") if isinstance(receipt.get("budget"), dict) else {}
+    for field in sorted(_BOOKING_BUDGET_FIELDS):
+        if receipt_budget.get(field) != payload.get(field):
+            reasons.append(f"gate0_launch_receipt_budget_mismatch:{field}")
     return {
         "passed": not reasons,
         "reasons": sorted(set(reasons)),
@@ -1994,6 +2548,8 @@ def _validate_gate0_chain(
         "allocation_name": allocation_name,
         "request_id": request_id,
         "nonce": nonce,
+        "gate1_trust": booking.get("gate1_trust", {}),
+        "intent_artifacts": booking.get("intent_artifacts", {}),
     }
 
 
@@ -2005,11 +2561,9 @@ def _resolve_recorded_path(value: Any) -> Path | None:
 
 
 def _extract_provider_allocation(payload: dict[str, Any]) -> tuple[str, str]:
-    allocation = (
-        payload.get("allocation") if isinstance(payload.get("allocation"), dict) else payload
-    )
-    allocation_id = str(allocation.get("id") or allocation.get("allocation_id") or "")
-    allocation_name = str(allocation.get("name") or allocation.get("allocation_name") or "")
+    pod = payload.get("pod") if isinstance(payload.get("pod"), dict) else {}
+    allocation_id = str(pod.get("id") or "")
+    allocation_name = str(pod.get("name") or "")
     return allocation_id, allocation_name
 
 
@@ -2144,17 +2698,20 @@ def _validate_preflight_request(
         _add_request_reference(result, f"request_input:{name}", reference)
         if _hash_file(reference) != manifest_hashes.get(name):
             reasons.append(f"prepare_input_{name}_hash_mismatch")
+    prepared_evidence: dict[str, dict[str, Any]] = {}
+    for name in ("source", "runtime", "data", "checkpoint", "protocol"):
+        reference = resolved.get(name)
+        if reference is None:
+            continue
+        try:
+            prepared_evidence[name] = read_json(reference)
+        except (OSError, ValueError, json.JSONDecodeError):
+            reasons.append(f"prepare_{name}_receipt_malformed")
     if not _same_path(resolved.get("hardware"), hardware_path):
         reasons.append("preflight_request_hardware_path_mismatch")
     if not _same_path(resolved.get("budget"), budget_path):
         reasons.append("preflight_request_budget_path_mismatch")
-    source_payload: dict[str, Any] = {}
-    source_path = resolved.get("source")
-    if source_path is not None:
-        try:
-            source_payload = read_json(source_path)
-        except (OSError, ValueError, json.JSONDecodeError):
-            reasons.append("prepare_source_receipt_malformed")
+    source_payload = prepared_evidence.get("source", {})
     if source_payload.get("ok") is not True:
         reasons.append("prepare_source_receipt_not_ok")
     expected_source = {
@@ -2169,6 +2726,8 @@ def _validate_preflight_request(
     }
     if result.get("source_identity") != hardware_source:
         reasons.append("preflight_request_hardware_source_mismatch")
+    result["prepared_evidence"] = prepared_evidence
+    result["prepared_paths"] = {name: str(path) for name, path in resolved.items()}
     result["passed"] = not reasons
     result["reasons"] = sorted(set(reasons))
     return result
@@ -2633,14 +3192,22 @@ def _validate_contract(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
             _integer((payload.get("current_experiment") or {}).get("measured_steps_per_leg")) == 14,
             "contract_measured_observations_mismatch",
         ),
+        (
+            {"auditor_key_id", "parent_decision_sha256"}.issubset(
+                set((payload.get("audit_artifact") or {}).get("required_fields") or [])
+            ),
+            "contract_required_audit_fields_missing",
+        ),
     )
     reasons.extend(reason for passed, reason in checks if not passed)
     return {
         "passed": not reasons,
         "reasons": reasons,
         "artifact": str(source),
+        "sha256": _hash_file(source),
         "contract_id": payload.get("contract_id"),
         "claim_boundary": payload.get("claim_boundary"),
+        "payload": payload,
     }
 
 
@@ -2692,6 +3259,8 @@ def _validate_hardware(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
         "artifact": str(source),
         "repo_sha": repo_sha or None,
         "training_base_sha": payload.get("training_base_sha"),
+        "miles_sha": payload.get("miles_sha"),
+        "megatron_sha": payload.get("megatron_sha"),
         "minimum_memory_total_mib": min(
             (value for value in memories if value is not None), default=None
         ),
@@ -3061,6 +3630,7 @@ def _validate_prior(
         except (DecisionSecurityError, ValueError) as exc:
             reasons.append(f"prior_signature_invalid:{exc}")
         reasons.extend(_signed_parent_chain_reasons(payload, expected_stage))
+        reasons.extend(_signed_contract_binding_reasons(payload, expected_stage))
     identity = _sentry_identity()
     if payload.get("output_schema") != _OUTPUT_SCHEMA or payload.get("schema_version") != 3:
         reasons.append("prior_decision_schema_invalid")
@@ -3131,6 +3701,32 @@ def _signed_parent_chain_reasons(payload: dict[str, Any], stage: Stage) -> list[
     return reasons
 
 
+def _signed_contract_binding_reasons(payload: dict[str, Any], stage: Stage) -> list[str]:
+    bound = payload.get("acceptance_contract_sha256")
+    reasons: list[str] = []
+    if not _valid_sha256(bound):
+        return ["prior_acceptance_contract_hash_missing"]
+    context = payload.get("context")
+    if isinstance(context, Mapping) and context.get("acceptance_contract_sha256") != bound:
+        reasons.append("prior_acceptance_contract_context_mismatch")
+    if stage is Stage.PREFLIGHT:
+        contract_hash = next(
+            (
+                item.get("sha256")
+                for item in (payload.get("provenance") or {}).get("inputs", [])
+                if isinstance(item, Mapping) and item.get("role") == "contract"
+            ),
+            None,
+        )
+        if contract_hash != bound:
+            reasons.append("prior_acceptance_contract_provenance_mismatch")
+    else:
+        prior_payload = (payload.get("prior_stage") or {}).get("payload") or {}
+        if prior_payload.get("acceptance_contract_sha256") != bound:
+            reasons.append("prior_acceptance_contract_parent_mismatch")
+    return reasons
+
+
 def _validate_audit(
     audit_path: str | Path,
     *,
@@ -3182,6 +3778,11 @@ def _validate_audit(
             reasons.append("audit_self_signing_forbidden")
     if payload.get("decision") != "ACCEPT":
         reasons.append("audit_decision_not_ACCEPT")
+    if payload.get("auditor_key_id") != audit_signature.get("key_id"):
+        reasons.append("audit_auditor_key_id_mismatch")
+    expected_parent = _hash_file(Path(grpo_decision_path).expanduser().resolve())
+    if payload.get("parent_decision_sha256") != expected_parent:
+        reasons.append("audit_parent_decision_sha256_mismatch")
     if payload.get("auditor_role") != "independent_auditor" or not str(
         payload.get("auditor_identity") or ""
     ):
@@ -3333,6 +3934,9 @@ def _finish(
         ]
     }
     result["exit_status"] = _exit_status(Decision(result["decision"]))
+    contract_sha256 = _result_contract_sha256(result)
+    if _valid_sha256(contract_sha256):
+        result["acceptance_contract_sha256"] = contract_sha256
     parent_decision, parent_request = _decision_parent_hashes(result, stage)
     if not _valid_sha256(parent_decision) or not _valid_sha256(parent_request):
         raise DecisionSecurityError("decision parent chain is incomplete")
@@ -3348,6 +3952,22 @@ def _finish(
         issued_at=security.now,
         lifetime_seconds=security.decision_ttl_seconds,
     )
+
+
+def _result_contract_sha256(result: Mapping[str, Any]) -> str:
+    direct = result.get("acceptance_contract_sha256")
+    if _valid_sha256(direct):
+        return str(direct)
+    context = result.get("context")
+    if isinstance(context, Mapping) and _valid_sha256(context.get("acceptance_contract_sha256")):
+        return str(context["acceptance_contract_sha256"])
+    prior = result.get("prior_stage")
+    if isinstance(prior, Mapping) and isinstance(prior.get("payload"), Mapping):
+        return _result_contract_sha256(prior["payload"])
+    confirmation = result.get("confirmation")
+    if isinstance(confirmation, Mapping) and isinstance(confirmation.get("payload"), Mapping):
+        return _result_contract_sha256(confirmation["payload"])
+    return ""
 
 
 def _decision_parent_hashes(result: dict[str, Any], stage: Stage) -> tuple[str, str]:
@@ -3692,6 +4312,7 @@ def build_signing_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True)
     parser.add_argument("--private-key", required=True)
     parser.add_argument("--public-key", required=True)
+    parser.add_argument("--gate1-public-key")
     parser.add_argument("--parent-request")
     parser.add_argument("--signer-principal", required=True)
     parser.add_argument("--verifier-principal", required=True)
@@ -3718,6 +4339,8 @@ def signing_main(argv: Sequence[str] | None = None) -> int:
         if args.kind == "gate0-permit":
             if not args.parent_request:
                 raise DecisionSecurityError("Gate0 signing requires --parent-request")
+            if not args.gate1_public_key:
+                raise DecisionSecurityError("Gate0 signing requires --gate1-public-key")
             if any((args.request_id, args.nonce, args.issued_at, args.expires_at)):
                 raise DecisionSecurityError(
                     "Gate0 identity and validity fields must come from the exact payload"
@@ -3726,6 +4349,7 @@ def signing_main(argv: Sequence[str] | None = None) -> int:
                 payload,
                 private_key_path=args.private_key,
                 public_key_path=args.public_key,
+                gate1_public_key_path=args.gate1_public_key,
                 parent_request_path=args.parent_request,
                 expected_sentry_principal=args.signer_principal,
                 expected_executor_principal=args.verifier_principal,
@@ -3819,6 +4443,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "AUDIT_DECISION_DOMAIN",
+    "BOOKING_REQUEST_SCHEMA",
     "Decision",
     "DecisionReplayError",
     "DecisionSecurityError",

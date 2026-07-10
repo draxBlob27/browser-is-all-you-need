@@ -24,11 +24,25 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
   time, and expiry.
 - [ ] The Lium wrapper verifies and atomically consumes the permit before any
   provider subprocess can run.
+- [ ] Permit validity is at most ten minutes, the consumption registry is
+  fixed rather than caller-selected, and an exact active allocation name
+  blocks deletion/replay during the live permit window.
+- [ ] The provider credential travels only over bounded stdin and never appears
+  in argv, environment, files, logs, output, or receipts.
+- [ ] The permit binds one absolute, regular SSH public-key file by SHA-256; the
+  exact key is passed explicitly through the installed Lium SDK and only its
+  path and digest appear in provider output and receipts.
+- [ ] Provider script bytes execute from the verified open descriptor through
+  the hash-bound interpreter; the Lium SDK/CLI versions and explicit bootstrap
+  template image, tag, and status are verified before mutation.
 - [ ] Tampered, expired, replayed, wrong-stage, wrong-principal, wrong-command,
   and concurrent-use permits fail with zero provider invocations.
 - [ ] On-node preflight and screen decisions bind the exact request and evidence
   hashes, parent approval, Gate 0 digest, and provider allocation ID, and are
   domain-separated and signed for single-use verification by the runner.
+- [ ] The booking parent binds distinct Gate 0/Gate 1 keys and external
+  source/runtime/data/checkpoint intent artifacts that reconcile to prepared
+  Gate 1 evidence.
 - [ ] Production-boundary tests cover valid, tampered, replay, expiry,
   wrong-principal, and concurrent-use cases without mocking approval checks.
 - [ ] An independent machine-readable audit returns `ACCEPT` and binds the
