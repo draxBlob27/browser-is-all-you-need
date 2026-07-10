@@ -111,6 +111,40 @@ MILES_MOE_ENABLE_DEEPEP=0 \
 bash examples/miles/glm47_cpp_perf_lora_r16_h100_grpo.sh
 ```
 
+### 8x H100 MFU sweep
+
+Miles computes active-MoE forward FLOPs for the observed sequence lengths,
+multiplies by three for training, then divides by distributed world size and
+`1e12`. Its `perf/actor_train_tflops` value is therefore an estimated
+TFLOP/s/GPU, not an aggregate eight-GPU number. For H100 SXM BF16 trials this
+repo reports estimated MFU as `actor_train_tflops / 989`; global actor
+tokens/s remains a hard guardrail so a larger ratio cannot win by doing less
+useful work.
+
+The issue-31 harness fixes the longest-128 data order, runs the first fourteen
+diverse strategies, records the per-step token signature, and rejects changed
+work, non-finite training, failed ranks, or more than a two-percent throughput
+regression:
+
+```bash
+PYTHONPATH=src python3 scripts/run_miles_h100_mfu_sweep.py \
+  --sweep-root /workspace/runs/issue31-mfu-8xh100 \
+  --rounds 1-14
+```
+
+After reviewing those results, put only compatible measured improvements in
+an adaptive JSON object with `env`, `extra_args`, `precision`, and
+`peak_tflops_per_gpu`, then run rounds 15-16 with `--adaptive-config`. The
+second adaptive round is an independent clean-process repeat. Publish the
+complete comparison only after all sixteen receipts exist:
+
+```bash
+PYTHONPATH=src python3 scripts/publish_miles_h100_mfu_sweep.py \
+  --sweep-root /workspace/runs/issue31-mfu-8xh100 \
+  --project glm47-pie-cpp-posttraining \
+  --experiment-id glm47-h100-mfu-issue31
+```
+
 ## Modal 8x H100 Lane
 
 The Modal lane is operational: exact-layout EP8 conversion, an end-to-end fit

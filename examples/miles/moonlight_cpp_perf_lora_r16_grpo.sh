@@ -69,6 +69,7 @@ read -r -a SGLANG_LORA_TARGET_MODULE_ARGS <<< "${SGLANG_LORA_TARGET_MODULES//,/ 
 EXPERTS_SHARED_OUTER_LORAS="${MILES_EXPERTS_SHARED_OUTER_LORAS:-0}"
 LORA_BASE_CPU_BACKUP="${MILES_LORA_BASE_CPU_BACKUP:-0}"
 NO_GRADIENT_ACCUMULATION_FUSION="${MILES_NO_GRADIENT_ACCUMULATION_FUSION:-0}"
+CUDA_DEVICE_MAX_CONNECTIONS="${MILES_CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 SGLANG_LORA_USE_VIRTUAL_EXPERTS="${MILES_SGLANG_LORA_USE_VIRTUAL_EXPERTS:-0}"
 SGLANG_MEM_FRACTION_STATIC="${MILES_SGLANG_MEM_FRACTION_STATIC:-0.25}"
 SGLANG_SERVER_CONCURRENCY="${MILES_SGLANG_SERVER_CONCURRENCY:-512}"
@@ -225,6 +226,12 @@ model_args_path=${MODEL_ARGS_PATH}
 ref_load=${REF_LOAD_DIR}
 save_dir=${SAVE_DIR}
 seq_length=${SEQ_LENGTH}
+gpus_per_node=${GPUS_PER_NODE}
+tensor_model_parallel_size=${TP_SIZE}
+pipeline_model_parallel_size=${PP_SIZE}
+context_parallel_size=${CP_SIZE}
+expert_model_parallel_size=${EP_SIZE}
+expert_tensor_parallel_size=${ETP_SIZE}
 rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}
 eval_max_response_len=${EVAL_MAX_RESPONSE_LEN}
 max_tokens_per_gpu=${MAX_TOKENS_PER_GPU}
@@ -232,15 +239,18 @@ micro_batch_size=${MICRO_BATCH_SIZE}
 use_dynamic_batch_size=${USE_DYNAMIC_BATCH_SIZE}
 balance_data=${BALANCE_DATA}
 num_rollout=${NUM_ROLLOUT}
+grpo_rollout_shuffle=${GRPO_ROLLOUT_SHUFFLE}
 rollout_batch_size=${ROLLOUT_BATCH_SIZE}
 n_samples_per_prompt=${N_SAMPLES_PER_PROMPT}
 global_batch_size=${GLOBAL_BATCH_SIZE}
 train_module=${TRAIN_MODULE}
 lora_rank=${LORA_RANK}
 lora_alpha=${LORA_ALPHA}
+no_gradient_accumulation_fusion=${NO_GRADIENT_ACCUMULATION_FUSION}
 moe_token_dispatcher_type=${MOE_TOKEN_DISPATCHER_TYPE}
 moe_enable_deepep=${MOE_ENABLE_DEEPEP}
 recompute_granularity=${RECOMPUTE_GRANULARITY}
+cuda_device_max_connections=${CUDA_DEVICE_MAX_CONNECTIONS}
 sglang_mem_fraction_static=${SGLANG_MEM_FRACTION_STATIC}
 sglang_cuda_graph_max_bs=${SGLANG_CUDA_GRAPH_MAX_BS}
 sglang_server_concurrency=${SGLANG_SERVER_CONCURRENCY}
@@ -527,7 +537,7 @@ ray start --head \
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"/root/Megatron-LM/:${REPO_ROOT}/src:${MILES_ROOT}\",
-    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
+    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"${CUDA_DEVICE_MAX_CONNECTIONS}\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"W8_BIAYN_DATA_DIR\": \"${DATA_DIR}\",
     \"W8_CPP_SANDBOX_IMAGE\": \"${W8_CPP_SANDBOX_IMAGE}\",
