@@ -528,7 +528,7 @@ def build_miles_reward_outcome_rows(
 ) -> list[list[Any]]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in sample_rows:
-        record = dict(zip(MILES_SAMPLE_TABLE_COLUMNS, row, strict=True))
+        record = dict(zip(MILES_SAMPLE_TABLE_COLUMNS, row))
         grouped[(str(record["stage"]), str(record["reason"] or "unknown"))].append(record)
 
     result: list[list[Any]] = []
