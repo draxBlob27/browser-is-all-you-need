@@ -31,6 +31,8 @@ TEST_TIMEOUT_ENV = "W8_SLIME_POLYGLOT_TEST_TIMEOUT_SECONDS"
 DEFAULT_POLYGLOT_SANDBOX_IMAGE = "w8-biayn-polyglot-cpp:latest"
 DEFAULT_TEST_TIMEOUT_SECONDS = 180
 DEFAULT_EVAL_LIMIT = 4
+DEFAULT_POLYGLOT_PIDS_LIMIT = 2048
+ORACLE_CORRECT_ANSWER_SOURCE = "files.example"
 ALLOWED_CODE_FENCE_LANGS = {"", "cpp", "c++", "cc", "cxx", "h", "hh", "hpp", "hxx"}
 UNCATEGORIZED_CATEGORY = "uncategorized"
 _PATH_MENTION_RE = re.compile(
@@ -124,17 +126,50 @@ def build_slime_polyglot_cpp_dataset(
         raise ValueError(f"No Polyglot C++ exercises found under {source}")
 
     copied_root = output / "tasks" / "cpp" / "exercises" / "practice"
-    rows = []
+    copied_exercises: list[tuple[PolyglotExercise, Path]] = []
     for exercise in exercises:
         destination = copied_root / exercise.name
         shutil.copytree(exercise.source_path, destination)
-        exercise_path = destination.relative_to(output).as_posix()
-        rows.append(_eval_row(exercise, exercise_path=exercise_path, source_root=source))
+        copied_exercises.append((exercise, destination))
 
     paths = {
         "eval": output / "eval" / "cpp.jsonl",
         "manifest": output / "manifest.json",
+        "oracle_records": output / "oracle.records.jsonl",
+        "oracle_summary": output / "oracle.summary.json",
     }
+    oracle_records = [
+        polyglot_oracle_setup_record(exercise, exercise_dir=destination)
+        for exercise, destination in copied_exercises
+    ]
+    oracle_summary = aggregate_polyglot_oracle_setup_records(
+        oracle_records,
+        records_file=paths["oracle_records"].name,
+        summary_file=paths["oracle_summary"].name,
+    )
+    _write_jsonl(paths["oracle_records"], oracle_records)
+    write_json(paths["oracle_summary"], oracle_summary)
+    if not oracle_summary["all_passed"]:
+        failures = ", ".join(
+            f"{record['task_id']}:{record['reason']}"
+            for record in oracle_records
+            if record.get("setup_valid") is not True
+        )
+        raise ValueError(
+            "Polyglot C++ oracle preflight failed; no eval manifest was admitted. "
+            f"Failures: {failures}. Inspect {paths['oracle_records']}"
+        )
+
+    oracle_by_exercise = {str(record["exercise"]): record for record in oracle_records}
+    rows = [
+        _eval_row(
+            exercise,
+            exercise_path=destination.relative_to(output).as_posix(),
+            source_root=source,
+            oracle_record=oracle_by_exercise[exercise.name],
+        )
+        for exercise, destination in copied_exercises
+    ]
     _write_jsonl(paths["eval"], rows)
     write_json(
         paths["manifest"],
@@ -151,10 +186,15 @@ def build_slime_polyglot_cpp_dataset(
             "counts": {
                 "eval": len(rows),
                 "copied_exercises": len(rows),
+                "oracle_checked": oracle_summary["task_count"],
+                "oracle_passed": oracle_summary["passed_count"],
             },
             "files": {
                 "eval": paths["eval"].relative_to(output).as_posix(),
+                "oracle_records": paths["oracle_records"].relative_to(output).as_posix(),
+                "oracle_summary": paths["oracle_summary"].relative_to(output).as_posix(),
             },
+            "oracle_setup_check": oracle_summary,
         },
     )
     return paths
@@ -231,7 +271,215 @@ def _normalize_relative_path(value: str) -> str:
     return path.as_posix()
 
 
-def _eval_row(exercise: PolyglotExercise, *, exercise_path: str, source_root: Path) -> dict[str, Any]:
+def polyglot_reference_replacements(
+    exercise_dir: str | Path,
+    *,
+    solution_files: Sequence[str],
+    example_files: Sequence[str],
+) -> tuple[dict[str, str], list[dict[str, str]], list[str]]:
+    """Map Exercism `.meta/example.*` files onto editable solution files.
+
+    C++ exercises use at most one editable file per extension. Some references
+    are intentionally header-only; their inert `.cpp` starter remains in place.
+    """
+
+    exercise_path = Path(exercise_dir)
+    normalized_solutions = tuple(_normalize_relative_path(path) for path in solution_files)
+    normalized_examples = tuple(_normalize_relative_path(path) for path in example_files)
+    if not normalized_examples:
+        raise PolyglotResponseError(
+            "missing_example_files",
+            "metadata.files.example must provide at least one reference implementation",
+        )
+
+    solutions_by_suffix: dict[str, list[str]] = defaultdict(list)
+    for solution_file in normalized_solutions:
+        solutions_by_suffix[PurePosixPath(solution_file).suffix.lower()].append(solution_file)
+
+    replacements: dict[str, str] = {}
+    mappings: list[dict[str, str]] = []
+    for example_file in normalized_examples:
+        example_path = exercise_path / example_file
+        if not example_path.is_file():
+            raise PolyglotResponseError(
+                "missing_example_file",
+                f"reference implementation file does not exist: {example_file}",
+            )
+        suffix = PurePosixPath(example_file).suffix.lower()
+        candidates = solutions_by_suffix.get(suffix, [])
+        if len(candidates) != 1:
+            raise PolyglotResponseError(
+                "reference_mapping_error",
+                f"expected exactly one solution file for reference {example_file}; found {candidates}",
+            )
+        solution_file = candidates[0]
+        if solution_file in replacements:
+            raise PolyglotResponseError(
+                "reference_mapping_error",
+                f"multiple reference files map to solution file: {solution_file}",
+            )
+        replacements[solution_file] = example_path.read_text(encoding="utf-8")
+        mappings.append({"example_file": example_file, "solution_file": solution_file})
+
+    unmapped = sorted(set(normalized_solutions) - set(replacements))
+    return replacements, mappings, unmapped
+
+
+def polyglot_oracle_setup_record(
+    exercise: PolyglotExercise,
+    *,
+    exercise_dir: str | Path,
+) -> dict[str, Any]:
+    """Run one Exercism reference implementation through the model grader."""
+
+    record: dict[str, Any] = {
+        "benchmark": BENCHMARK,
+        "data_source": DATA_SOURCE,
+        "language": LANGUAGE,
+        "task_id": f"cpp/{exercise.name}",
+        "problem_id": exercise.name,
+        "exercise": exercise.name,
+        "category": exercise.categories[0],
+        "categories": list(exercise.categories),
+        "correct_answer_source": ORACLE_CORRECT_ANSWER_SOURCE,
+        "solution_files": list(exercise.solution_files),
+        "example_files": list(exercise.example_files),
+        "reference_file_mappings": [],
+        "unmapped_solution_files": list(exercise.solution_files),
+        "setup_valid": False,
+        "passed": False,
+        "all_tests_pass": False,
+        "reason": "not_run",
+        "returncode": None,
+        "timeout": False,
+        "harness_error": False,
+        "compile_error": False,
+        "tests_failed": False,
+        "reference_bytes": 0,
+    }
+    try:
+        replacements, mappings, unmapped = polyglot_reference_replacements(
+            exercise_dir,
+            solution_files=exercise.solution_files,
+            example_files=exercise.example_files,
+        )
+        record["reference_file_mappings"] = mappings
+        record["unmapped_solution_files"] = unmapped
+        result, reference_bytes = _run_replacements(
+            {"exercise_path": str(Path(exercise_dir).resolve())},
+            replacements,
+        )
+        record["reference_bytes"] = reference_bytes
+    except PolyglotResponseError as exc:
+        record.update({"reason": exc.reason, "exception": str(exc)})
+        return record
+    except Exception as exc:  # noqa: BLE001 - preserve setup failures as evidence
+        record.update(
+            {
+                "reason": "oracle_exception",
+                "exception": str(exc),
+                "harness_error": True,
+            }
+        )
+        return record
+
+    record.update(_polyglot_oracle_fields_from_test_result(result))
+    return record
+
+
+def _polyglot_oracle_fields_from_test_result(result: PolyglotTestResult) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "setup_valid": result.passed,
+        "passed": result.passed,
+        "all_tests_pass": result.passed,
+        "returncode": result.returncode,
+        "timeout": result.timeout,
+        "harness_error": False,
+        "compile_error": False,
+        "tests_failed": False,
+    }
+    if result.passed:
+        fields["reason"] = "passed"
+    elif result.timeout:
+        fields["reason"] = "timeout"
+    elif result.returncode in {125, 126, 127}:
+        fields["reason"] = "harness_error"
+        fields["harness_error"] = True
+    elif _looks_like_compile_error(result.logs):
+        fields["reason"] = "compile_error"
+        fields["compile_error"] = True
+    else:
+        fields["reason"] = "tests_failed"
+        fields["tests_failed"] = True
+    if _include_logs() and result.logs:
+        fields["logs"] = result.logs
+    elif result.logs:
+        fields["log_excerpt"] = result.logs[-2000:]
+    return fields
+
+
+def aggregate_polyglot_oracle_setup_records(
+    records: Iterable[dict[str, Any]],
+    *,
+    records_file: str | None = None,
+    summary_file: str | None = None,
+) -> dict[str, Any]:
+    rows = list(records)
+    passed = [row for row in rows if row.get("setup_valid") is True]
+    reason_counts = Counter(str(row.get("reason", "unknown")) for row in rows)
+    return {
+        "enabled": True,
+        "blocking": True,
+        "phase": "data_preflight",
+        "correct_answer_source": ORACLE_CORRECT_ANSWER_SOURCE,
+        "records_file": records_file,
+        "summary_file": summary_file,
+        "task_count": len(rows),
+        "passed_count": len(passed),
+        "failed_count": len(rows) - len(passed),
+        "pass_rate": len(passed) / len(rows) if rows else 0.0,
+        "all_passed": bool(rows) and len(passed) == len(rows),
+        "reason_counts": dict(sorted(reason_counts.items())),
+        "failed_task_ids": [
+            str(row.get("task_id")) for row in rows if row.get("setup_valid") is not True
+        ],
+    }
+
+
+def validate_polyglot_dataset(data_root: str | Path) -> dict[str, Any]:
+    """Require a fully passing, same-grader oracle proof for prepared data."""
+
+    root = Path(data_root)
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"missing Polyglot data manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("kind") != DATASET_KIND:
+        raise ValueError(f"unexpected Polyglot dataset kind in {manifest_path}")
+    oracle_check = manifest.get("oracle_setup_check")
+    if not isinstance(oracle_check, dict) or oracle_check.get("all_passed") is not True:
+        raise ValueError(
+            f"Polyglot dataset is missing a fully passing oracle setup check: {manifest_path}"
+        )
+    if oracle_check.get("correct_answer_source") != ORACLE_CORRECT_ANSWER_SOURCE:
+        raise ValueError(f"unexpected Polyglot correct-answer source in {manifest_path}")
+    files = manifest.get("files") if isinstance(manifest.get("files"), dict) else {}
+    for key in ("eval", "oracle_records", "oracle_summary"):
+        relative_path = files.get(key)
+        if not isinstance(relative_path, str) or not (root / relative_path).is_file():
+            raise ValueError(f"missing Polyglot dataset artifact {key!r} under {root}")
+    if oracle_check.get("task_count") != manifest.get("counts", {}).get("eval"):
+        raise ValueError(f"Polyglot oracle/eval task-count mismatch in {manifest_path}")
+    return dict(oracle_check)
+
+
+def _eval_row(
+    exercise: PolyglotExercise,
+    *,
+    exercise_path: str,
+    source_root: Path,
+    oracle_record: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "prompt": build_prompt(exercise),
         "label": f"cpp/{exercise.name}",
@@ -252,6 +500,8 @@ def _eval_row(exercise: PolyglotExercise, *, exercise_path: str, source_root: Pa
             "solution_files": list(exercise.solution_files),
             "test_files": list(exercise.test_files),
             "example_files": list(exercise.example_files),
+            "oracle_setup_valid": oracle_record.get("setup_valid") is True,
+            "oracle_correct_answer_source": oracle_record.get("correct_answer_source"),
         },
     }
 
@@ -633,7 +883,7 @@ def _polyglot_docker_args(
         "--memory",
         memory,
         "--pids-limit",
-        "128",
+        str(DEFAULT_POLYGLOT_PIDS_LIMIT),
         "--read-only",
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=64m,mode=1777",
@@ -717,6 +967,8 @@ def _record(
         "blurb": metadata.get("blurb"),
         "category": metadata.get("category") or categories[0],
         "categories": categories,
+        "oracle_setup_valid": metadata.get("oracle_setup_valid") is True,
+        "oracle_correct_answer_source": metadata.get("oracle_correct_answer_source"),
         "compile_error": compile_error,
         "sanitizer_error": False,
         "timeout": timeout,
@@ -812,10 +1064,20 @@ def score_debug_dump(
     label: str,
     debug_samples_path: str | Path,
     output_dir: str | Path,
+    data_root: str | Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Path]]:
     samples = load_slime_debug_samples(debug_samples_path)
     records = [record_from_debug_sample(sample, label=label) for sample in samples]
     summary = aggregate_polyglot_records(records, label=label)
+    if data_root is None:
+        summary["oracle_setup_check"] = {
+            "enabled": False,
+            "blocking": True,
+            "correct_answer_source": ORACLE_CORRECT_ANSWER_SOURCE,
+            "reason": "data_root_not_provided",
+        }
+    else:
+        summary["oracle_setup_check"] = validate_polyglot_dataset(data_root)
     output = Path(output_dir)
     records_path = output / f"{label}.records.jsonl"
     summary_path = output / f"{label}.summary.json"
@@ -856,6 +1118,10 @@ def record_from_debug_sample(sample: dict[str, Any], *, label: str | None = None
     record.setdefault("blurb", metadata.get("blurb"))
     record.setdefault("categories", _record_categories(metadata))
     record.setdefault("category", metadata.get("category") or _first_category(record.get("categories")))
+    record.setdefault("oracle_setup_valid", metadata.get("oracle_setup_valid") is True)
+    record.setdefault(
+        "oracle_correct_answer_source", metadata.get("oracle_correct_answer_source")
+    )
     record.setdefault("all_tests_pass", bool(record.get("tests_total")) and record.get("tests_passed") == record.get("tests_total"))
     record.setdefault("recovered_format", False)
     record.setdefault("recovered_reason", None)
@@ -1003,7 +1269,8 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> Path:
 def polyglot_sandbox_image_dockerfile() -> str:
     return f"""FROM {BASE_DOCKER_IMAGE}
 RUN apt-get update \\
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake make python3 \\
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+        cmake libboost-date-time-dev make python3 \\
     && rm -rf /var/lib/apt/lists/*
 """
 
@@ -1050,8 +1317,14 @@ def _aggregate_command(args: argparse.Namespace) -> None:
         label=args.label,
         debug_samples_path=args.debug_rollout,
         output_dir=args.out,
+        data_root=args.data_root,
     )
     print(json.dumps({key: str(path) for key, path in paths.items()}, indent=2, sort_keys=True))
+
+
+def _verify_data_command(args: argparse.Namespace) -> None:
+    oracle_check = validate_polyglot_dataset(args.data_root)
+    print(json.dumps(oracle_check, indent=2, sort_keys=True))
 
 
 def _sandbox_image_command(args: argparse.Namespace) -> None:
@@ -1083,7 +1356,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--label", required=True, choices=("base",))
     aggregate.add_argument("--debug-rollout", required=True)
     aggregate.add_argument("--out", required=True)
+    aggregate.add_argument("--data-root", default=None)
     aggregate.set_defaults(func=_aggregate_command)
+
+    verify_data = subparsers.add_parser(
+        "verify-data", help="Require a fully passing Polyglot reference-solution preflight"
+    )
+    verify_data.add_argument("--data-root", required=True)
+    verify_data.set_defaults(func=_verify_data_command)
 
     sandbox_image = subparsers.add_parser("sandbox-image", help="Build or render the Polyglot C++ sandbox image")
     sandbox_image.add_argument("--image", default=DEFAULT_POLYGLOT_SANDBOX_IMAGE)
@@ -1100,4 +1380,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

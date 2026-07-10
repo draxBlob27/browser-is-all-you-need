@@ -265,9 +265,14 @@ uses whole-file solution replacement prompts and Exercism C++ tests, not PIE
 operator flow is `examples/slime/moonlight_polyglot_cpp/README.md`; this
 roadmap keeps only the decision point.
 
-Decision gate: inspect `eval/base.records.jsonl`, `eval/base.summary.json`, and
-`stages/base-eval/run_receipt.txt`. Keep Polyglot C++ results separate from
-both PIE uplift claims and Aider leaderboard numbers.
+Decision gate: preparation must materialize the upstream `files.example`
+references and pass every selected exercise through the same Docker grader
+before admitting the eval manifest. Inspect `data/oracle.records.jsonl`,
+`data/oracle.summary.json`, `eval/base.records.jsonl`,
+`eval/base.summary.json`, and `stages/base-eval/run_receipt.txt`. Require
+`base.summary.json.oracle_setup_check.all_passed` before treating model
+failures as setup-clean. Keep Polyglot C++ results separate from both PIE
+uplift claims and Aider leaderboard numbers.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

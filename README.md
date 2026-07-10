@@ -70,9 +70,12 @@ builder, Docker C++ sandbox, reward function, and eval aggregation through
 The Moonlight Polyglot C++ lane is an optional rollout-only base-eval benchmark
 for the C++ subset of `Aider-AI/polyglot-benchmark`. It uses
 `src/w8_biayn/integrations/slime_polyglot_cpp.py` for whole-file replacement
-prompts and Exercism C++ tests in Docker. It is not part of the PIE training
-proof and is not an official Aider leaderboard run; keep detailed setup and
-artifact semantics in `examples/slime/moonlight_polyglot_cpp/README.md`.
+prompts and Exercism C++ tests in Docker. Data preparation must first map the
+upstream `files.example` references onto solution files and pass them through
+the same Docker grader; only an all-passing oracle preflight admits the eval
+manifest. It is not part of the PIE training proof and is not an official
+Aider leaderboard run; keep detailed setup and artifact semantics in
+`examples/slime/moonlight_polyglot_cpp/README.md`.
 
 The Moonlight Multi-SWE C++ lane is an optional rollout-only base-eval
 benchmark for the C++ subset of `ByteDance-Seed/Multi-SWE-bench_mini`. It uses
@@ -353,10 +356,13 @@ bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 
 Artifacts are written under
 `.w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/`, including
+`data/oracle.records.jsonl`, `data/oracle.summary.json`,
 `eval/base.records.jsonl`, `eval/base.summary.json`, and
-`stages/base-eval/run_receipt.txt`. The summary includes strict pass/fail
-rates, repo-owned category breakdowns, and `recovered_*` diagnostics for
-format-teachable failures; it deliberately omits PIE speed metrics such as
+`stages/base-eval/run_receipt.txt`. Preparation blocks unless every upstream
+`files.example` reference passes the same Docker grader used for model
+responses. The base summary embeds that `oracle_setup_check` alongside strict
+pass/fail rates, repo-owned category breakdowns, and `recovered_*` diagnostics
+for format-teachable failures; it deliberately omits PIE speed metrics such as
 `correct_and_faster_rate`.
 
 

@@ -15,7 +15,21 @@ artifact field descriptions.
 
 ## What It Does
 
-`prepare_data.sh` converts Polyglot C++ exercises into one eval JSONL file:
+`prepare_data.sh` first runs a blocking correct-answer setup check. For every
+selected exercise it reads the reference files declared by
+`.meta/config.json` under `files.example`, maps each `.meta/example.*` file to
+the unique editable solution file with the same extension, and runs that
+materialized reference through the exact Docker test path used for model
+responses. Header-only references intentionally leave the inert starter
+`.cpp` file in place.
+
+The preflight writes `oracle.records.jsonl` and `oracle.summary.json`. It emits
+the eval JSONL and admitted `manifest.json` only when every selected reference
+passes. This makes a passing `oracle_setup_check` the setup-side proof needed
+to interpret a later model test failure as a model failure rather than an
+uncertified harness failure.
+
+After admission, the eval JSONL is:
 
 ```text
 .w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/data/eval/cpp.jsonl
@@ -23,7 +37,10 @@ artifact field descriptions.
 
 Each eval row carries `metadata.category` and multi-label
 `metadata.categories`. The cloned Polyglot subset only includes file-role
-metadata plus blurbs, so the category map is repo-owned and deterministic.
+metadata plus blurbs, so the category map is repo-owned and deterministic. It
+also carries `metadata.oracle_setup_valid: true` and
+`metadata.oracle_correct_answer_source: "files.example"`; reference contents
+are never included in the prompt.
 
 `eval_base.sh` runs SLIME debug rollout-only eval against the base Moonlight
 HuggingFace checkpoint and scores each response by replacing the editable
@@ -56,7 +73,9 @@ git clone https://github.com/Aider-AI/polyglot-benchmark \
 ```
 
 Build the Polyglot C++ sandbox image. The dry-run form prints the exact
-Dockerfile:
+Dockerfile. The image includes Boost.DateTime for the date exercises, and the
+runtime sandbox allows 2,048 processes/threads because `bank-account`'s
+official concurrency test creates 1,000 threads:
 
 ```bash
 uv run python -m w8_biayn.integrations.slime_polyglot_cpp sandbox-image --dry-run
@@ -87,6 +106,8 @@ export SLIME_SGLANG_MEM_FRACTION=0.45
 export W8_SLIME_POLYGLOT_SANDBOX_IMAGE=w8-biayn-polyglot-cpp:latest
 
 bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
+python -m w8_biayn.integrations.slime_polyglot_cpp verify-data \
+  --data-root ".w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/data"
 bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 ```
 
@@ -101,6 +122,8 @@ The lane writes:
 .w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/
   data/
     manifest.json
+    oracle.records.jsonl
+    oracle.summary.json
     eval/cpp.jsonl
     tasks/cpp/exercises/practice/<exercise>/
   stages/base-eval/
@@ -124,6 +147,12 @@ best-effort parsed and tested. Those recovered fields do not change strict
 `score`, `pass_rate`, or `all_tests_pass`; they identify format-teachable
 failures for later SFT data review. The lane deliberately does not report PIE
 speed metrics such as `correct_and_faster_rate`.
+
+`base.summary.json` also embeds the admitted manifest's `oracle_setup_check`.
+Require `oracle_setup_check.all_passed: true` before attributing a failed model
+response to the model. `oracle.records.jsonl` preserves per-exercise mapping,
+return code, timeout/compile/test classification, and a test-log excerpt;
+`oracle.summary.json` provides the aggregate proof.
 
 ## Response Contract
 
@@ -151,9 +180,12 @@ fields.
   `.w8-biayn/data/polyglot-benchmark` or set `SLIME_POLYGLOT_SOURCE`.
 - Missing sandbox image: run the `sandbox-image` command above or set
   `W8_SLIME_POLYGLOT_SANDBOX_IMAGE` to a compatible CMake-capable image.
+- Oracle preflight failure: inspect `data/oracle.records.jsonl` and
+  `data/oracle.summary.json`. No `manifest.json` or eval JSONL is admitted when
+  any `files.example` reference fails under the current checkout, sandbox
+  image, or timeout. Fix the setup or task before evaluating the model.
 - Response truncation: raise `SLIME_EVAL_MAX_RESPONSE_LEN` to `8192`.
 - Many timeouts: inspect `base.records.jsonl` and the sandbox logs. The default
   test timeout is `W8_SLIME_POLYGLOT_TEST_TIMEOUT_SECONDS=180`.
 - Official Aider results differ: expected. This lane is a repo-owned
   SLIME-style eval, not the Aider edit harness.
-

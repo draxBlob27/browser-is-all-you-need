@@ -138,14 +138,16 @@ prepare_data() {
 }
 
 ensure_data() {
-  if [ ! -f "${DATA_DIR}/manifest.json" ]; then
+  if [ ! -f "${DATA_DIR}/manifest.json" ] || [ ! -f "${DATA_DIR}/oracle.summary.json" ]; then
     if [ "${SLIME_POLYGLOT_AUTO_PREPARE_DATA:-1}" != "1" ]; then
-      echo "Missing Polyglot data manifest: ${DATA_DIR}/manifest.json" >&2
+      echo "Missing admitted Polyglot data or oracle proof under: ${DATA_DIR}" >&2
       echo "Run: bash ${SCRIPT_DIR}/prepare_data.sh" >&2
       exit 2
     fi
     prepare_data
   fi
+  run_repo_python -m w8_biayn.integrations.slime_polyglot_cpp verify-data \
+    --data-root "${DATA_DIR}"
 }
 
 hf_checkpoint_is_present() {
@@ -586,6 +588,8 @@ rollout_dump_template=${ROLLOUT_DUMP_TEMPLATE}
 eval_dump_path=${EVAL_DUMP_PATH}
 summary_path=${RUN_ROOT}/eval/base.summary.json
 records_path=${RUN_ROOT}/eval/base.records.jsonl
+oracle_records_path=${DATA_DIR}/oracle.records.jsonl
+oracle_summary_path=${DATA_DIR}/oracle.summary.json
 EOF
 }
 
@@ -597,7 +601,8 @@ aggregate_eval() {
   run_repo_python -m w8_biayn.integrations.slime_polyglot_cpp aggregate-debug \
     --label "${STAGE_LABEL}" \
     --debug-rollout "${EVAL_DUMP_PATH}" \
-    --out "${RUN_ROOT}/eval"
+    --out "${RUN_ROOT}/eval" \
+    --data-root "${DATA_DIR}"
 }
 
 submit_slime_job() {
@@ -743,4 +748,3 @@ case "${STAGE}" in
     exit 2
     ;;
 esac
-

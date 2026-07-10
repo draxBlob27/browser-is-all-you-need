@@ -189,9 +189,10 @@ bash examples/slime/moonlight_cpp_perf/compare.sh
 Optional Moonlight Polyglot C++ base-eval benchmark. This is not active PIE
 training and not an official Aider leaderboard run; it is a repo-owned
 SLIME rollout-only eval of base Moonlight on C++ Exercism tasks. Keep detailed
-setup, response contract, artifact fields, category summaries, and
-`recovered_*` diagnostics in `examples/slime/moonlight_polyglot_cpp/README.md`
-instead of duplicating them across repo-wide docs:
+setup, response contract, artifact fields, category summaries, blocking
+`files.example` same-grader oracle preflight, and `recovered_*` diagnostics in
+`examples/slime/moonlight_polyglot_cpp/README.md` instead of duplicating them
+across repo-wide docs:
 
 ```bash
 bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
