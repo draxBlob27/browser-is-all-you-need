@@ -13,6 +13,7 @@ _ROUTER_CB_PATCHED = False
 _WARM_START_OPT_PATCHED = False
 _LORA_TMS_PATCHED = False
 _LORA_UPDATE_TMS_PATCHED = False
+_ROLLOUT_DP_SHARD_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
@@ -41,6 +42,7 @@ def register_glm47_bridge() -> None:
     _patch_warm_start_optimizer_reload()
     _patch_colocate_lora_tms_regions()
     _patch_colocate_lora_update_tms_scope()
+    _patch_rollout_data_dp_sharding()
     _when_imported("megatron.bridge", lambda module: _register_glm47_bridge_class())
 
 
@@ -627,6 +629,55 @@ def _is_lora_parameter_name(name: str) -> bool:
     return "lora_" in name or (
         ".adapter." in name and ("linear_in" in name or "linear_out" in name)
     )
+
+
+def _patch_rollout_data_dp_sharding() -> None:
+    """Keep globally carried rewards aligned with each DP rank's sample rows."""
+
+    global _ROLLOUT_DP_SHARD_PATCHED
+    if _ROLLOUT_DP_SHARD_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_ROLLOUT_DP_SHARD_PATCH", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    _ROLLOUT_DP_SHARD_PATCHED = True
+    _when_imported("miles.utils.data", _apply_rollout_data_dp_sharding)
+
+
+def _apply_rollout_data_dp_sharding(module) -> None:
+    """Apply Miles' saved DP partition to both lengths and raw rewards.
+
+    ``split_train_data_by_dp`` intentionally carries these two vectors globally
+    and stores the balanced row partition beside them. The stock train-side
+    conversion shards ``total_lengths`` but forgets ``raw_reward``. Detailed
+    correct-sample logging then indexes local response arrays with global reward
+    indices and crashes before the optimizer step.
+    """
+
+    if getattr(module, "_w8_rollout_dp_shard_patched", False):
+        return
+
+    def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
+        del args
+        assert len(rollout_data_ref) == dp_size
+        rollout_data = module.ray.get(rollout_data_ref[dp_rank].inner)
+
+        partition = rollout_data.pop("partition")
+        total_lengths = rollout_data["total_lengths"]
+        module.Timer().seq_lens = total_lengths
+        rollout_data["total_lengths"] = [total_lengths[i] for i in partition]
+        if "raw_reward" in rollout_data:
+            raw_reward = rollout_data["raw_reward"]
+            rollout_data["raw_reward"] = [raw_reward[i] for i in partition]
+
+        return rollout_data
+
+    module.process_rollout_data = process_rollout_data
+    module._w8_rollout_dp_shard_patched = True
 
 
 def _dump_sync_forensics(updater, hf_named_tensors, out_dir) -> None:

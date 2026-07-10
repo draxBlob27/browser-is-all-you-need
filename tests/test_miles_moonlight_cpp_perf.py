@@ -489,6 +489,7 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
     monkeypatch.setattr(miles_glm47_bridge, "_WARM_START_OPT_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_LORA_TMS_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_LORA_UPDATE_TMS_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_ROLLOUT_DP_SHARD_PATCHED", False)
     before_meta_path = list(sys.meta_path)
     sys.meta_path.insert(0, recorder)
     try:
@@ -499,9 +500,10 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
         # megatron.bridge.peft.utils, miles update_weight module, sglang mem_pool,
         # miles router_manager, miles lora_utils (optimizer reload), Miles'
         # bridge_lora_helpers (non-nested TMS allocation), Miles' actor
-        # (process-group reload inside the live TMS scope), and
+        # (process-group reload inside the live TMS scope), miles.utils.data
+        # (aligned raw-reward DP sharding), and
         # megatron.bridge for the bridge-class registration
-        assert len(added) == 10
+        assert len(added) == 11
     finally:
         sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
         sys.meta_path.remove(recorder)
@@ -1124,3 +1126,31 @@ def test_lora_sync_snapshot_copies_unique_adapter_parameters_to_cpu() -> None:
         (lora, "cuda:3"),
     ]
     assert copied == [("cpu", True), ("cpu", True)]
+
+
+def test_rollout_data_dp_sharding_keeps_raw_rewards_aligned() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    timer_state = types.SimpleNamespace(seq_lens=None)
+    payload = {
+        "partition": [3, 0],
+        "tokens": ["rank-local-row-3", "rank-local-row-0"],
+        "response_lengths": [13, 10],
+        "total_lengths": [10, 11, 12, 13],
+        "raw_reward": [0.0, 0.25, -0.5, 1.0],
+    }
+    fake_module = types.SimpleNamespace(
+        ray=types.SimpleNamespace(get=lambda inner: dict(inner)),
+        Timer=lambda: timer_state,
+        process_rollout_data=lambda *args: None,
+    )
+    miles_glm47_bridge._apply_rollout_data_dp_sharding(fake_module)
+
+    refs = [types.SimpleNamespace(inner=payload), types.SimpleNamespace(inner={})]
+    result = fake_module.process_rollout_data(None, refs, 0, 2)
+
+    assert result["tokens"] == ["rank-local-row-3", "rank-local-row-0"]
+    assert result["response_lengths"] == [13, 10]
+    assert result["total_lengths"] == [13, 10]
+    assert result["raw_reward"] == [1.0, 0.0]
+    assert timer_state.seq_lens == [10, 11, 12, 13]
