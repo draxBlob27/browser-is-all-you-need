@@ -827,7 +827,9 @@ def test_colocate_lora_buffers_suspend_outer_tms_region(monkeypatch) -> None:
     from w8_biayn.integrations import miles_glm47_bridge
 
     transitions: list[bool] = []
-    observations: list[tuple[bool, bool, bool]] = []
+    observations: list[tuple[bool, bool, bool, object]] = []
+    created_pools: list[object] = []
+    active_pool = None
 
     class FakeCDLL:
         interesting = True
@@ -840,17 +842,34 @@ def test_colocate_lora_buffers_suspend_outer_tms_region(monkeypatch) -> None:
             transitions.append(self.interesting)
 
     cdll = FakeCDLL()
-    @contextmanager
-    def disable():
-        cdll.tms_set_interesting_region(False)
-        try:
-            yield
-        finally:
-            cdll.tms_set_interesting_region(True)
+
+    class FakeCuda:
+        @staticmethod
+        def current_device():
+            return 0
+
+        @staticmethod
+        def MemPool():
+            pool = object()
+            created_pools.append(pool)
+            return pool
+
+        @staticmethod
+        @contextmanager
+        def use_mem_pool(pool):
+            nonlocal active_pool
+            previous = active_pool
+            active_pool = pool
+            try:
+                yield
+            finally:
+                active_pool = previous
+
+    torch_module = types.ModuleType("torch")
+    torch_module.cuda = FakeCuda
 
     memory_saver = types.SimpleNamespace(
-        _impl=types.SimpleNamespace(_binary_wrapper=types.SimpleNamespace(cdll=cdll)),
-        disable=disable,
+        _impl=types.SimpleNamespace(_binary_wrapper=types.SimpleNamespace(cdll=cdll))
     )
     tms_module = types.ModuleType("torch_memory_saver")
     tms_module.torch_memory_saver = memory_saver
@@ -862,6 +881,7 @@ def test_colocate_lora_buffers_suspend_outer_tms_region(monkeypatch) -> None:
                     cdll.interesting,
                     kwargs["disable_param_buffers_cpu_backup"],
                     kwargs["disable_grad_buffers_cpu_backup"],
+                    active_pool,
                 )
             )
 
@@ -874,6 +894,7 @@ def test_colocate_lora_buffers_suspend_outer_tms_region(monkeypatch) -> None:
     )
 
     monkeypatch.setitem(sys.modules, "torch_memory_saver", tms_module)
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
     monkeypatch.setitem(
         sys.modules,
         "megatron.core.distributed.param_and_grad_buffer",
@@ -888,8 +909,13 @@ def test_colocate_lora_buffers_suspend_outer_tms_region(monkeypatch) -> None:
     miles_glm47_bridge._apply_colocate_lora_tms_region_patch(bridge_helpers)
     bridge_helpers.patch_param_grad_buffer_for_colocate_mode_lora()
     FakeBuffer()
+    FakeBuffer()
 
-    assert observations == [(False, False, False)]
-    assert transitions == [False, True]
+    assert observations == [
+        (False, False, False, created_pools[0]),
+        (False, False, False, created_pools[0]),
+    ]
+    assert len(created_pools) == 1
+    assert transitions == [False, True, False, True]
     assert cdll.interesting is True
     assert lora_utils._param_grad_buffer_patched is True

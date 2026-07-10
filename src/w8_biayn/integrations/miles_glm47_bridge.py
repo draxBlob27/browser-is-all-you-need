@@ -371,13 +371,21 @@ def _apply_colocate_lora_tms_region_patch(module) -> None:
         )
         buffer_cls = param_buffer_module._ParamAndGradBuffer
         original_init = buffer_cls.__init__
+        resident_pools = {}
 
         def __init__(self, *args, **kwargs):
             # Null out Megatron's nested region contexts. The surrounding model
             # build remains in TMS' default pool, so allocate these resident
-            # adapter buffers in TMS' separate non-pauseable pool.
+            # adapter buffers in a persistent non-pauseable pool.
             kwargs["disable_param_buffers_cpu_backup"] = False
             kwargs["disable_grad_buffers_cpu_backup"] = False
+
+            torch_module = importlib.import_module("torch")
+            device = torch_module.cuda.current_device()
+            resident_pool = resident_pools.get(device)
+            if resident_pool is None:
+                resident_pool = torch_module.cuda.MemPool()
+                resident_pools[device] = resident_pool
 
             tms_module = importlib.import_module("torch_memory_saver")
             memory_saver = tms_module.torch_memory_saver
@@ -385,18 +393,22 @@ def _apply_colocate_lora_tms_region_patch(module) -> None:
             cdll = getattr(getattr(impl, "_binary_wrapper", None), "cdll", None)
             was_interesting = bool(cdll and cdll.tms_get_interesting_region())
             if was_interesting:
-                with memory_saver.disable():
+                cdll.tms_set_interesting_region(False)
+            try:
+                with torch_module.cuda.use_mem_pool(resident_pool):
                     original_init(self, *args, **kwargs)
-            else:
-                original_init(self, *args, **kwargs)
+            finally:
+                if was_interesting:
+                    cdll.tms_set_interesting_region(True)
 
         buffer_cls.__init__ = __init__
+        buffer_cls._w8_resident_lora_pools = resident_pools
         lora_utils._param_grad_buffer_patched = True
         lora_utils.patch_param_grad_buffer_for_colocate_mode_lora = (
             patch_param_grad_buffer_for_colocate_mode_lora
         )
         print(
-            "w8 GLM47 colocate: resident LoRA DDP buffers use non-nested TMS allocation",
+            "w8 GLM47 colocate: resident LoRA DDP buffers use a persistent non-pauseable pool",
             flush=True,
         )
 
