@@ -441,20 +441,54 @@ def _patch_colocate_lora_update_tms_scope() -> None:
 
 
 def _apply_colocate_lora_update_tms_scope(module) -> None:
-    """Run process-group reload, weight sync, and teardown in one live pool.
+    """Run a staged adapter sync and process-group lifecycle in one live pool.
 
     Miles pauses TMS' ``default`` region before rollout. Its stock update path
     reloads NCCL process groups while that region is still paused and only then
-    enters ``torch_memory_saver.disable()`` for the adapter gather. The freshly
-    created communicators therefore point at paused storage and the first NCCL
-    collective fails with ``cudaErrorIllegalAddress``. Keeping the complete
-    transaction in the disabled scope also lets TMS dispose the temporary pool
-    only after every process group using it has been destroyed.
+    enters ``torch_memory_saver.disable()`` for the adapter gather. In addition,
+    not every adapter parameter consumed by Megatron Bridge is guaranteed to be
+    backed by Miles' resident DDP buffer. Snapshot the adapter parameters before
+    pause, stage them in fresh CUDA storage for export, and restore the original
+    parameter bindings before TMS later wakes the trainer. Keeping the complete
+    transaction in the disabled scope lets TMS dispose the temporary pool only
+    after every staged tensor and process group using it has been released.
     """
 
     cls = getattr(module, "MegatronTrainRayActor", None)
     if cls is None or getattr(cls, "_w8_update_tms_scope_patched", False):
         return
+
+    def sleep(self) -> None:
+        assert self.args.offload_train
+
+        if module.is_lora_enabled(self.args):
+            snapshots = _snapshot_lora_parameters(self.model)
+            if not snapshots:
+                raise RuntimeError(
+                    "LoRA sync snapshot failed: the actor model has no adapter parameters"
+                )
+            self._w8_lora_sync_snapshots = snapshots
+            snapshot_bytes = sum(tensor.numel() * tensor.element_size() for _, tensor, _ in snapshots)
+            print(
+                "w8 GLM47 LoRA sync snapshot: "
+                f"rank={module.dist.get_rank()} tensors={len(snapshots)} "
+                f"gib={snapshot_bytes / (1024**3):.3f}",
+                flush=True,
+            )
+
+        module.clear_memory(clear_host_memory=True)
+        module.print_memory("before offload model")
+        module.destroy_process_groups()
+
+        tag = "default" if module.is_lora_enabled(self.args) else None
+        module.torch_memory_saver.pause(tag=tag)
+
+        module.print_memory("after offload model")
+
+        if self._is_main_rank and hasattr(self, "_last_rollout_id"):
+            module.log_cpu_memory(
+                self._last_rollout_id, self.args, "after_offload_train"
+            )
 
     def update_weights(self, info) -> None:
         if self.args.debug_train_only or self.args.debug_rollout_only:
@@ -473,6 +507,7 @@ def _apply_colocate_lora_update_tms_scope(module) -> None:
             else module.nullcontext()
         )
         with context:
+            staged_param_data = []
             try:
                 if self.args.offload_train:
                     module.reload_process_groups()
@@ -497,6 +532,28 @@ def _apply_colocate_lora_update_tms_scope(module) -> None:
                             "--debug-skip-weight-update is set."
                         )
                     return
+
+                if self.args.offload_train and module.is_lora_enabled(self.args):
+                    snapshots = getattr(self, "_w8_lora_sync_snapshots", None)
+                    if not snapshots:
+                        raise RuntimeError(
+                            "LoRA weight sync has no pre-offload adapter snapshot"
+                        )
+                    staged_bytes = 0
+                    for param, cpu_tensor, device in snapshots:
+                        staged_param_data.append((param, param.data))
+                        param.data = cpu_tensor.to(
+                            device=device,
+                            non_blocking=False,
+                        )
+                        staged_bytes += cpu_tensor.numel() * cpu_tensor.element_size()
+                    module.torch.cuda.synchronize()
+                    print(
+                        "w8 GLM47 LoRA sync staging: "
+                        f"rank={module.dist.get_rank()} tensors={len(snapshots)} "
+                        f"gib={staged_bytes / (1024**3):.3f}",
+                        flush=True,
+                    )
 
                 module.print_memory("before update_weights")
                 self.weight_updater.update_weights()
@@ -529,14 +586,46 @@ def _apply_colocate_lora_update_tms_scope(module) -> None:
                     else:
                         self.weights_backuper.backup("old_actor")
             finally:
+                if staged_param_data:
+                    module.torch.cuda.synchronize()
+                    for param, original_data in staged_param_data:
+                        param.data = original_data
+                    staged_param_data.clear()
                 if self.args.offload_train:
                     module.destroy_process_groups()
 
+    cls.sleep = module.timer(sleep)
     cls.update_weights = module.timer(update_weights)
     cls._w8_update_tms_scope_patched = True
     print(
         "w8 GLM47 colocate: process-group reload and LoRA sync share one live TMS pool",
         flush=True,
+    )
+
+
+def _snapshot_lora_parameters(model) -> list[tuple[Any, Any, Any]]:
+    """Copy unique adapter parameters to CPU before TMS pauses their storage."""
+
+    snapshots = []
+    seen = set()
+    for model_chunk in model:
+        for name, param in model_chunk.named_parameters():
+            if not _is_lora_parameter_name(name) or id(param) in seen:
+                continue
+            seen.add(id(param))
+            snapshots.append(
+                (
+                    param,
+                    param.detach().to(device="cpu", copy=True),
+                    param.device,
+                )
+            )
+    return snapshots
+
+
+def _is_lora_parameter_name(name: str) -> bool:
+    return "lora_" in name or (
+        ".adapter." in name and ("linear_in" in name or "linear_out" in name)
     )
 
 

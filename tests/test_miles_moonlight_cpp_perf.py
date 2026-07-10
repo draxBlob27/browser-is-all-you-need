@@ -952,7 +952,7 @@ def test_colocate_weight_sync_reloads_and_destroys_process_groups_inside_tms() -
         ray=types.SimpleNamespace(),
         random=types.SimpleNamespace(),
         get_gloo_group=lambda: None,
-        is_lora_enabled=lambda args: True,
+        is_lora_enabled=lambda args: False,
     )
     miles_glm47_bridge._apply_colocate_lora_update_tms_scope(fake_module)
 
@@ -1005,6 +1005,29 @@ def test_colocate_weight_sync_destroys_process_groups_before_tms_on_failure() ->
     class FakeActor:
         pass
 
+    original_data = object()
+    staged_data = object()
+
+    class FakeParam:
+        data = original_data
+
+    class FakeCpuTensor:
+        @staticmethod
+        def to(*, device, non_blocking):
+            assert device == "cuda:0"
+            assert non_blocking is False
+            return staged_data
+
+        @staticmethod
+        def numel():
+            return 16
+
+        @staticmethod
+        def element_size():
+            return 2
+
+    param = FakeParam()
+
     def fail_sync():
         events.append("sync")
         raise RuntimeError("sync failed")
@@ -1017,6 +1040,9 @@ def test_colocate_weight_sync_destroys_process_groups_before_tms_on_failure() ->
         destroy_process_groups=lambda: events.append("destroy"),
         print_memory=lambda label: events.append(label),
         timer=lambda fn: fn,
+        torch=types.SimpleNamespace(
+            cuda=types.SimpleNamespace(synchronize=lambda: events.append("cuda-sync"))
+        ),
         dist=types.SimpleNamespace(get_rank=lambda: 0),
         logger=types.SimpleNamespace(warning=lambda *args: None, info=lambda *args: None),
         ray=types.SimpleNamespace(),
@@ -1036,6 +1062,7 @@ def test_colocate_weight_sync_destroys_process_groups_before_tms_on_failure() ->
         keep_old_actor=False,
     )
     actor.weight_updater = types.SimpleNamespace(update_weights=fail_sync)
+    actor._w8_lora_sync_snapshots = [(param, FakeCpuTensor(), "cuda:0")]
     info = types.SimpleNamespace(
         rollout_engines=[],
         rollout_engine_lock=None,
@@ -1050,8 +1077,50 @@ def test_colocate_weight_sync_destroys_process_groups_before_tms_on_failure() ->
     assert events == [
         "tms-enter",
         "reload",
+        "cuda-sync",
         "before update_weights",
         "sync",
+        "cuda-sync",
         "destroy",
         "tms-exit",
     ]
+    assert param.data is original_data
+
+
+def test_lora_sync_snapshot_copies_unique_adapter_parameters_to_cpu() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    copied: list[tuple[str, bool]] = []
+
+    class FakeParam:
+        def __init__(self, device):
+            self.device = device
+
+        def detach(self):
+            return self
+
+        def to(self, *, device, copy):
+            copied.append((device, copy))
+            return object()
+
+    adapter = FakeParam("cuda:3")
+    lora = FakeParam("cuda:3")
+    base = FakeParam("cuda:3")
+
+    class FakeChunk:
+        @staticmethod
+        def named_parameters():
+            return [
+                ("decoder.weight", base),
+                ("decoder.adapter.linear_in.weight", adapter),
+                ("decoder.adapter.linear_in.alias", adapter),
+                ("decoder.lora_A", lora),
+            ]
+
+    snapshots = miles_glm47_bridge._snapshot_lora_parameters([FakeChunk()])
+
+    assert [(param, device) for param, _, device in snapshots] == [
+        (adapter, "cuda:3"),
+        (lora, "cuda:3"),
+    ]
+    assert copied == [("cpu", True), ("cpu", True)]
