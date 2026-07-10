@@ -72,6 +72,7 @@ upstream repos or data.
 - SLIME setup/doctor/sandbox helpers: `src/w8_biayn/slime_integration/`
 - SLIME C++ bridge: `src/w8_biayn/integrations/slime_cpp_perf.py`
 - SLIME Polyglot C++ bridge: `src/w8_biayn/integrations/slime_polyglot_cpp.py`
+- SLIME Multi-SWE C++ bridge: `src/w8_biayn/integrations/slime_multi_swe_cpp.py`
 - W&B reporting layer (metrics/tables/artifacts/alerts/workspace):
   `src/w8_biayn/wandb_report.py`
 - Network reachability probes + launch watchdog: `src/w8_biayn/net_health.py`
@@ -85,6 +86,7 @@ upstream repos or data.
   `src/w8_biayn/integrations/slime_moonlight_hf_export.py`
 - Moonlight Megatron local layer spec: `src/local.py`
 - Moonlight C++ lane: `examples/slime/moonlight_cpp_perf/`
+- Moonlight Multi-SWE C++ base-eval lane: `examples/slime/moonlight_multi_swe_cpp/`
 - Moonlight rank-16 LoRA C++ lane: `examples/slime/moonlight_lora_cpp_perf/`
 - GLM C++ lane: `examples/slime/glm47_cpp_perf/` when present
 - GLM agentic SWE-agent file-state C++ lane: `examples/slime/glm47_swe_agent_cpp_perf/`
@@ -222,6 +224,19 @@ parsed and tested without changing strict scores:
 ```bash
 bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
 bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
+```
+
+Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
+training and not an official Multi-SWE leaderboard run; it is a repo-owned
+SLIME rollout-only eval of base Moonlight on C++ issue-resolution tasks from
+`ByteDance-Seed/Multi-SWE-bench_mini`. Keep detailed setup, response contract,
+artifact fields, repo summaries, and `recovered_*` diagnostics in
+`examples/slime/moonlight_multi_swe_cpp/README.md` instead of duplicating them
+across repo-wide docs:
+
+```bash
+bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
+bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh
 ```
 
 Moonlight rank-16 LoRA C++ lane:

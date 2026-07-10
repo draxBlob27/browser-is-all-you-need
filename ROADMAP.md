@@ -23,6 +23,7 @@ preserved, then measure speed.
 - Moonlight: the active Moonlight-16B-A3B model lane.
 - GLM: the active GLM-4.7-Flash model lane.
 - Polyglot: optional Aider Polyglot C++ base-eval benchmark, separate from the PIE training proof.
+- Multi-SWE: optional C++ issue-resolution base-eval benchmark, separate from the PIE training proof.
 - Docker sandbox: the compile/test/runtime harness for C++ reward execution.
 
 SkyRL/rLLM names may still appear in legacy files. Treat that stack as retired
@@ -279,6 +280,25 @@ primary `category` plus multi-label `categories`; `base.summary.json` includes
 best-effort parsed and tested without changing strict scores. Do not compare
 these results directly with Aider leaderboard numbers; use Aider's benchmark
 harness for that.
+
+## Optional Side Benchmark: Multi-SWE C++ Base Eval
+
+Question:
+
+> How does the base Moonlight checkpoint perform on Multi-SWE-bench mini C++
+> issue-resolution instances under a repo-owned SLIME rollout-only harness?
+
+This benchmark is separate from the active PIE optimization training proof. It
+uses single unified-diff patch prompts, dataset `test_patch` application,
+forbidden-path preflight, and repository-specific C++ tests, not PIE `v0 -> v1`
+speed reward and not the official Multi-SWE evaluator. The canonical operator
+flow is `examples/slime/moonlight_multi_swe_cpp/README.md`; this roadmap keeps
+only the decision point.
+
+Decision gate: inspect `eval/base.records.jsonl`, `eval/base.summary.json`, and
+`stages/base-eval/run_receipt.txt`. Keep Multi-SWE C++ results separate from
+PIE uplift claims, Polyglot C++ results, and official Multi-SWE leaderboard
+numbers.
 
 ## Stage 4: Run SFT
 

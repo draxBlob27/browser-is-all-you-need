@@ -199,6 +199,19 @@ bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
 bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 ```
 
+Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
+training and not an official Multi-SWE leaderboard run; it is a repo-owned
+SLIME rollout-only eval of base Moonlight on C++ issue-resolution tasks from
+`ByteDance-Seed/Multi-SWE-bench_mini`. Keep detailed setup, response contract,
+artifact fields, repo summaries, and `recovered_*` diagnostics in
+`examples/slime/moonlight_multi_swe_cpp/README.md` instead of duplicating them
+across repo-wide docs:
+
+```bash
+bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
+bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh
+```
+
 Moonlight rank-16 LoRA C++ lane:
 
 ```bash
@@ -332,6 +345,7 @@ scripts/wandb_milestone.py                   standalone pipeline-milestone logge
 examples/slime/moonlight_cpp_perf/           active Moonlight C++ lane
 examples/slime/moonlight_lora_cpp_perf/      rank-16 LoRA Moonlight C++ lane
 examples/slime/moonlight_polyglot_cpp/       optional Moonlight base eval on Aider Polyglot C++
+examples/slime/moonlight_multi_swe_cpp/      optional Moonlight base eval on Multi-SWE C++
 examples/slime/glm47_cpp_perf/               active GLM C++ lane when present
 examples/slime/glm47_swe_agent_cpp_perf/     agentic SWE-agent file-state C++ lane
 examples/slime/retool/                       Moonlight ReTool lane
@@ -347,6 +361,8 @@ src/w8_biayn/slime_integration/              SLIME doctor/setup/sandbox helpers
 src/w8_biayn/integrations/slime_cpp_perf.py  SLIME C++ data/reward/eval bridge
 src/w8_biayn/integrations/slime_polyglot_cpp.py
                                              SLIME Polyglot C++ data/reward/eval bridge
+src/w8_biayn/integrations/slime_multi_swe_cpp.py
+                                             SLIME Multi-SWE C++ data/reward/eval bridge
 src/w8_biayn/integrations/slime_swe_agent_cpp_perf.py
                                              agentic SWE-agent generate() hook (file-state reward)
 src/w8_biayn/integrations/swe_agent_driver.py
