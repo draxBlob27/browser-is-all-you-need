@@ -518,6 +518,7 @@ def test_h100_grpo_prepares_hybrid_adapter() -> None:
     assert 'MILES_GRPO_ADAPTER_DIR:-${MILES_RUN_ROOT}/adapter_hybrid' in text
     assert 'scripts/strip_mtp_adapter.py' in text
     assert "--include-native" in text
+    assert "--include-training-state" not in text
 
 
 def test_h100_runtime_aligns_all_flashinfer_packages() -> None:
@@ -575,6 +576,7 @@ def test_h100_runtime_preflight_rejects_stale_or_mixed_versions() -> None:
 
 def test_strip_mtp_adapter_filters_served_layers_and_copies_native_state(tmp_path) -> None:
     module = runpy.run_path("scripts/strip_mtp_adapter.py")
+    clear_generated_outputs = module["clear_generated_outputs"]
     copy_native_state = module["copy_native_state"]
     filter_served_layers = module["filter_served_layers"]
 
@@ -597,10 +599,24 @@ def test_strip_mtp_adapter_filters_served_layers_and_copies_native_state(tmp_pat
     (src / "adapter_megatron_tp0_pp0.pt").write_bytes(b"native")
     (src / "training_state_rank0.pt").write_bytes(b"state")
     (src / "ignore.txt").write_text("ignore")
-    copied = copy_native_state(src, dst)
-    assert [path.name for path in copied] == ["adapter_megatron_tp0_pp0.pt", "training_state_rank0.pt"]
+    (dst / "training_state_rank7.pt").write_bytes(b"stale")
+    (dst / "keep.txt").write_text("keep")
+
+    removed = clear_generated_outputs(dst)
+    assert [path.name for path in removed] == ["training_state_rank7.pt"]
+
+    native, training_state = copy_native_state(src, dst)
+    assert [path.name for path in native] == ["adapter_megatron_tp0_pp0.pt"]
+    assert training_state == []
     assert (dst / "adapter_megatron_tp0_pp0.pt").read_bytes() == b"native"
+    assert not (dst / "training_state_rank0.pt").exists()
+    assert (dst / "keep.txt").read_text() == "keep"
     assert not (dst / "ignore.txt").exists()
+
+    native, training_state = copy_native_state(src, dst, include_training_state=True)
+    assert [path.name for path in native] == ["adapter_megatron_tp0_pp0.pt"]
+    assert [path.name for path in training_state] == ["training_state_rank0.pt"]
+    assert (dst / "training_state_rank0.pt").read_bytes() == b"state"
 
 
 def test_grpo_runner_save_interval_is_configurable() -> None:

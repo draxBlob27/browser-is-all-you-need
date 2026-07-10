@@ -6,6 +6,13 @@ the raw adapter fails with an index-out-of-range. Usage:
 
     python scripts/strip_mtp_adapter.py <trainer_adapter_dir> <serve_dir>
     python scripts/strip_mtp_adapter.py --include-native <trainer_adapter_dir> <hybrid_dir>
+    python scripts/strip_mtp_adapter.py --include-native --include-training-state \
+        <same_stage_checkpoint_dir> <resume_dir>
+
+``--include-native`` is suitable for cross-stage warm starts: it copies the
+Megatron adapter shards but deliberately leaves optimizer, scheduler, and
+iteration state behind. Use ``--include-training-state`` only for a same-stage
+resume with an identical optimizer/scheduler contract.
 """
 
 import argparse
@@ -18,6 +25,13 @@ from typing import Any
 
 
 _LAYER_PATTERN = re.compile(r"\.layers\.(\d+)\.")
+_GENERATED_PATTERNS = (
+    "adapter_model.bin",
+    "adapter_config.json",
+    "mtp_strip_manifest.json",
+    "adapter_megatron_tp*_pp*.pt",
+    "training_state_rank*.pt",
+)
 
 
 def filter_served_layers(state_dict: dict[str, Any], *, num_layers: int) -> tuple[dict[str, Any], list[str]]:
@@ -32,14 +46,34 @@ def filter_served_layers(state_dict: dict[str, Any], *, num_layers: int) -> tupl
     return kept, dropped
 
 
-def copy_native_state(src: Path, dst: Path) -> list[Path]:
-    copied = []
-    for pattern in ("adapter_megatron_tp*_pp*.pt", "training_state_rank*.pt"):
-        for source in sorted(src.glob(pattern)):
+def clear_generated_outputs(dst: Path) -> list[Path]:
+    removed = []
+    for pattern in _GENERATED_PATTERNS:
+        for target in sorted(dst.glob(pattern)):
+            target.unlink()
+            removed.append(target)
+    return removed
+
+
+def copy_native_state(
+    src: Path,
+    dst: Path,
+    *,
+    include_training_state: bool = False,
+) -> tuple[list[Path], list[Path]]:
+    native_files = []
+    for source in sorted(src.glob("adapter_megatron_tp*_pp*.pt")):
+        target = dst / source.name
+        shutil.copy2(source, target)
+        native_files.append(target)
+
+    training_state_files = []
+    if include_training_state:
+        for source in sorted(src.glob("training_state_rank*.pt")):
             target = dst / source.name
             shutil.copy2(source, target)
-            copied.append(target)
-    return copied
+            training_state_files.append(target)
+    return native_files, training_state_files
 
 
 def _sha256(path: Path) -> str:
@@ -56,7 +90,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("dst")
     parser.add_argument("--num-layers", type=int, default=47)
     parser.add_argument("--include-native", action="store_true")
+    parser.add_argument("--include-training-state", action="store_true")
     args = parser.parse_args(argv)
+    if args.include_training_state and not args.include_native:
+        parser.error("--include-training-state requires --include-native")
 
     import torch
 
@@ -65,6 +102,7 @@ def main(argv: list[str] | None = None) -> None:
     if src == dst:
         raise SystemExit("source and destination adapter directories must differ")
     dst.mkdir(parents=True, exist_ok=True)
+    removed_files = clear_generated_outputs(dst)
 
     source_model = src / "adapter_model.bin"
     output_model = dst / "adapter_model.bin"
@@ -72,7 +110,14 @@ def main(argv: list[str] | None = None) -> None:
     kept, dropped = filter_served_layers(state_dict, num_layers=args.num_layers)
     torch.save(kept, output_model)
     shutil.copy2(src / "adapter_config.json", dst / "adapter_config.json")
-    native_files = copy_native_state(src, dst) if args.include_native else []
+    if args.include_native:
+        native_files, training_state_files = copy_native_state(
+            src,
+            dst,
+            include_training_state=args.include_training_state,
+        )
+    else:
+        native_files, training_state_files = [], []
 
     manifest = {
         "source": str(src),
@@ -84,6 +129,10 @@ def main(argv: list[str] | None = None) -> None:
         "source_adapter_model_sha256": _sha256(source_model),
         "output_adapter_model_sha256": _sha256(output_model),
         "native_files": {path.name: _sha256(path) for path in native_files},
+        "training_state_files": {
+            path.name: _sha256(path) for path in training_state_files
+        },
+        "removed_stale_files": [path.name for path in removed_files],
     }
     (dst / "mtp_strip_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(f"kept {len(kept)}/{len(state_dict)} tensors (stripped {len(dropped)} MTP tensors)")

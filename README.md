@@ -88,9 +88,11 @@ bash examples/miles/glm47_cpp_perf_lora_r16_h100_grpo.sh
 
 When `MILES_LORA_ADAPTER_PATH` points at a trainer adapter, the H100 GRPO
 wrapper creates `${MILES_RUN_ROOT}/adapter_hybrid`: Megatron-native shards and
-training state are copied unchanged, while the HF serving file is stripped of
-layer-47 MTP tensors. Set `MILES_AUTO_PREPARE_GRPO_ADAPTER=0` only when the
-supplied directory is already a verified hybrid adapter.
+the MTP-stripped HF serving file are copied, while SFT optimizer, scheduler,
+and iteration state are intentionally excluded so GRPO starts a fresh stage.
+`scripts/strip_mtp_adapter.py --include-training-state` is reserved for an
+identical same-stage resume. Set `MILES_AUTO_PREPARE_GRPO_ADAPTER=0` only when
+the supplied directory is already a verified hybrid adapter.
 
 If DeepEP is unavailable in a specific container, fall back without changing
 the script:
