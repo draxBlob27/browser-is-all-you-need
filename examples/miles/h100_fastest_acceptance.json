@@ -31,7 +31,9 @@
     "minimum_final_independent_process_pairs": 4,
     "minimum_measured_steps_per_leg": 12,
     "minimum_vram_headroom_mib": 4096,
-    "early_stop_minimum_throughput_retention": 0.98,
+    "early_stop_minimum_estimated_mfu_retention": 0.98,
+    "early_stop_minimum_actor_throughput_retention": 0.98,
+    "early_stop_policy": "reject after A1/B1 when either aggregate process-pair metric ratio is below 0.98",
     "require_fixed_workload": true,
     "require_finite_loss_and_grad_norm": true,
     "require_verified_timing": true,
@@ -45,6 +47,7 @@
   "fixed_workload": {
     "dataset_rows": 128,
     "dataset_sha256": "f1f5f70b1e77dbb6da51d075a35b2e48f784f4080873f356c9c4bd3c83a3d783",
+    "dataset_manifest_sha256": "5d72f758320b4373b61d2008dadbbdf459eb8749c93d5c81b43a4f8415ce00a7",
     "sequence_length": 4096,
     "global_batch_size": 32,
     "rollout_batch_size": 32,
@@ -74,6 +77,7 @@
       "scripts/h100_research_sentry.py",
       "scripts/h100_sign_research_artifact.py",
       "scripts/lium_create_h100_pod.py",
+      "scripts/lium_terminate_h100_pod.py",
       "scripts/reconstruct_issue31_train_data.py",
       "scripts/run_lium_h100_tranche.py",
       "scripts/run_miles_h100_dispatcher_abba.py",
@@ -82,6 +86,7 @@
       "tests/test_h100_research_sentry.py",
       "tests/test_h100_sign_research_artifact.py",
       "tests/test_lium_create_h100_pod.py",
+      "tests/test_lium_terminate_h100_pod.py",
       "tests/test_lium_h100_tranche.py",
       "tests/test_miles_h100_dispatcher_abba.py",
       "tests/test_reconstruct_issue31_train_data.py"
@@ -95,7 +100,7 @@
     "hf_model": "zai-org/GLM-4.7-Flash",
     "hf_revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
     "lium_cli_version": "0.0.3",
-    "lium_provider_version": "1.1.0"
+    "lium_provider_version": "1.2.0"
   },
   "current_experiment": {
     "issue": "https://github.com/tokenbender/browser-is-all-you-need/issues/32",
@@ -154,6 +159,8 @@
   "budget": {
     "tranche_id": "T1",
     "maximum_node_hours": 2.0,
+    "first_pair_deadline_seconds_from_allocation_start": 3600,
+    "immediate_termination_receipt_required": true,
     "maximum_usd": 36.0,
     "expected_node_hourly_rate_usd": 18.0,
     "unused_budget_transfer_allowed": false,
@@ -168,6 +175,8 @@
     "maximum_provider_ttl_seconds": 7200,
     "maximum_gate1_ttl_seconds": 1800,
     "provider_credential_transport": "stdin-line/v1",
+    "supervisor_shutdown_script": "scripts/lium_terminate_h100_pod.py",
+    "termination_receipt_schema": "lium-h100-termination-receipt/v1",
     "canonical_t1_run_root": "/tmp/w8-issue32-t1",
     "gate1_consumption_root": "/data/w8-biayn/control-plane/gate1-consumption/v1",
     "require_domain_separation": true,

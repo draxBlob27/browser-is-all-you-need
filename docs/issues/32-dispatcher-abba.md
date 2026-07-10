@@ -25,6 +25,8 @@ preflight must pass before A1 can start.
   fusion
 - exact 128-row dataset SHA-256
   `f1f5f70b1e77dbb6da51d075a35b2e48f784f4080873f356c9c4bd3c83a3d783`
+- exact launcher manifest SHA-256
+  `5d72f758320b4373b61d2008dadbbdf459eb8749c93d5c81b43a4f8415ce00a7`
 - historical sustained reference: 2.069052% estimated active-model-equivalent
   MFU and 6,735.536 global actor tok/s
 
@@ -54,8 +56,9 @@ event and work vector.
 - Each of the two independent candidate/control process-pair aggregate ratios
   is at least 1.03 for estimated MFU and actor throughput.
 - Candidate B also exceeds 2.131124% estimated MFU and 6,937.602 actor tok/s.
-- The 98% throughput-retention threshold is an early-stop guardrail only; it
-  is not success.
+- The 98% estimated-MFU and actor-throughput retention thresholds are an
+  early-stop guardrail only; either metric below 98% rejects after A1/B1. They
+  are not success criteria.
 - Within-step and complete-workload-block intervals are diagnostic only.
 - Passing T1 authorizes only a separately budgeted T2 confirmation issue. It
   does not authorize a final performance claim or GRPO.
@@ -76,7 +79,8 @@ GRPO and independent audit follow only after that confirmation passes.
   configured power limit per H100.
 - Adapter fingerprints before update, after update, and after SGLang
   synchronization.
-- Exact OCI/Hugging Face setup attestation and model-revision marker.
+- Exact OCI/Hugging Face setup attestation, raw Docker image-inspect JSON, and
+  model-revision marker bytes.
 - Per-leg pre/post GPU and Ray/SGLang/training process-cleanliness receipts.
 - Consistent local and W&B `timing_status=verified`.
 - W&B tables, cost receipt, termination receipt, and checksummed immutable
@@ -89,7 +93,8 @@ GRPO and independent audit follow only after that confirmation passes.
   throttling.
 - Any OOM, rank failure, non-finite metric, checkpoint failure, or failure
   trace.
-- B1 paired throughput retention is below 98%; do not spend on B2/A2.
+- B1 paired estimated-MFU or actor-throughput retention is below 98%; do not
+  spend on B2/A2.
 - One paid node-hour elapses without completed valid A1 and B1.
 - Hard tranche cap or auto-termination deadline is reached.
 
@@ -97,7 +102,9 @@ GRPO and independent audit follow only after that confirmation passes.
 
 Supervisor tranche T1: at most 2.0 H100-node hours and at most USD 36 at the
 verified USD 18/hour rate. Use a two-hour TTL. Unused budget is not transferable
-to another experiment.
+to another experiment. A1/B1 has a hard one-hour deadline from allocation
+start. The supervisor must use the artifact-bound shutdown utility and retain
+its post-`lium ps` termination receipt on every terminal path.
 
 ## Notes
 

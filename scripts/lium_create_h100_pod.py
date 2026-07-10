@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, NoReturn, Sequence
 
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 OUTPUT_SCHEMA = "lium-h100-pod-create/v2"
 MAX_TTL_SECONDS = 2 * 60 * 60
 MAX_RATE_USD_PER_HOUR = Decimal("18")
@@ -29,6 +29,10 @@ MAX_POLL_INTERVAL_SECONDS = 30
 SDK_HTTP_TIMEOUT_SECONDS = 30
 RECOVERY_LOOKUP_ATTEMPTS = 2
 MAX_RECOVERY_LOOKUP_SECONDS = SDK_HTTP_TIMEOUT_SECONDS * RECOVERY_LOOKUP_ATTEMPTS
+SUCCESS_RECONCILIATION_ATTEMPTS = 3
+MIN_SUCCESSFUL_RECONCILIATION_SNAPSHOTS = 2
+RENT_MUTATION_ATTEMPT_POLICY = "single-attempt-sdk-request-boundary/v1"
+RATE_AUTHORITY = "provider_raw_price_per_gpu_x_gpu_count/v1"
 MAX_CREDENTIAL_BYTES = 4096
 _HUID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}\Z")
 _NAME_RE = re.compile(r"issue-[1-9][0-9]*-[a-z0-9][a-z0-9-]{2,62}\Z")
@@ -76,6 +80,16 @@ class ExecutorSnapshot:
     observed_gpu_rate: Decimal
 
 
+@dataclass(frozen=True)
+class RawRateEvidence:
+    executor_id: str
+    gpu_count: int
+    available_gpu_count: int
+    price_per_gpu: Decimal
+    price_per_hour: Decimal
+    authority: str = RATE_AUTHORITY
+
+
 def build_parser() -> MachineArgumentParser:
     parser = MachineArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", parser_class=MachineArgumentParser)
@@ -99,6 +113,8 @@ def build_parser() -> MachineArgumentParser:
     up.add_argument("--ssh-public-key-path", required=True)
     up.add_argument("--ssh-public-key-sha256", required=True)
     up.add_argument("--max-rate", default="18")
+    up.add_argument("--expected-observed-rate", required=True)
+    up.add_argument("--expected-rate-authority", required=True)
     up.add_argument("--ports", type=int)
     up.add_argument("--poll-timeout", type=int, default=240)
     up.add_argument("--poll-interval", type=int, default=5)
@@ -296,7 +312,14 @@ def create_h100_pod(
 ) -> dict[str, Any]:
     max_rate = _parse_rate(args.max_rate, "max-rate")
     initial = _resolve_executor_by_huid(client, args.executor_huid)
-    _validate_executor(initial, args.executor_huid, max_rate, allow_unknown_from_ls=True)
+    initial_rate = _raw_executor_rate(client, initial.id)
+    _validate_executor(
+        initial,
+        args.executor_huid,
+        max_rate,
+        rate_evidence=initial_rate,
+        allow_unknown_from_ls=True,
+    )
     try:
         fresh_object = client.get_executor(initial.id)
     except Exception as exc:
@@ -306,14 +329,34 @@ def create_h100_pod(
     if fresh_object is None:
         raise ProviderFailure("executor_revalidation_failed", "Executor disappeared")
     fresh = _executor_snapshot(fresh_object)
-    _validate_executor(fresh, args.executor_huid, max_rate, allow_unknown_from_ls=True)
-    if fresh != initial:
+    fresh_rate = _raw_executor_rate(client, fresh.id)
+    _validate_executor(
+        fresh,
+        args.executor_huid,
+        max_rate,
+        rate_evidence=fresh_rate,
+        allow_unknown_from_ls=True,
+    )
+    if fresh != initial or fresh_rate != initial_rate:
         raise ProviderFailure("executor_changed", "Executor properties changed during validation")
+    expected_observed_rate = _parse_rate(args.expected_observed_rate, "expected-observed-rate")
+    if fresh_rate.price_per_hour != expected_observed_rate:
+        raise ProviderFailure(
+            "executor_rate_changed_from_signed_observation",
+            "Raw executor rate no longer matches the signed observation",
+        )
 
     template = _resolve_template(client, fresh, args)
     preexisting_pod_ids = _snapshot_active_pod_ids(client, args.name)
+    launch_rate = _raw_executor_rate(client, fresh.id)
+    if launch_rate != fresh_rate or launch_rate.price_per_hour != expected_observed_rate:
+        raise ProviderFailure(
+            "executor_rate_changed_before_mutation",
+            "Raw executor rate changed before the rent mutation",
+        )
     try:
-        created = client.up(
+        created = _single_attempt_provider_up(
+            client,
             executor_id=fresh.id,
             name=args.name,
             template_id=str(template.id),
@@ -390,6 +433,11 @@ def create_h100_pod(
             "Ready pod validation failed; created pod cleanup was attempted",
             details={"pod_id": pod_id, "cleanup": cleanup},
         ) from exc
+    create_reconciliation = _reconcile_successful_creation(
+        client,
+        allocation_name=args.name,
+        expected_pod_id=pod_id,
+    )
 
     return {
         "schema": OUTPUT_SCHEMA,
@@ -406,15 +454,19 @@ def create_h100_pod(
             "gpu_count": fresh.gpu_count,
             "gpu_type": fresh.gpu_type,
             "gpu_model": fresh.gpu_model,
-            "observed_rate_usd_per_hour": float(fresh.observed_rate),
-            "observed_rate_usd_per_gpu_hour": float(fresh.observed_gpu_rate),
-            "observed_rate_status": (
-                "provider_reported_zero"
-                if fresh.observed_rate == 0
-                else "provider_reported_nonzero"
-            ),
+            "observed_rate_usd_per_hour": float(launch_rate.price_per_hour),
+            "observed_rate_usd_per_gpu_hour": float(launch_rate.price_per_gpu),
+            "observed_rate_status": "provider_reported_nonzero",
             "max_rate_usd_per_hour": float(max_rate),
-            "rate_authority": "signed_max_rate_cap",
+            "rate_authority": launch_rate.authority,
+            "rate_evidence": {
+                "executor_id": launch_rate.executor_id,
+                "gpu_count": launch_rate.gpu_count,
+                "available_gpu_count": launch_rate.available_gpu_count,
+                "price_per_gpu": float(launch_rate.price_per_gpu),
+                "price_per_hour": float(launch_rate.price_per_hour),
+                "pending_price_change": False,
+            },
         },
         "template": {
             "id": _clean_text(template.id),
@@ -428,6 +480,7 @@ def create_h100_pod(
             "ssh_public_key_path": args.ssh_public_key_path,
             "ssh_public_key_sha256": args.ssh_public_key_sha256,
         },
+        "create_reconciliation": create_reconciliation,
         "schedule": {
             "confirmed": True,
             "termination_time": termination_time,
@@ -457,6 +510,36 @@ def _new_lium_client(credential: bytearray) -> Any:
     return Lium(Config(api_key=api_key))
 
 
+def _single_attempt_provider_up(client: Any, **kwargs: Any) -> Any:
+    """Call the pinned SDK up path with automatic HTTP mutation retries disabled."""
+
+    request = getattr(client, "_request", None)
+    undecorated = getattr(request, "__wrapped__", None)
+    if not callable(undecorated):
+        if type(client).__module__.startswith("lium."):
+            raise ProviderFailure(
+                "sdk_mutation_boundary_unavailable",
+                "Pinned Lium SDK no longer exposes the single-attempt request boundary",
+            )
+        return client.up(**kwargs)
+
+    instance_attributes = vars(client)
+    sentinel = object()
+    previous_instance_request = instance_attributes.get("_request", sentinel)
+
+    def one_attempt(method: str, endpoint: str, *args: Any, **request_kwargs: Any) -> Any:
+        return undecorated(client, method, endpoint, *args, **request_kwargs)
+
+    client._request = one_attempt
+    try:
+        return client.up(**kwargs)
+    finally:
+        if previous_instance_request is sentinel:
+            del client._request
+        else:
+            client._request = previous_instance_request
+
+
 def _validate_arguments(args: argparse.Namespace) -> None:
     if _HUID_RE.fullmatch(args.executor_huid) is None:
         raise ProviderFailure("invalid_arguments", "executor_huid has invalid format")
@@ -467,7 +550,12 @@ def _validate_arguments(args: argparse.Namespace) -> None:
     if not args.yes:
         raise ProviderFailure("noninteractive_required", "--yes is required")
     _parse_ttl(args.ttl)
-    _parse_rate(args.max_rate, "max-rate")
+    max_rate = _parse_rate(args.max_rate, "max-rate")
+    expected_rate = _parse_rate(args.expected_observed_rate, "expected-observed-rate")
+    if expected_rate > max_rate:
+        raise ProviderFailure("invalid_arguments", "expected-observed-rate exceeds max-rate")
+    if args.expected_rate_authority != RATE_AUTHORITY:
+        raise ProviderFailure("invalid_arguments", "expected-rate-authority mismatch")
     if args.template_id is not None and _TEMPLATE_RE.fullmatch(args.template_id) is None:
         raise ProviderFailure("invalid_arguments", "template-id has invalid format")
     for field in ("template_image", "template_tag", "template_status"):
@@ -525,11 +613,63 @@ def _executor_snapshot(executor: Any) -> ExecutorSnapshot:
         raise ProviderFailure("executor_shape_invalid", "Executor metadata is incomplete") from exc
 
 
+def _raw_executor_rate(client: Any, executor_id: str) -> RawRateEvidence:
+    try:
+        response = client._request("GET", "/executors", params={"size": 1000})
+        rows = response.json()
+    except Exception as exc:
+        raise ProviderFailure(
+            "executor_rate_lookup_failed",
+            "Raw executor rate lookup failed",
+        ) from exc
+    if not isinstance(rows, list):
+        raise ProviderFailure("executor_rate_shape_invalid", "Raw executor list is malformed")
+    matches = [row for row in rows if isinstance(row, Mapping) and row.get("id") == executor_id]
+    if len(matches) != 1:
+        raise ProviderFailure(
+            "executor_rate_not_unique",
+            "Expected exactly one raw rate record for the executor",
+        )
+    row = matches[0]
+    try:
+        gpu_count = int(row.get("gpu_count"))
+        available_gpu_count = int(row.get("available_gpu_count"))
+    except (TypeError, ValueError) as exc:
+        raise ProviderFailure(
+            "executor_rate_shape_invalid",
+            "Raw executor GPU availability is malformed",
+        ) from exc
+    price_per_gpu = _decimal(row.get("price_per_gpu"), "price_per_gpu")
+    if row.get("pending_price_per_hour") is not None or row.get("price_change_effective_date"):
+        raise ProviderFailure(
+            "executor_rate_change_pending",
+            "Executor has a pending rate change",
+        )
+    if gpu_count != 8 or available_gpu_count < 8:
+        raise ProviderFailure(
+            "executor_raw_availability_mismatch",
+            "Raw executor record does not prove eight available GPUs",
+        )
+    if price_per_gpu <= 0:
+        raise ProviderFailure(
+            "executor_rate_invalid",
+            "Raw executor price_per_gpu must be positive",
+        )
+    return RawRateEvidence(
+        executor_id=executor_id,
+        gpu_count=gpu_count,
+        available_gpu_count=available_gpu_count,
+        price_per_gpu=price_per_gpu,
+        price_per_hour=price_per_gpu * Decimal(gpu_count),
+    )
+
+
 def _validate_executor(
     executor: ExecutorSnapshot,
     expected_huid: str,
     max_rate: Decimal,
     *,
+    rate_evidence: RawRateEvidence,
     allow_unknown_from_ls: bool = False,
 ) -> None:
     if not executor.id or executor.huid != expected_huid:
@@ -543,10 +683,14 @@ def _validate_executor(
     )
     if not status_is_eligible:
         raise ProviderFailure("executor_unavailable", "Executor is not available")
-    if not Decimal("0") <= executor.observed_rate <= max_rate:
+    if rate_evidence.executor_id != executor.id or rate_evidence.gpu_count != executor.gpu_count:
+        raise ProviderFailure("executor_rate_identity_mismatch", "Raw rate identity mismatch")
+    if not Decimal("0") < rate_evidence.price_per_hour <= max_rate:
         raise ProviderFailure("executor_rate_exceeded", "Observed node rate exceeds cap")
-    if executor.observed_gpu_rate < 0:
-        raise ProviderFailure("executor_rate_invalid", "Observed GPU rate is invalid")
+    if executor.observed_rate < 0 or executor.observed_gpu_rate < 0:
+        raise ProviderFailure("executor_rate_invalid", "SDK-mapped executor rate is invalid")
+    if executor.observed_rate not in {Decimal("0"), rate_evidence.price_per_hour}:
+        raise ProviderFailure("executor_rate_mapping_mismatch", "SDK and raw node rates disagree")
 
 
 def _resolve_template(client: Any, executor: ExecutorSnapshot, args: argparse.Namespace) -> Any:
@@ -692,6 +836,99 @@ def _raise_after_ambiguous_creation(
             details=cleanup,
         )
     raise ProviderFailure(confirmed_error, confirmed_message, details=cleanup)
+
+
+def _named_pod_snapshot(
+    client: Any,
+    allocation_name: str,
+) -> tuple[dict[str, Any], bool]:
+    matches: dict[str, Any] = {}
+    attribution_ambiguous = False
+    for pod in _list_active_pods(client):
+        if _clean_text(_pod_field(pod, "name")) != allocation_name:
+            continue
+        pod_id = _clean_text(_pod_field(pod, "id"))
+        if not pod_id or pod_id in matches:
+            attribution_ambiguous = True
+            continue
+        matches[pod_id] = pod
+    return matches, attribution_ambiguous
+
+
+def _reconcile_successful_creation(
+    client: Any,
+    *,
+    allocation_name: str,
+    expected_pod_id: str,
+) -> dict[str, Any]:
+    """Prove SDK retries did not leave another paid pod with the signed name."""
+
+    observed: dict[str, Any] = {}
+    lookup_failures = 0
+    successful_snapshots = 0
+    attribution_ambiguous = False
+    final_ids: list[str] = []
+    for _ in range(SUCCESS_RECONCILIATION_ATTEMPTS):
+        try:
+            matches, ambiguous = _named_pod_snapshot(client, allocation_name)
+        except Exception:
+            lookup_failures += 1
+            continue
+        successful_snapshots += 1
+        attribution_ambiguous = attribution_ambiguous or ambiguous
+        observed.update(matches)
+        final_ids = sorted(matches)
+        duplicate_ids = sorted(set(matches) - {expected_pod_id})
+        for pod_id in duplicate_ids:
+            try:
+                client.down(matches[pod_id])
+            except Exception:
+                pass
+        if (
+            not attribution_ambiguous
+            and successful_snapshots >= MIN_SUCCESSFUL_RECONCILIATION_SNAPSHOTS
+            and final_ids == [expected_pod_id]
+        ):
+            observed_duplicates = sorted(set(observed) - {expected_pod_id})
+            return {
+                "status": "CONFIRMED_UNIQUE",
+                "rent_mutation_attempt_policy": RENT_MUTATION_ATTEMPT_POLICY,
+                "allocation_name": allocation_name,
+                "pod_id": expected_pod_id,
+                "successful_snapshots": successful_snapshots,
+                "lookup_failures": lookup_failures,
+                "final_active_pod_ids": final_ids,
+                "observed_duplicate_pod_ids": observed_duplicates,
+                "duplicate_cleanup_status": (
+                    "CONFIRMED" if observed_duplicates else "NOT_REQUIRED"
+                ),
+            }
+
+    cleanup_failed = False
+    cleanup_ids = set(observed) | {expected_pod_id}
+    for pod_id in sorted(cleanup_ids):
+        target = observed.get(pod_id, PodHandle(pod_id))
+        try:
+            client.down(target)
+        except Exception:
+            cleanup_failed = True
+    raise ProviderFailure(
+        "pod_create_reconciliation_unconfirmed",
+        "Successful create did not prove one unique allocation; cleanup was attempted",
+        details={
+            "expected_pod_id": expected_pod_id,
+            "allocation_name": allocation_name,
+            "successful_snapshots": successful_snapshots,
+            "lookup_failures": lookup_failures,
+            "attribution_ambiguous": attribution_ambiguous,
+            "final_active_pod_ids": final_ids,
+            "observed_named_pod_ids": sorted(observed),
+            "cleanup": _cleanup_details(
+                "UNCONFIRMED" if cleanup_failed else "CONFIRMED",
+                sorted(cleanup_ids),
+            ),
+        },
+    )
 
 
 def _validate_ready_pod(

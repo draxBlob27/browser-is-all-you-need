@@ -198,7 +198,7 @@ _INTENT_DESCRIPTOR_FIELDS = frozenset({"path", "sha256"})
 _INTENT_PAYLOAD_FIELDS = {
     "source": frozenset({"schema", "repo_sha", "training_base_sha", "acceptance_contract_sha256"}),
     "runtime": frozenset({"schema", "miles_sha", "megatron_sha", "runtime_pins"}),
-    "data": frozenset({"schema", "train_sha256", "row_count"}),
+    "data": frozenset({"schema", "train_sha256", "manifest_sha256", "row_count"}),
     "checkpoint": frozenset({"schema", "root", "layout", "hf_model", "hf_revision"}),
 }
 _RUNTIME_PIN_FIELDS = frozenset(
@@ -209,6 +209,23 @@ _RUNTIME_PIN_FIELDS = frozenset(
         "hf_revision",
         "lium_cli_version",
         "lium_provider_version",
+    }
+)
+_SETUP_ATTESTATION_FIELDS = frozenset(
+    {
+        "schema",
+        "created_at_utc",
+        "hf_checkpoint_path",
+        "hf_model",
+        "hf_revision",
+        "hf_revision_marker_path",
+        "hf_revision_marker_sha256",
+        "container_image_reference",
+        "container_image_digest",
+        "container_platform",
+        "container_image_id",
+        "container_inspection_path",
+        "container_inspection_sha256",
     }
 )
 _DECISION_DOMAINS = {
@@ -434,6 +451,7 @@ def _validate_gate0_booking_request(
     data_intent = (artifacts.get("data") or {}).get("payload") or {}
     if (
         not _valid_sha256(data_intent.get("train_sha256"))
+        or not _valid_sha256(data_intent.get("manifest_sha256"))
         or type(data_intent.get("row_count")) is not int
         or data_intent.get("row_count", 0) <= 0
     ):
@@ -1023,6 +1041,7 @@ def _reconcile_preflight_intent(
     runtime_receipt = prepared.get("runtime")
     if not isinstance(runtime_receipt, Mapping) or _integer(runtime_receipt.get("returncode")) != 0:
         reasons.append("preflight_runtime_receipt_not_successful")
+        runtime_receipt = {}
 
     data_intent = intents.get("data", {})
     data_receipt = prepared.get("data")
@@ -1035,6 +1054,12 @@ def _reconcile_preflight_intent(
         "row_count"
     ) != fixed_workload.get("dataset_rows"):
         reasons.append("preflight_data_intent_row_count_mismatch")
+    if data_intent.get("manifest_sha256") != data_receipt.get(
+        "manifest_sha256"
+    ) or data_intent.get("manifest_sha256") != fixed_workload.get(
+        "dataset_manifest_sha256"
+    ):
+        reasons.append("preflight_data_intent_manifest_hash_mismatch")
 
     checkpoint_intent = intents.get("checkpoint", {})
     checkpoint_receipt = prepared.get("checkpoint")
@@ -1047,6 +1072,16 @@ def _reconcile_preflight_intent(
         reasons.append("preflight_checkpoint_intent_model_mismatch")
     if checkpoint_intent.get("hf_revision") != runtime_pins.get("hf_revision"):
         reasons.append("preflight_checkpoint_intent_revision_mismatch")
+    setup_evidence = prepared.get("setup")
+    setup_evidence = setup_evidence if isinstance(setup_evidence, Mapping) else {}
+    reasons.extend(
+        _setup_evidence_reasons(
+            setup_evidence,
+            runtime_receipt=runtime_receipt,
+            checkpoint_receipt=checkpoint_receipt,
+            runtime_pins=runtime_pins,
+        )
+    )
     return {
         "passed": not reasons,
         "reasons": sorted(set(reasons)),
@@ -1056,6 +1091,91 @@ def _reconcile_preflight_intent(
             for name, item in artifacts.items()
         },
     }
+
+
+def _setup_evidence_reasons(
+    evidence: Mapping[str, Any],
+    *,
+    runtime_receipt: Mapping[str, Any],
+    checkpoint_receipt: Mapping[str, Any],
+    runtime_pins: Mapping[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    attestation = evidence.get("attestation")
+    attestation = attestation if isinstance(attestation, Mapping) else {}
+    if set(attestation) != _SETUP_ATTESTATION_FIELDS or attestation.get(
+        "schema"
+    ) != "w8-h100-setup-attestation/v1":
+        reasons.append("preflight_setup_attestation_schema_invalid")
+    if _parse_time(attestation.get("created_at_utc")) is None:
+        reasons.append("preflight_setup_attestation_timestamp_invalid")
+    expected_attestation = {
+        "hf_model": runtime_pins.get("hf_model"),
+        "hf_revision": runtime_pins.get("hf_revision"),
+        "container_image_reference": runtime_pins.get("container_image"),
+        "container_platform": runtime_pins.get("container_platform"),
+    }
+    if any(attestation.get(field) != value for field, value in expected_attestation.items()):
+        reasons.append("preflight_setup_attestation_runtime_pin_mismatch")
+    image_reference = str(attestation.get("container_image_reference") or "")
+    image_digest = str(attestation.get("container_image_digest") or "")
+    image_id = str(attestation.get("container_image_id") or "")
+    if (
+        re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None
+        or not image_reference.endswith(f"@{image_digest}")
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None
+    ):
+        reasons.append("preflight_setup_container_identity_invalid")
+    marker_hash = evidence.get("hf_revision_marker_sha256")
+    marker_content = evidence.get("hf_revision_marker_content")
+    if (
+        not _valid_sha256(marker_hash)
+        or marker_hash != attestation.get("hf_revision_marker_sha256")
+        or marker_content != attestation.get("hf_revision")
+    ):
+        reasons.append("preflight_setup_hf_revision_marker_mismatch")
+    inspection_hash = evidence.get("container_inspection_sha256")
+    inspection = evidence.get("container_inspection")
+    if (
+        not _valid_sha256(inspection_hash)
+        or inspection_hash != attestation.get("container_inspection_sha256")
+        or not isinstance(inspection, list)
+        or len(inspection) != 1
+        or not isinstance(inspection[0], Mapping)
+    ):
+        reasons.append("preflight_setup_container_inspection_invalid")
+    else:
+        inspection_record = inspection[0]
+        if (
+            inspection_record.get("Id") != image_id
+            or inspection_record.get("Os") != "linux"
+            or inspection_record.get("Architecture") != "amd64"
+            or not isinstance(inspection_record.get("RepoDigests"), list)
+            or image_reference not in inspection_record.get("RepoDigests", [])
+        ):
+            reasons.append("preflight_setup_container_inspection_mismatch")
+    attestation_hash = evidence.get("attestation_sha256")
+    if not _valid_sha256(attestation_hash):
+        reasons.append("preflight_setup_attestation_hash_invalid")
+    for label, receipt in (
+        ("runtime", runtime_receipt),
+        ("checkpoint", checkpoint_receipt),
+    ):
+        if (
+            receipt.get("setup_attestation_sha256") != attestation_hash
+            or receipt.get("hf_model") != attestation.get("hf_model")
+            or receipt.get("hf_revision") != attestation.get("hf_revision")
+            or receipt.get("hf_revision_marker_sha256") != marker_hash
+            or receipt.get("container_image_reference") != image_reference
+            or receipt.get("container_image_digest") != image_digest
+            or receipt.get("container_platform") != attestation.get("container_platform")
+            or receipt.get("container_image_id") != image_id
+            or receipt.get("container_inspection_sha256") != inspection_hash
+        ):
+            reasons.append(f"preflight_setup_{label}_receipt_mismatch")
+    if checkpoint_receipt.get("hf_checkpoint_path") != attestation.get("hf_checkpoint_path"):
+        reasons.append("preflight_setup_checkpoint_path_mismatch")
+    return reasons
 
 
 def evaluate_preflight(
@@ -2436,6 +2556,23 @@ def _validate_gate0_chain(
     ):
         reasons.append("gate0_provider_output_schema_or_hardware_invalid")
     if provider_schema == "lium-h100-pod-create/v2":
+        reconciliation = (
+            provider_output.get("create_reconciliation")
+            if isinstance(provider_output.get("create_reconciliation"), dict)
+            else {}
+        )
+        if (
+            reconciliation.get("status") != "CONFIRMED_UNIQUE"
+            or reconciliation.get("rent_mutation_attempt_policy")
+            != "single-attempt-sdk-request-boundary/v1"
+            or reconciliation.get("allocation_name") != allocation_name
+            or reconciliation.get("pod_id") != allocation_id
+            or reconciliation.get("final_active_pod_ids") != [allocation_id]
+            or (_integer(reconciliation.get("successful_snapshots")) or 0) < 2
+            or reconciliation.get("duplicate_cleanup_status")
+            not in {"NOT_REQUIRED", "CONFIRMED"}
+        ):
+            reasons.append("gate0_provider_unique_allocation_unproven")
         provider_template = (
             provider_output.get("template")
             if isinstance(provider_output.get("template"), dict)
@@ -2472,9 +2609,31 @@ def _validate_gate0_chain(
             reasons.append("gate0_provider_runtime_evidence_mismatch")
         if (
             executor.get("observed_rate_status") != payload.get("observed_node_hourly_rate_status")
-            or executor.get("rate_authority") != "signed_max_rate_cap"
+            or executor.get("observed_rate_status") != "provider_reported_nonzero"
+            or executor.get("rate_authority")
+            != "provider_raw_price_per_gpu_x_gpu_count/v1"
         ):
             reasons.append("gate0_provider_rate_authority_mismatch")
+        rate_evidence = (
+            executor.get("rate_evidence")
+            if isinstance(executor.get("rate_evidence"), dict)
+            else {}
+        )
+        if (
+            rate_evidence.get("executor_id") != executor.get("id")
+            or _integer(rate_evidence.get("gpu_count")) != 8
+            or (_integer(rate_evidence.get("available_gpu_count")) or 0) < 8
+            or not math.isclose(
+                _finite(rate_evidence.get("price_per_hour")) or -1.0,
+                _finite(executor.get("observed_rate_usd_per_hour")) or -2.0,
+            )
+            or not math.isclose(
+                _finite(rate_evidence.get("price_per_gpu")) or -1.0,
+                _finite(executor.get("observed_rate_usd_per_gpu_hour")) or -2.0,
+            )
+            or rate_evidence.get("pending_price_change") is not False
+        ):
+            reasons.append("gate0_provider_raw_rate_evidence_mismatch")
     expected_access = {
         "ssh_public_key_path": payload.get("ssh_public_key_path"),
         "ssh_public_key_sha256": payload.get("ssh_public_key_sha256"),
@@ -2721,6 +2880,34 @@ def _validate_preflight_request(
         _add_request_reference(result, f"request_input:{name}", reference)
         if _hash_file(reference) != manifest_hashes.get(name):
             reasons.append(f"prepare_input_{name}_hash_mismatch")
+    expected_supporting = {
+        "setup_attestation",
+        "hf_revision_marker",
+        "container_inspection",
+    }
+    supporting_artifacts = manifest.get("supporting_artifacts")
+    supporting_hashes = manifest.get("supporting_sha256")
+    if not isinstance(supporting_artifacts, dict) or set(
+        supporting_artifacts
+    ) != expected_supporting:
+        reasons.append("prepare_manifest_supporting_artifact_map_invalid")
+        supporting_artifacts = {}
+    if not _valid_hash_map(supporting_hashes, expected_supporting):
+        reasons.append("prepare_manifest_supporting_hash_map_invalid")
+        supporting_hashes = {}
+    supporting_resolved: dict[str, Path] = {}
+    for name in sorted(expected_supporting):
+        reference = _resolve_request_reference(
+            manifest_path.parent,
+            supporting_artifacts.get(name),
+        )
+        if reference is None:
+            reasons.append(f"prepare_supporting_{name}_missing")
+            continue
+        supporting_resolved[name] = reference
+        _add_request_reference(result, f"request_supporting:{name}", reference)
+        if _hash_file(reference) != supporting_hashes.get(name):
+            reasons.append(f"prepare_supporting_{name}_hash_mismatch")
     prepared_evidence: dict[str, dict[str, Any]] = {}
     for name in ("source", "runtime", "data", "checkpoint", "protocol"):
         reference = resolved.get(name)
@@ -2730,6 +2917,24 @@ def _validate_preflight_request(
             prepared_evidence[name] = read_json(reference)
         except (OSError, ValueError, json.JSONDecodeError):
             reasons.append(f"prepare_{name}_receipt_malformed")
+    try:
+        setup_attestation = read_json(supporting_resolved["setup_attestation"])
+        marker_content = supporting_resolved["hf_revision_marker"].read_text(
+            encoding="utf-8"
+        ).strip()
+        container_inspection = json.loads(
+            supporting_resolved["container_inspection"].read_text(encoding="utf-8")
+        )
+        prepared_evidence["setup"] = {
+            "attestation": setup_attestation,
+            "attestation_sha256": supporting_hashes.get("setup_attestation"),
+            "hf_revision_marker_sha256": supporting_hashes.get("hf_revision_marker"),
+            "hf_revision_marker_content": marker_content,
+            "container_inspection_sha256": supporting_hashes.get("container_inspection"),
+            "container_inspection": container_inspection,
+        }
+    except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        reasons.append("prepare_setup_supporting_evidence_malformed")
     if not _same_path(resolved.get("hardware"), hardware_path):
         reasons.append("preflight_request_hardware_path_mismatch")
     if not _same_path(resolved.get("budget"), budget_path):
@@ -2749,8 +2954,17 @@ def _validate_preflight_request(
     }
     if result.get("source_identity") != hardware_source:
         reasons.append("preflight_request_hardware_source_mismatch")
+    expected_request_prepared = {
+        name: prepared_evidence.get(name)
+        for name in ("source", "runtime", "data", "checkpoint", "setup")
+    }
+    if payload.get("prepared_evidence") != expected_request_prepared:
+        reasons.append("preflight_request_prepared_evidence_mismatch")
     result["prepared_evidence"] = prepared_evidence
-    result["prepared_paths"] = {name: str(path) for name, path in resolved.items()}
+    result["prepared_paths"] = {
+        **{name: str(path) for name, path in resolved.items()},
+        **{f"supporting:{name}": str(path) for name, path in supporting_resolved.items()},
+    }
     result["passed"] = not reasons
     result["reasons"] = sorted(set(reasons))
     return result
@@ -3055,6 +3269,8 @@ def _validate_runner_evidence_manifest(
         "gpu_telemetry",
         "nvlink_before",
         "nvlink_after",
+        "process_cleanliness_before",
+        "process_cleanliness_after",
         "wandb_readback",
         "wandb_evidence_summary",
         "wandb_artifact_manifest",
@@ -3076,17 +3292,81 @@ def _validate_runner_evidence_manifest(
         reasons.append(f"screen_{leg_id}_evidence_constituent_hashes_invalid")
         hashes = {}
     inputs: list[tuple[str, Path]] = []
+    resolved: dict[str, Path] = {}
     for name in sorted(expected_names):
         reference = _resolve_request_reference(path.parent, paths.get(name))
         if reference is None:
             reasons.append(f"screen_{leg_id}_{name}_missing")
             continue
+        resolved[name] = reference
         inputs.append((f"request_evidence:{leg_id}:{name}", reference))
         if _hash_file(reference) != hashes.get(name):
             reasons.append(f"screen_{leg_id}_{name}_hash_mismatch")
         if name == "trial_summary" and not _same_path(reference, expected_trial):
             reasons.append(f"screen_{leg_id}_manifest_trial_path_mismatch")
+    reasons.extend(_process_cleanliness_evidence_reasons(resolved, leg_id=leg_id))
     return reasons, inputs
+
+
+def _process_cleanliness_evidence_reasons(
+    resolved: Mapping[str, Path],
+    *,
+    leg_id: str,
+) -> list[str]:
+    reasons: list[str] = []
+    receipts: dict[str, Mapping[str, Any]] = {}
+    timestamps: dict[str, datetime | None] = {}
+    required_fields = {
+        "schema",
+        "checked_at_utc",
+        "ok",
+        "errors",
+        "gpu_process_inventory",
+        "relevant_processes",
+        "commands",
+    }
+    for position in ("before", "after"):
+        path = resolved.get(f"process_cleanliness_{position}")
+        try:
+            payload = read_json(path) if path is not None else {}
+        except (OSError, ValueError, json.JSONDecodeError):
+            payload = {}
+        receipts[position] = payload if isinstance(payload, Mapping) else {}
+        timestamps[position] = _parse_time(receipts[position].get("checked_at_utc"))
+        commands = receipts[position].get("commands")
+        if (
+            set(receipts[position]) != required_fields
+            or receipts[position].get("schema") != "h100-process-cleanliness/v1"
+            or timestamps[position] is None
+            or receipts[position].get("ok") is not True
+            or receipts[position].get("errors") != []
+            or receipts[position].get("gpu_process_inventory") != []
+            or receipts[position].get("relevant_processes") != []
+            or not isinstance(commands, Mapping)
+            or _integer(commands.get("gpu_process_inventory_returncode")) != 0
+            or _integer(commands.get("process_inventory_returncode")) != 0
+        ):
+            reasons.append(f"screen_{leg_id}_process_cleanliness_{position}_invalid")
+    run_receipt_path = resolved.get("run_receipt")
+    try:
+        run_receipt = read_key_value(run_receipt_path) if run_receipt_path is not None else {}
+    except OSError:
+        run_receipt = {}
+    started = _parse_time(run_receipt.get("run_started_at_utc"))
+    finished = _parse_time(run_receipt.get("run_finished_at_utc"))
+    before = timestamps.get("before")
+    after = timestamps.get("after")
+    if (
+        started is None
+        or finished is None
+        or before is None
+        or after is None
+        or not before <= started <= after <= finished
+        or (started - before).total_seconds() > 300
+        or (finished - after).total_seconds() > 300
+    ):
+        reasons.append(f"screen_{leg_id}_process_cleanliness_timeline_invalid")
+    return reasons
 
 
 def _valid_hash_map(value: Any, expected_keys: set[str]) -> bool:
@@ -3188,12 +3468,31 @@ def _validate_contract(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
         (
             math.isclose(
                 _finite(
-                    (payload.get("acceptance") or {}).get("early_stop_minimum_throughput_retention")
+                    (payload.get("acceptance") or {}).get(
+                        "early_stop_minimum_estimated_mfu_retention"
+                    )
                 )
                 or 0,
                 0.98,
             ),
-            "contract_early_stop_mismatch",
+            "contract_early_stop_mfu_mismatch",
+        ),
+        (
+            math.isclose(
+                _finite(
+                    (payload.get("acceptance") or {}).get(
+                        "early_stop_minimum_actor_throughput_retention"
+                    )
+                )
+                or 0,
+                0.98,
+            ),
+            "contract_early_stop_throughput_mismatch",
+        ),
+        (
+            (payload.get("acceptance") or {}).get("early_stop_policy")
+            == "reject after A1/B1 when either aggregate process-pair metric ratio is below 0.98",
+            "contract_early_stop_policy_mismatch",
         ),
         (
             (payload.get("source_pins") or {}).get("training_base_sha") == policy.training_base_sha,
@@ -3221,6 +3520,33 @@ def _validate_contract(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
         (
             _integer((payload.get("current_experiment") or {}).get("measured_steps_per_leg")) == 14,
             "contract_measured_observations_mismatch",
+        ),
+        (
+            _integer(
+                (payload.get("budget") or {}).get(
+                    "first_pair_deadline_seconds_from_allocation_start"
+                )
+            )
+            == 3600,
+            "contract_first_pair_deadline_mismatch",
+        ),
+        (
+            _valid_sha256(
+                (payload.get("fixed_workload") or {}).get("dataset_manifest_sha256")
+            ),
+            "contract_dataset_manifest_hash_missing",
+        ),
+        (
+            (payload.get("budget") or {}).get("immediate_termination_receipt_required")
+            is True,
+            "contract_termination_receipt_requirement_missing",
+        ),
+        (
+            (payload.get("authorization") or {}).get("supervisor_shutdown_script")
+            == "scripts/lium_terminate_h100_pod.py"
+            and (payload.get("authorization") or {}).get("termination_receipt_schema")
+            == "lium-h100-termination-receipt/v1",
+            "contract_shutdown_control_mismatch",
         ),
         (
             {"auditor_key_id", "parent_decision_sha256"}.issubset(

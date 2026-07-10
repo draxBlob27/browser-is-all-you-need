@@ -61,11 +61,15 @@ GATE1_CONSUMPTION_ROOT = Path("/data/w8-biayn/control-plane/gate1-consumption/v1
 SETUP_ATTESTATION_PATH = Path(
     "/data/w8-biayn/control-plane/setup/issue32-t1-setup-attestation.json"
 )
+CONTAINER_INSPECTION_PATH = Path(
+    "/data/w8-biayn/control-plane/setup/issue32-t1-container-inspect.json"
+)
 SETUP_ATTESTATION_SCHEMA = "w8-h100-setup-attestation/v1"
 HF_REVISION_MARKER_PATH = HF_CHECKPOINT / ".w8-hf-revision"
 
 TRAINING_BASE_SHA = "cd83e3c8780f09e38e5b58558d84580e74afbcf6"
 TRAIN_SHA256 = "f1f5f70b1e77dbb6da51d075a35b2e48f784f4080873f356c9c4bd3c83a3d783"
+TRAIN_MANIFEST_SHA256 = "5d72f758320b4373b61d2008dadbbdf459eb8749c93d5c81b43a4f8415ce00a7"
 TRAIN_ROW_COUNT = 128
 TOTAL_PERF_STEPS = 16
 WARMUP_STEPS = 2
@@ -75,6 +79,7 @@ EXPECTED_MEASURED_TOKEN_SIGNATURE = EXPECTED_RAW_TOKEN_SIGNATURE[2:]
 HISTORICAL_MFU_HURDLE = 2.1311238122828066
 HISTORICAL_ACTOR_TOK_S_HURDLE = 6937.602138721957
 REQUEST_LIFETIME = timedelta(hours=2)
+FIRST_PAIR_DEADLINE_SECONDS = 3600
 REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}\Z")
 HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -116,6 +121,20 @@ PER_STEP_COLUMNS = (
     "wait_ratio",
     "loss",
     "grad_norm",
+)
+LEG_EVIDENCE_NAMES = (
+    "trial_summary",
+    "leg_summary",
+    "run_log",
+    "run_receipt",
+    "gpu_telemetry",
+    "nvlink_before",
+    "nvlink_after",
+    "process_cleanliness_before",
+    "process_cleanliness_after",
+    "wandb_readback",
+    "wandb_evidence_summary",
+    "wandb_artifact_manifest",
 )
 
 
@@ -339,6 +358,9 @@ def load_setup_attestation(path: Path = SETUP_ATTESTATION_PATH) -> dict[str, Any
         "container_image_reference",
         "container_image_digest",
         "container_platform",
+        "container_image_id",
+        "container_inspection_path",
+        "container_inspection_sha256",
     }
     if set(attestation) != required or attestation.get("schema") != SETUP_ATTESTATION_SCHEMA:
         raise RuntimeError("setup attestation schema mismatch")
@@ -355,6 +377,18 @@ def load_setup_attestation(path: Path = SETUP_ATTESTATION_PATH) -> dict[str, Any
         raise RuntimeError("setup attestation container digest is invalid")
     if not container_reference.endswith(f"@{container_digest}"):
         raise RuntimeError("setup attestation container reference does not bind its digest")
+    if attestation.get("container_inspection_path") != str(CONTAINER_INSPECTION_PATH):
+        raise RuntimeError("setup attestation container inspection path mismatch")
+    inspection = load_container_inspection(
+        CONTAINER_INSPECTION_PATH,
+        expected_reference=container_reference,
+        expected_platform=str(attestation.get("container_platform") or ""),
+    )
+    if (
+        inspection["sha256"] != attestation.get("container_inspection_sha256")
+        or inspection["image_id"] != attestation.get("container_image_id")
+    ):
+        raise RuntimeError("setup attestation container inspection binding mismatch")
     runtime_pins = load_acceptance_contract().get("runtime_pins", {})
     expected = {
         "hf_model": runtime_pins.get("hf_model"),
@@ -371,6 +405,57 @@ def load_setup_attestation(path: Path = SETUP_ATTESTATION_PATH) -> dict[str, Any
     if HF_REVISION_MARKER_PATH.read_text(encoding="utf-8").strip() != attestation["hf_revision"]:
         raise RuntimeError("HF revision marker content mismatch")
     return attestation
+
+
+def load_container_inspection(
+    path: Path,
+    *,
+    expected_reference: str,
+    expected_platform: str,
+) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"container inspection is missing or malformed: {exc}") from exc
+    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+        raise RuntimeError("container inspection must be one raw Docker inspect record")
+    record = payload[0]
+    expected_os, separator, expected_arch = expected_platform.partition("/")
+    image_id = str(record.get("Id") or "")
+    repo_digests = record.get("RepoDigests")
+    if (
+        separator != "/"
+        or expected_os != "linux"
+        or expected_arch != "amd64"
+        or record.get("Os") != expected_os
+        or record.get("Architecture") != expected_arch
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None
+        or not isinstance(repo_digests, list)
+        or expected_reference not in repo_digests
+    ):
+        raise RuntimeError("container inspection does not prove the pinned image and platform")
+    return {
+        "sha256": _sha256(path),
+        "image_id": image_id,
+        "payload": payload,
+    }
+
+
+def setup_evidence(
+    setup: dict[str, Any],
+    *,
+    setup_path: Path,
+    marker_path: Path,
+    inspection_path: Path,
+) -> dict[str, Any]:
+    return {
+        "attestation": setup,
+        "attestation_sha256": _sha256(setup_path),
+        "hf_revision_marker_sha256": _sha256(marker_path),
+        "hf_revision_marker_content": marker_path.read_text(encoding="utf-8").strip(),
+        "container_inspection_sha256": _sha256(inspection_path),
+        "container_inspection": json.loads(inspection_path.read_text(encoding="utf-8")),
+    }
 
 
 def checkpoint_receipt(
@@ -407,6 +492,9 @@ def checkpoint_receipt(
         "container_image_reference": setup["container_image_reference"],
         "container_image_digest": setup["container_image_digest"],
         "container_platform": setup["container_platform"],
+        "container_image_id": setup["container_image_id"],
+        "container_inspection_path": setup["container_inspection_path"],
+        "container_inspection_sha256": setup["container_inspection_sha256"],
         "setup_attestation_path": str(setup_path),
         "setup_attestation_sha256": _sha256(setup_path),
     }
@@ -430,6 +518,9 @@ def runtime_receipt(
         "container_image_reference": setup["container_image_reference"],
         "container_image_digest": setup["container_image_digest"],
         "container_platform": setup["container_platform"],
+        "container_image_id": setup["container_image_id"],
+        "container_inspection_path": setup["container_inspection_path"],
+        "container_inspection_sha256": setup["container_inspection_sha256"],
         "hf_revision": setup["hf_revision"],
         "hf_revision_marker_path": setup["hf_revision_marker_path"],
         "hf_revision_marker_sha256": setup["hf_revision_marker_sha256"],
@@ -440,18 +531,33 @@ def runtime_receipt(
 
 def data_receipt() -> dict[str, Any]:
     train = DATA_DIR / "sft/train.jsonl"
+    manifest = DATA_DIR / "manifest.json"
     if not train.is_file():
         raise RuntimeError(f"fixed train data missing: {train}")
+    if not manifest.is_file():
+        raise RuntimeError(f"fixed launcher data manifest missing: {manifest}")
     with train.open("r", encoding="utf-8") as handle:
         rows = sum(1 for line in handle if line.strip())
     sha = _sha256(train)
     if sha != TRAIN_SHA256 or rows != TRAIN_ROW_COUNT:
         raise RuntimeError(f"fixed train data mismatch: sha={sha} rows={rows}")
+    manifest_sha = _sha256(manifest)
+    if manifest_sha != TRAIN_MANIFEST_SHA256:
+        raise RuntimeError(f"fixed launcher data manifest mismatch: sha={manifest_sha}")
+    manifest_payload = _read_json_object(manifest, "launcher data manifest")
+    if (
+        manifest_payload.get("profile") != "glm47-pie-profile-long128-oracle-v2"
+        or manifest_payload.get("train_count") != TRAIN_ROW_COUNT
+        or manifest_payload.get("train_sha256") != TRAIN_SHA256
+    ):
+        raise RuntimeError("fixed launcher data manifest content mismatch")
     return {
         "schema_version": 1,
         "path": str(train),
         "sha256": sha,
         "row_count": rows,
+        "manifest_path": str(manifest),
+        "manifest_sha256": manifest_sha,
     }
 
 
@@ -664,7 +770,9 @@ def build_protocol(run_root: Path) -> dict[str, Any]:
             "measured_steps": MEASURED_STEPS,
             "measured_token_signature": list(EXPECTED_MEASURED_TOKEN_SIGNATURE),
             "data_sha256": TRAIN_SHA256,
+            "data_manifest_sha256": TRAIN_MANIFEST_SHA256,
         },
+        "first_pair_deadline_seconds_from_allocation_start": FIRST_PAIR_DEADLINE_SECONDS,
         "profiles": {
             "A": {"dispatcher": "flex", "deepep": True},
             "B": {"dispatcher": "alltoall", "deepep": False},
@@ -936,7 +1044,7 @@ def collect_process_cleanliness() -> dict[str, Any]:
         errors.append("surviving_relevant_processes")
     return {
         "schema": "h100-process-cleanliness/v1",
-        "checked_at_utc": _utc_now(),
+        "checked_at_utc": _utc_timestamp(),
         "ok": not errors,
         "errors": sorted(set(errors)),
         "gpu_process_inventory": gpu_inventory,
@@ -948,7 +1056,7 @@ def collect_process_cleanliness() -> dict[str, Any]:
     }
 
 
-def _utc_now() -> str:
+def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
@@ -1122,7 +1230,12 @@ def summarize_two_warmup(
     )
 
 
-def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
+def run_leg(
+    spec: LegSpec,
+    run_root: Path,
+    *,
+    deadline_utc: datetime | None = None,
+) -> dict[str, Any]:
     controlled = controlled_leg_config(spec, run_root)
     env = build_subprocess_env(controlled)
     tranche_id = _tranche_id(run_root)
@@ -1139,16 +1252,31 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
     monitor = TelemetryMonitor(stage / "gpu_telemetry.csv")
     monitor_started = False
     launcher_exit_code = 125
+    deadline_exceeded = False
     receipt_path = stage / "run_receipt.txt"
     log_path = stage / "run.log"
-    run_started_at_utc = _utc_now()
+    run_started_at_utc = _utc_timestamp()
     try:
         monitor.start()
         monitor_started = True
         if pre_cleanup["ok"] and pre_process_cleanliness["ok"]:
-            launcher_exit_code = subprocess.run(
-                ["/bin/bash", str(RUNNER)], env=env, check=False
-            ).returncode
+            timeout_seconds = None
+            if deadline_utc is not None:
+                timeout_seconds = (deadline_utc - _utc_now()).total_seconds()
+                if timeout_seconds <= 0:
+                    deadline_exceeded = True
+                    launcher_exit_code = 124
+            if not deadline_exceeded:
+                try:
+                    launcher_exit_code = subprocess.run(
+                        ["/bin/bash", str(RUNNER)],
+                        env=env,
+                        check=False,
+                        timeout=timeout_seconds,
+                    ).returncode
+                except subprocess.TimeoutExpired:
+                    deadline_exceeded = True
+                    launcher_exit_code = 124
     finally:
         try:
             if monitor_started:
@@ -1173,7 +1301,7 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
         finally:
             post_cleanup = _ray_stop(env)
             post_process_cleanliness = collect_process_cleanliness()
-        run_finished_at_utc = _utc_now()
+        run_finished_at_utc = _utc_timestamp()
         after_nvlink = nvlink_snapshot()
         write_json(leg_root / "nvlink_after.json", after_nvlink)
         write_json(leg_root / "ray_cleanup_after.json", post_cleanup)
@@ -1218,6 +1346,11 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
         supplementary["rejection_reasons"] = sorted(
             {*supplementary["rejection_reasons"], "wandb_remote_readback_failed"}
         )
+    if deadline_exceeded or (deadline_utc is not None and _utc_now() >= deadline_utc):
+        supplementary["valid"] = False
+        supplementary["rejection_reasons"] = sorted(
+            {*supplementary["rejection_reasons"], "first_pair_deadline_exceeded"}
+        )
     write_json(leg_root / "leg_summary.json", supplementary)
     write_json(leg_root / "per_step_records.json", records)
     write_csv(leg_root / "per_step_records.csv", records, PER_STEP_COLUMNS)
@@ -1238,14 +1371,12 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
         / f"{controlled['MILES_WANDB_RUN_ID']}.artifact_manifest.json",
     }
     hashes = {name: _sha256(path) for name, path in evidence_paths.items() if path.is_file()}
-    manifest = {
-        "schema_version": 1,
-        "authority": "executor_raw_evidence",
-        "leg": spec.leg_id,
-        "paths": {name: str(path) for name, path in evidence_paths.items()},
-        "sha256": hashes,
-        "valid": supplementary["valid"],
-    }
+    manifest = build_leg_evidence_manifest(
+        spec,
+        evidence_paths=evidence_paths,
+        hashes=hashes,
+        valid=bool(supplementary["valid"]),
+    )
     write_json(leg_root / "leg_evidence_manifest.json", manifest)
     return {
         "leg_id": spec.leg_id,
@@ -1255,6 +1386,27 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
         "evidence_manifest": str(leg_root / "leg_evidence_manifest.json"),
         "evidence_manifest_sha256": _sha256(leg_root / "leg_evidence_manifest.json"),
         "valid": supplementary["valid"],
+    }
+
+
+def build_leg_evidence_manifest(
+    spec: LegSpec,
+    *,
+    evidence_paths: dict[str, Path],
+    hashes: dict[str, str],
+    valid: bool,
+) -> dict[str, Any]:
+    if set(evidence_paths) != set(LEG_EVIDENCE_NAMES) or set(hashes) != set(
+        LEG_EVIDENCE_NAMES
+    ):
+        raise RuntimeError("leg evidence is incomplete")
+    return {
+        "schema_version": 1,
+        "authority": "executor_raw_evidence",
+        "leg": spec.leg_id,
+        "paths": {name: str(evidence_paths[name]) for name in LEG_EVIDENCE_NAMES},
+        "sha256": {name: hashes[name] for name in LEG_EVIDENCE_NAMES},
+        "valid": valid,
     }
 
 
@@ -1478,6 +1630,12 @@ def _validate_gate0_chain(
     if payload.get("parent_request_sha256") != hashes["booking_request"]:
         raise RuntimeError("Gate0 permit booking-request hash mismatch")
     execution = receipt.get("execution") if isinstance(receipt.get("execution"), dict) else {}
+    try:
+        allocation_started_at = _parse_utc(
+            execution.get("started_at"), "Gate0 allocation started_at"
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"Gate0 launch receipt start time is invalid: {exc}") from exc
     if (
         receipt.get("schema") != "h100-lium-launch-receipt/v2"
         or receipt.get("status") != "COMPLETED"
@@ -1509,6 +1667,11 @@ def _validate_gate0_chain(
         raise RuntimeError("Gate0 launch receipt provider-output binding mismatch")
 
     pod = provider_output.get("pod") if isinstance(provider_output.get("pod"), dict) else {}
+    reconciliation = (
+        provider_output.get("create_reconciliation")
+        if isinstance(provider_output.get("create_reconciliation"), dict)
+        else {}
+    )
     executor = (
         provider_output.get("executor") if isinstance(provider_output.get("executor"), dict) else {}
     )
@@ -1529,6 +1692,32 @@ def _validate_gate0_chain(
         or schedule.get("confirmed") is not True
     ):
         raise RuntimeError("Gate0 provider output does not prove a running 8x H100 allocation")
+    rate_evidence = (
+        executor.get("rate_evidence") if isinstance(executor.get("rate_evidence"), dict) else {}
+    )
+    if (
+        executor.get("rate_authority") != "provider_raw_price_per_gpu_x_gpu_count/v1"
+        or executor.get("observed_rate_status") != "provider_reported_nonzero"
+        or rate_evidence.get("executor_id") != executor.get("id")
+        or rate_evidence.get("gpu_count") != 8
+        or rate_evidence.get("available_gpu_count", 0) < 8
+        or rate_evidence.get("price_per_hour") != executor.get("observed_rate_usd_per_hour")
+        or rate_evidence.get("price_per_gpu") != executor.get("observed_rate_usd_per_gpu_hour")
+        or rate_evidence.get("pending_price_change") is not False
+    ):
+        raise RuntimeError("Gate0 provider output rate authority is invalid")
+    if (
+        reconciliation.get("status") != "CONFIRMED_UNIQUE"
+        or reconciliation.get("rent_mutation_attempt_policy")
+        != "single-attempt-sdk-request-boundary/v1"
+        or reconciliation.get("allocation_name") != allocation_name
+        or reconciliation.get("pod_id") != allocation_id
+        or reconciliation.get("final_active_pod_ids") != [allocation_id]
+        or type(reconciliation.get("successful_snapshots")) is not int
+        or reconciliation["successful_snapshots"] < 2
+        or reconciliation.get("duplicate_cleanup_status") not in {"NOT_REQUIRED", "CONFIRMED"}
+    ):
+        raise RuntimeError("Gate0 provider output does not prove unique allocation reconciliation")
     try:
         requested_termination = _parse_utc(
             schedule.get("termination_time"), "provider termination_time"
@@ -1644,6 +1833,10 @@ def _validate_gate0_chain(
         "profile": payload.get("profile"),
         "executor_id": selector,
         "gate1_trust": dict(gate1_trust),
+        "allocation_started_at": _format_utc(allocation_started_at),
+        "first_pair_deadline_at": _format_utc(
+            allocation_started_at + timedelta(seconds=FIRST_PAIR_DEADLINE_SECONDS)
+        ),
     }
 
 
@@ -1661,10 +1854,14 @@ def prepare_phase(
     receipts.mkdir()
     budget_copy = run_root / "budget.json"
     setup_copy = receipts / "setup_attestation.json"
+    marker_copy = receipts / "hf_revision_marker.txt"
+    inspection_copy = receipts / "container_inspect.json"
     try:
         _copy_exact(budget_receipt, budget_copy)
         _copy_exact(SETUP_ATTESTATION_PATH, setup_copy)
         setup = load_setup_attestation(setup_copy)
+        _copy_exact(HF_REVISION_MARKER_PATH, marker_copy)
+        _copy_exact(CONTAINER_INSPECTION_PATH, inspection_copy)
         source_gate0 = {
             "permit": gate0_permit,
             "launch_receipt": gate0_launch_receipt,
@@ -1726,8 +1923,16 @@ def prepare_phase(
             "sha256": hashes,
             "gate0_artifacts": {name: str(path) for name, path in copied_gate0.items()},
             "gate0_sha256": gate0_hashes,
-            "supporting_artifacts": {"setup_attestation": str(setup_copy)},
-            "supporting_sha256": {"setup_attestation": _sha256(setup_copy)},
+            "supporting_artifacts": {
+                "setup_attestation": str(setup_copy),
+                "hf_revision_marker": str(marker_copy),
+                "container_inspection": str(inspection_copy),
+            },
+            "supporting_sha256": {
+                "setup_attestation": _sha256(setup_copy),
+                "hf_revision_marker": _sha256(marker_copy),
+                "container_inspection": _sha256(inspection_copy),
+            },
         },
     )
     if not prepare_ok:
@@ -1759,6 +1964,12 @@ def prepare_phase(
             "runtime": runtime,
             "data": data,
             "checkpoint": checkpoint,
+            "setup": setup_evidence(
+                setup,
+                setup_path=setup_copy,
+                marker_path=marker_copy,
+                inspection_path=inspection_copy,
+            ),
         },
     }
     request_path = run_root / "preflight_request.json"
@@ -1831,6 +2042,12 @@ def _verify_preflight_request(
         "data": _read_json_object(run_root / "receipts/data.json", "data receipt"),
         "checkpoint": _read_json_object(
             run_root / "receipts/checkpoint.json", "checkpoint receipt"
+        ),
+        "setup": setup_evidence(
+            _read_json_object(run_root / "receipts/setup_attestation.json", "setup attestation"),
+            setup_path=run_root / "receipts/setup_attestation.json",
+            marker_path=run_root / "receipts/hf_revision_marker.txt",
+            inspection_path=run_root / "receipts/container_inspect.json",
         ),
     }
     if request.get("prepared_evidence") != prepared_evidence:
@@ -1943,12 +2160,13 @@ def _run_pair_sequential(
     repair_state: str,
     approval_sha256: str,
     request_sha256: str,
+    deadline_utc: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     result_path = run_root / result_name
     legs: list[dict[str, Any]] = []
     for position, leg_id in enumerate(leg_ids):
         try:
-            leg = run_leg(LEG_SPECS[leg_id], run_root)
+            leg = run_leg(LEG_SPECS[leg_id], run_root, deadline_utc=deadline_utc)
         except (Exception, SystemExit) as exc:
             payload = {
                 "status": repair_state,
@@ -1966,6 +2184,9 @@ def _run_pair_sequential(
             _write_state(run_root, repair_state, failed_leg=leg_id, approval_consumed=True)
             return legs, False
         legs.append(leg)
+        if deadline_utc is not None and _utc_now() >= deadline_utc:
+            leg["valid"] = False
+            leg["deadline_exceeded"] = True
         if not leg.get("valid"):
             payload = {
                 "status": repair_state,
@@ -2058,8 +2279,12 @@ def first_pair_phase(
         repair_state="first_pair_repair_needed",
         approval_sha256=approval_sha256,
         request_sha256=request_sha256,
+        deadline_utc=_parse_utc(gate0["first_pair_deadline_at"], "first-pair deadline"),
     )
     if not complete:
+        return 1
+    if _utc_now() >= _parse_utc(gate0["first_pair_deadline_at"], "first-pair deadline"):
+        _write_state(run_root, "first_pair_repair_needed", reason="first_pair_deadline_exceeded")
         return 1
     source = _read_json_object(run_root / "receipts/source.json", "source receipt")
     request = {

@@ -67,6 +67,12 @@ stdin channel; it is never placed in argv, the subprocess environment, the
 repository, or a receipt. The launch permit also binds the exact SSH public-key
 file by absolute path and SHA-256; the provider receives that public key
 explicitly, while receipts retain only its path and digest.
+Release-time inventory and the provider both read the raw `price_per_gpu`
+field and bind `price_per_gpu * gpu_count`; the SDK's missing-field zero
+default is not accepted as rate evidence. The rent POST runs through the
+SDK's undecorated single-attempt request boundary, and two post-ready
+snapshots must prove one unique issue-owned allocation after terminating any
+retry-created duplicates.
 
 ## Threat Boundary
 
@@ -130,7 +136,8 @@ and a separately produced auditor artifact with an `ACCEPT` decision, bounded
 claim, exact manifest and constituent checksums, auditor identity, and auditor
 timestamp.
 
-The 98% throughput-retention value is an early-stop guardrail. It is not a
+The 98% estimated-MFU and actor-throughput retention values are early-stop
+guardrails. Either metric below 98% rejects after A1/B1. They are not a
 success threshold.
 
 ## Current Directive
@@ -143,9 +150,13 @@ one unchanged 8x H100 node:
 - Each leg produces 16 performance steps; the first two are discarded and 14
   matched observations are retained. Sentry may additionally summarize 12
   complete-cycle observations, but must label those statistics diagnostic.
-- Stop after B1 when candidate throughput retention is below 98%.
+- Stop after B1 when candidate estimated-MFU or actor-throughput retention is
+  below 98%.
 - Tranche T1 is capped at two node-hours and USD 36. Unused budget cannot fund
   another hypothesis.
+- Valid A1 and B1 plus their evidence must finish within one hour of the Gate 0
+  launch-receipt start time. Each launcher receives only the remaining time;
+  expiration invalidates the leg and prevents B1 or the screen request.
 - Gate 0 permits expire after at most ten minutes. The provider TTL remains
   two hours and is independently verified from the server-returned schedule.
 - The runner accepts only `/tmp/w8-issue32-t1`; that root and the fixed Gate 0
@@ -153,8 +164,10 @@ one unchanged 8x H100 node:
   following symlinks. Claims are created relative to the held registry
   descriptor. The runner records GPU/Ray/SGLang/training process inventory
   before and after every leg. A surviving relevant process invalidates the leg.
-- Gate 1 requires a read-only setup attestation for the exact OCI digest and
-  Hugging Face revision plus a matching revision marker in the model tree.
+- Gate 1 requires the raw Docker image-inspect JSON, a read-only setup
+  attestation for the exact OCI digest, and the exact Hugging Face
+  revision-marker bytes. Sentry independently reconciles all three to the
+  contract, runtime receipt, and checkpoint receipt.
 - Preflight and continuous telemetry require all eight H100s to retain at
   least a 690 W configured power limit; lower-power evidence is invalid.
 
@@ -182,11 +195,19 @@ recommended decision
 signed Gate 0 and Gate 1 parent chain, nonces, expiries, and consumption receipts
 provider allocation, output, cost, TTL, and termination receipts
 setup attestation and model-revision marker checksums
+raw container image-inspect evidence and launcher data-manifest checksum
 pre-leg and post-leg process-cleanliness receipts
 ```
 
 The supervisor responds with one decision: `continue`, `stop`, `repair`,
 `repeat`, `promote`, or `audit`.
+
+On every rejection, failure, timeout, or completion, only the Research
+Supervisor invokes `scripts/lium_terminate_h100_pod.py` with the exact provider
+output, launch receipt, allocation ID, and allocation name. The credential is
+one bounded stdin line. The script refuses ID/name conflicts, never targets an
+unrelated pod, polls until the bound allocation is absent, and writes an
+exclusive `lium-h100-termination-receipt/v1` postflight receipt.
 
 ## Closure
 

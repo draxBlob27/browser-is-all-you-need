@@ -30,6 +30,11 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
   name blocks deletion/replay during the live permit window.
 - [ ] The provider credential travels only over bounded stdin and never appears
   in argv, environment, files, logs, output, or receipts.
+- [ ] Raw provider `price_per_gpu * gpu_count` proves a positive rate within the
+  signed cap; missing-field zero and pending price changes fail closed.
+- [ ] Automatic retries are disabled for the rent POST, and successful creation
+  must reconcile two snapshots to one unique allocation after cleaning any
+  same-name duplicates.
 - [ ] The permit binds one absolute, regular SSH public-key file by SHA-256; the
   exact key is passed explicitly through the installed Lium SDK and only its
   path and digest appear in provider output and receipts.
@@ -49,6 +54,8 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
 - [ ] An independent machine-readable audit returns `ACCEPT` and binds the
   reviewed artifacts and constituent checksums before the launch hold is
   released.
+- [ ] Supervisor-only shutdown binds the exact provider output and launch
+  receipt, refuses ID/name conflicts, and produces a confirmed-absent receipt.
 
 ## Notes
 

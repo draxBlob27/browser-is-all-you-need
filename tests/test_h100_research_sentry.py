@@ -35,6 +35,7 @@ from w8_biayn.integrations.h100_research_sentry import (
     signature_domain_for_kind,
     verify_consume_and_execute,
     verify_signed_decision,
+    _validate_runner_evidence_manifest,
     _telemetry_evidence,
 )
 from w8_biayn.integrations.h100_signed_approval import (
@@ -169,6 +170,9 @@ def _write_gate0_chain(
         "data": {
             "schema": "h100-booking-data-intent/v1",
             "train_sha256": contract_payload["fixed_workload"]["dataset_sha256"],
+            "manifest_sha256": contract_payload["fixed_workload"][
+                "dataset_manifest_sha256"
+            ],
             "row_count": contract_payload["fixed_workload"]["dataset_rows"],
         },
         "checkpoint": {
@@ -198,7 +202,7 @@ def _write_gate0_chain(
             "issue_number": 32,
             "allocation_name": "issue-32-dispatcher",
             "provider": "lium",
-            "provider_version": "1.1.0",
+            "provider_version": "1.2.0",
             "profile": "h100-sxm",
             "executor_id": "golden-shark-c6",
             "sentry_principal": security.sentry_principal,
@@ -250,7 +254,7 @@ def _write_gate0_chain(
         "--template-status",
         template["template_status"],
         "--expected-provider-version",
-        "1.1.0",
+        "1.2.0",
         "--expected-interpreter-path",
         str(interpreter),
         "--expected-interpreter-sha256",
@@ -271,6 +275,10 @@ def _write_gate0_chain(
         _sha256(ssh_public_key),
         "--max-rate",
         "18",
+        "--expected-observed-rate",
+        "18",
+        "--expected-rate-authority",
+        "provider_raw_price_per_gpu_x_gpu_count/v1",
     ]
     termination = (issued_at + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     provider_output = _json(
@@ -298,6 +306,17 @@ def _write_gate0_chain(
             "access": {
                 "ssh_public_key_path": str(ssh_public_key.resolve()),
                 "ssh_public_key_sha256": _sha256(ssh_public_key),
+            },
+            "create_reconciliation": {
+                "status": "CONFIRMED_UNIQUE",
+                "rent_mutation_attempt_policy": "single-attempt-sdk-request-boundary/v1",
+                "allocation_name": "issue-32-dispatcher",
+                "pod_id": "pod-h100-001",
+                "successful_snapshots": 2,
+                "lookup_failures": 0,
+                "final_active_pod_ids": ["pod-h100-001"],
+                "observed_duplicate_pod_ids": [],
+                "duplicate_cleanup_status": "NOT_REQUIRED",
             },
             "schedule": {
                 "confirmed": True,
@@ -331,7 +350,7 @@ def _write_gate0_chain(
         "profile": "h100-sxm",
         "provider_executable": str(provider_executable.resolve()),
         "provider_executable_sha256": _sha256(provider_executable),
-        "provider_version": "1.1.0",
+        "provider_version": "1.2.0",
         "provider_interpreter": str(interpreter),
         "provider_interpreter_sha256": _sha256(interpreter),
         "provider_interpreter_version": platform.python_version(),
@@ -401,7 +420,7 @@ def _write_gate0_chain(
                 "executor_id": "golden-shark-c6",
                 "executable": str(provider_executable.resolve()),
                 "executable_sha256": _sha256(provider_executable),
-                "declared_version": "1.1.0",
+                "declared_version": "1.2.0",
                 "interpreter": str(interpreter),
                 "interpreter_sha256": _sha256(interpreter),
                 "interpreter_version": platform.python_version(),
@@ -409,7 +428,7 @@ def _write_gate0_chain(
                 "execution_boundary": "script-fd-bound-interpreter-path-rechecked",
             },
             "runtime_evidence": {
-                "provider_version": "1.1.0",
+                "provider_version": "1.2.0",
                 "lium_sdk_distribution": "lium.io",
                 "lium_sdk_version": "1.2.3",
                 "lium_cli_path": str(lium_cli.resolve()),
@@ -467,6 +486,8 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
     contract = root / "contract.json"
     contract.parent.mkdir(parents=True, exist_ok=True)
     contract.write_text(contract_source.read_text(encoding="utf-8"), encoding="utf-8")
+    contract_payload = json.loads(contract.read_text(encoding="utf-8"))
+    runtime_pins = contract_payload["runtime_pins"]
     topology = "\n".join(
         "\t".join([f"GPU{index}", *["X" if peer == index else "NV18" for peer in range(8)]])
         for index in range(8)
@@ -529,6 +550,60 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
             "disallowed_paths": [],
         },
     )
+    marker = root / "receipts/hf_revision_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(runtime_pins["hf_revision"] + "\n", encoding="utf-8")
+    image_id = "sha256:" + "a" * 64
+    inspection = _json(
+        root / "receipts/container_inspect.json",
+        [
+            {
+                "Id": image_id,
+                "RepoDigests": [runtime_pins["container_image"]],
+                "Os": "linux",
+                "Architecture": "amd64",
+            }
+        ],
+    )
+    image_digest = runtime_pins["container_image"].rsplit("@", 1)[1]
+    attestation = _json(
+        root / "receipts/setup_attestation.json",
+        {
+            "schema": "w8-h100-setup-attestation/v1",
+            "created_at_utc": "2026-07-10T00:00:00Z",
+            "hf_checkpoint_path": "/root/models/GLM-4.7-Flash",
+            "hf_model": runtime_pins["hf_model"],
+            "hf_revision": runtime_pins["hf_revision"],
+            "hf_revision_marker_path": "/root/models/GLM-4.7-Flash/.w8-hf-revision",
+            "hf_revision_marker_sha256": _sha256(marker),
+            "container_image_reference": runtime_pins["container_image"],
+            "container_image_digest": image_digest,
+            "container_platform": runtime_pins["container_platform"],
+            "container_image_id": image_id,
+            "container_inspection_path": "/data/w8-biayn/control-plane/setup/issue32-t1-container-inspect.json",
+            "container_inspection_sha256": _sha256(inspection),
+        },
+    )
+    setup_bundle = {
+        "attestation": json.loads(attestation.read_text(encoding="utf-8")),
+        "attestation_sha256": _sha256(attestation),
+        "hf_revision_marker_sha256": _sha256(marker),
+        "hf_revision_marker_content": runtime_pins["hf_revision"],
+        "container_inspection_sha256": _sha256(inspection),
+        "container_inspection": json.loads(inspection.read_text(encoding="utf-8")),
+    }
+    setup_receipt_fields = {
+        "hf_checkpoint_path": "/root/models/GLM-4.7-Flash",
+        "hf_model": runtime_pins["hf_model"],
+        "hf_revision": runtime_pins["hf_revision"],
+        "hf_revision_marker_sha256": _sha256(marker),
+        "container_image_reference": runtime_pins["container_image"],
+        "container_image_digest": image_digest,
+        "container_platform": runtime_pins["container_platform"],
+        "container_image_id": image_id,
+        "container_inspection_sha256": _sha256(inspection),
+        "setup_attestation_sha256": _sha256(attestation),
+    }
     immutable = {
         "protocol": _json(
             root / "protocol.json",
@@ -539,7 +614,7 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
         "checkpoint": _json(
             root / "receipts/checkpoint.json",
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "root": "/root/models/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8",
                 "layout": "TP4/PP1/EP8/ETP1",
                 "tag": "release",
@@ -547,6 +622,7 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
                 "metadata_path": "/root/models/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8/release/.metadata",
                 "metadata_sha256": "3" * 64,
                 "metadata_size": 1024,
+                **setup_receipt_fields,
             },
         ),
         "data": _json(
@@ -556,6 +632,8 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
                 "path": "/data/glm47-pie-profile-long128-oracle-v2/sft/train.jsonl",
                 "sha256": "f1f5f70b1e77dbb6da51d075a35b2e48f784f4080873f356c9c4bd3c83a3d783",
                 "row_count": 128,
+                "manifest_path": "/data/glm47-pie-profile-long128-oracle-v2/manifest.json",
+                "manifest_sha256": "5d72f758320b4373b61d2008dadbbdf459eb8749c93d5c81b43a4f8415ce00a7",
             },
         ),
         "wandb_auth": _json(
@@ -564,7 +642,14 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
         ),
         "runtime": _json(
             root / "receipts/runtime.json",
-            {"returncode": 0, "stdout": "ok", "stderr": ""},
+            {
+                "schema_version": 2,
+                "ok": True,
+                "returncode": 0,
+                "stdout": "ok",
+                "stderr": "",
+                **setup_receipt_fields,
+            },
         ),
         "budget": budget,
     }
@@ -577,6 +662,16 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
             "ok": True,
             "artifacts": {name: str(path) for name, path in immutable.items()},
             "sha256": input_hashes,
+            "supporting_artifacts": {
+                "setup_attestation": str(attestation),
+                "hf_revision_marker": str(marker),
+                "container_inspection": str(inspection),
+            },
+            "supporting_sha256": {
+                "setup_attestation": _sha256(attestation),
+                "hf_revision_marker": _sha256(marker),
+                "container_inspection": _sha256(inspection),
+            },
         },
     )
     request = _json(
@@ -590,6 +685,15 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
                 "repo_sha": CURRENT_REPO_SHA,
                 "training_base_sha": TRAINING_BASE_SHA,
             },
+            "prepared_evidence": {
+                "source": json.loads(source.read_text(encoding="utf-8")),
+                "runtime": json.loads(immutable["runtime"].read_text(encoding="utf-8")),
+                "data": json.loads(immutable["data"].read_text(encoding="utf-8")),
+                "checkpoint": json.loads(
+                    immutable["checkpoint"].read_text(encoding="utf-8")
+                ),
+                "setup": setup_bundle,
+            },
         },
     )
     return contract, hardware, budget, request
@@ -599,6 +703,9 @@ def _refresh_prepare_bindings(root: Path) -> None:
     manifest_path = root / "prepare_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["sha256"] = {name: _sha256(Path(path)) for name, path in manifest["artifacts"].items()}
+    manifest["supporting_sha256"] = {
+        name: _sha256(Path(path)) for name, path in manifest["supporting_artifacts"].items()
+    }
     _json(manifest_path, manifest)
     request_path = root / "preflight_request.json"
     request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -608,6 +715,29 @@ def _refresh_prepare_bindings(root: Path) -> None:
     request["source_identity"] = {
         "repo_sha": source["repo_sha"],
         "training_base_sha": source["training_base_sha"],
+    }
+    request["prepared_evidence"] = {
+        name: json.loads(Path(manifest["artifacts"][name]).read_text(encoding="utf-8"))
+        for name in ("source", "runtime", "data", "checkpoint")
+    }
+    supporting = {
+        name: Path(path) for name, path in manifest["supporting_artifacts"].items()
+    }
+    request["prepared_evidence"]["setup"] = {
+        "attestation": json.loads(
+            supporting["setup_attestation"].read_text(encoding="utf-8")
+        ),
+        "attestation_sha256": manifest["supporting_sha256"]["setup_attestation"],
+        "hf_revision_marker_sha256": manifest["supporting_sha256"]["hf_revision_marker"],
+        "hf_revision_marker_content": supporting["hf_revision_marker"]
+        .read_text(encoding="utf-8")
+        .strip(),
+        "container_inspection_sha256": manifest["supporting_sha256"][
+            "container_inspection"
+        ],
+        "container_inspection": json.loads(
+            supporting["container_inspection"].read_text(encoding="utf-8")
+        ),
     }
     _json(request_path, request)
 
@@ -843,20 +973,50 @@ def _write_leg_evidence(summary: Path, leg_id: str) -> dict[str, Any]:
         "gpu_telemetry": stage / "gpu_telemetry.csv",
         "nvlink_before": _json(leg_root / "nvlink_before.json", {"supported": True}),
         "nvlink_after": _json(leg_root / "nvlink_after.json", {"supported": True}),
+        "process_cleanliness_before": _json(
+            leg_root / "process_cleanliness_before.json",
+            {
+                "schema": "h100-process-cleanliness/v1",
+                "checked_at_utc": "2026-07-09T23:59:59Z",
+                "ok": True,
+                "errors": [],
+                "gpu_process_inventory": [],
+                "relevant_processes": [],
+                "commands": {
+                    "gpu_process_inventory_returncode": 0,
+                    "process_inventory_returncode": 0,
+                },
+            },
+        ),
+        "process_cleanliness_after": _json(
+            leg_root / "process_cleanliness_after.json",
+            {
+                "schema": "h100-process-cleanliness/v1",
+                "checked_at_utc": "2026-07-10T00:00:59Z",
+                "ok": True,
+                "errors": [],
+                "gpu_process_inventory": [],
+                "relevant_processes": [],
+                "commands": {
+                    "gpu_process_inventory_returncode": 0,
+                    "process_inventory_returncode": 0,
+                },
+            },
+        ),
         "wandb_readback": stage / "wandb_readback.json",
         "wandb_evidence_summary": next(stage.glob("*.evidence_summary.json")),
         "wandb_artifact_manifest": next(stage.glob("*.artifact_manifest.json")),
     }
+    runner = _runner_module()
+    hashes = {name: _sha256(path) for name, path in evidence_paths.items()}
     manifest = _json(
         leg_root / "leg_evidence_manifest.json",
-        {
-            "schema_version": 1,
-            "authority": "executor_raw_evidence",
-            "leg": leg_id,
-            "paths": {name: str(path) for name, path in evidence_paths.items()},
-            "sha256": {name: _sha256(path) for name, path in evidence_paths.items()},
-            "valid": True,
-        },
+        runner["build_leg_evidence_manifest"](
+            runner["LEG_SPECS"][leg_id],
+            evidence_paths=evidence_paths,
+            hashes=hashes,
+            valid=True,
+        ),
     )
     return {
         "leg_id": leg_id,
@@ -897,6 +1057,44 @@ def _write_screen_request(root: Path, control: Path, candidate: Path) -> Path:
             },
         },
     )
+
+
+def test_real_runner_manifest_schema_and_process_cleanliness_are_sentry_graded(
+    tmp_path: Path,
+) -> None:
+    summary = _write_trial(
+        tmp_path / "A1",
+        name="A1",
+        ratio=1.0,
+        candidate=False,
+        tranche="T1",
+    )
+    leg = _write_leg_evidence(summary, "a1")
+    manifest_path = Path(leg["evidence_manifest"])
+
+    reasons, _ = _validate_runner_evidence_manifest(
+        manifest_path,
+        leg_id="a1",
+        expected_trial=summary,
+    )
+    assert reasons == []
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    after_path = Path(manifest["paths"]["process_cleanliness_after"])
+    after = json.loads(after_path.read_text(encoding="utf-8"))
+    after["gpu_process_inventory"] = [
+        {"pid": 123, "process_name": "python", "used_gpu_memory_mib": "1024"}
+    ]
+    _json(after_path, after)
+    manifest["sha256"]["process_cleanliness_after"] = _sha256(after_path)
+    _json(manifest_path, manifest)
+
+    reasons, _ = _validate_runner_evidence_manifest(
+        manifest_path,
+        leg_id="a1",
+        expected_trial=summary,
+    )
+    assert "screen_a1_process_cleanliness_after_invalid" in reasons
 
 
 def _runner_module() -> dict[str, Any]:
@@ -1390,6 +1588,46 @@ def test_gate0_accepts_real_provider_shape_and_requires_server_verified_schedule
     assert "gate0_provider_schedule_not_server_verified" in rejected["reasons"]
 
 
+def test_preflight_independently_rejects_forged_container_inspection(
+    tmp_path: Path,
+) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    inspection_path = tmp_path / "receipts/container_inspect.json"
+    inspection = json.loads(inspection_path.read_text(encoding="utf-8"))
+    inspection[0]["RepoDigests"] = ["radixark/miles@sha256:" + "b" * 64]
+    _json(inspection_path, inspection)
+    inspection_sha = _sha256(inspection_path)
+    attestation_path = tmp_path / "receipts/setup_attestation.json"
+    attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+    attestation["container_inspection_sha256"] = inspection_sha
+    _json(attestation_path, attestation)
+    for name in ("runtime", "checkpoint"):
+        receipt_path = tmp_path / f"receipts/{name}.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["container_inspection_sha256"] = inspection_sha
+        receipt["setup_attestation_sha256"] = _sha256(attestation_path)
+        _json(receipt_path, receipt)
+    _refresh_prepare_bindings(tmp_path)
+
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+
+    assert result["decision"] == "INVALID"
+    assert "preflight_setup_container_inspection_mismatch" in result["reasons"]
+
+
 def test_gate0_accepts_current_provider_v2_runtime_and_template_evidence(
     tmp_path: Path,
 ) -> None:
@@ -1402,7 +1640,15 @@ def test_gate0_accepts_current_provider_v2_runtime_and_template_evidence(
     provider["executor"].update(
         {
             "observed_rate_status": permit["observed_node_hourly_rate_status"],
-            "rate_authority": "signed_max_rate_cap",
+            "rate_authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
+            "rate_evidence": {
+                "executor_id": provider["executor"]["id"],
+                "gpu_count": 8,
+                "available_gpu_count": 8,
+                "price_per_gpu": 2.25,
+                "price_per_hour": 18.0,
+                "pending_price_change": False,
+            },
         }
     )
     provider["template"].update(
@@ -1449,6 +1695,26 @@ def test_gate0_accepts_current_provider_v2_runtime_and_template_evidence(
         security=security,
     )
     assert result["decision"] == "PROMOTABLE"
+
+    provider["create_reconciliation"]["successful_snapshots"] = 1
+    _json(gate0["provider_output"], provider)
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    _json(gate0["launch_receipt"], receipt)
+    rejected = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+    assert rejected["decision"] == "INVALID"
+    assert "gate0_provider_unique_allocation_unproven" in rejected["reasons"]
 
 
 @pytest.mark.parametrize(

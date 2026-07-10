@@ -204,6 +204,10 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         ssh_public_key_sha256,
         "--max-rate",
         "18",
+        "--expected-observed-rate",
+        "18",
+        "--expected-rate-authority",
+        "provider_raw_price_per_gpu_x_gpu_count/v1",
     ]
     now = datetime.now(timezone.utc).replace(microsecond=0)
     payload = {
@@ -256,8 +260,8 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "ttl_seconds": 7200,
         "max_cost_usd": 36,
         "max_node_hourly_rate_usd": 18,
-        "observed_node_hourly_rate_usd": 0,
-        "observed_node_hourly_rate_status": "provider_reported_zero",
+        "observed_node_hourly_rate_usd": 18,
+        "observed_node_hourly_rate_status": "provider_reported_nonzero",
         "max_node_hours": 2,
         "provider_timeout_seconds": 300,
     }
@@ -552,8 +556,10 @@ def test_launch_receipt_binds_evidence_without_secret_values(tmp_path: Path) -> 
         == hashlib.sha256(canonical_json_bytes(environment_binding)).hexdigest()
     )
     assert receipt["execution"]["started_at"] <= receipt["execution"]["finished_at"]
-    assert receipt["budget"]["observed_node_hourly_rate_usd"] == 0
-    assert receipt["budget"]["observed_node_hourly_rate_status"] == ("provider_reported_zero")
+    assert receipt["budget"]["observed_node_hourly_rate_usd"] == 18
+    assert receipt["budget"]["observed_node_hourly_rate_status"] == (
+        "provider_reported_nonzero"
+    )
     assert receipt["budget"]["max_node_hourly_rate_usd"] == 18
     assert len(receipt["claim"]["sha256"]) == 64
     assert harness["credential"] not in receipt_text

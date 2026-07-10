@@ -405,9 +405,19 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "gpu_count": 8,
                     "gpu_type": "H100",
                     "gpu_model": "H100 SXM",
-                    "observed_rate_usd_per_hour": 0.0,
-                    "observed_rate_status": "provider_reported_zero",
+                    "observed_rate_usd_per_hour": 18.0,
+                    "observed_rate_usd_per_gpu_hour": 2.25,
+                    "observed_rate_status": "provider_reported_nonzero",
                     "max_rate_usd_per_hour": 18.0,
+                    "rate_authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
+                    "rate_evidence": {
+                        "executor_id": "executor-uuid-001",
+                        "gpu_count": 8,
+                        "available_gpu_count": 8,
+                        "price_per_gpu": 2.25,
+                        "price_per_hour": 18.0,
+                        "pending_price_change": False,
+                    },
                 },
                 "template": {
                     "id": "template-001",
@@ -417,7 +427,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "status": "VERIFY_SUCCESS",
                 },
                 "runtime_evidence": {
-                    "provider_version": "1.1.0",
+                    "provider_version": "1.2.0",
                     "interpreter": {
                         "path": str(interpreter),
                         "sha256": _sha256(interpreter),
@@ -433,6 +443,17 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                 "access": {
                     "ssh_public_key_path": str(ssh_public_key.resolve()),
                     "ssh_public_key_sha256": _sha256(ssh_public_key),
+                },
+                "create_reconciliation": {
+                    "status": "CONFIRMED_UNIQUE",
+                    "rent_mutation_attempt_policy": "single-attempt-sdk-request-boundary/v1",
+                    "allocation_name": allocation_name,
+                    "pod_id": "pod-issue32-001",
+                    "successful_snapshots": 2,
+                    "lookup_failures": 0,
+                    "final_active_pod_ids": ["pod-issue32-001"],
+                    "observed_duplicate_pod_ids": [],
+                    "duplicate_cleanup_status": "NOT_REQUIRED",
                 },
                 "schedule": {
                     "confirmed": True,
@@ -468,7 +489,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
         "profile": "h100-8x",
         "provider_executable": str(executable.resolve()),
         "provider_executable_sha256": _sha256(executable),
-        "provider_version": "1.1.0",
+        "provider_version": "1.2.0",
         "provider_interpreter": str(interpreter),
         "provider_interpreter_sha256": _sha256(interpreter),
         "provider_interpreter_version": "3.11.14",
@@ -506,7 +527,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
             "--template-status",
             "VERIFY_SUCCESS",
             "--expected-provider-version",
-            "1.1.0",
+            "1.2.0",
             "--expected-interpreter-path",
             str(interpreter),
             "--expected-interpreter-sha256",
@@ -527,14 +548,18 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
             _sha256(ssh_public_key),
             "--max-rate",
             "18",
+            "--expected-observed-rate",
+            "18",
+            "--expected-rate-authority",
+            "provider_raw_price_per_gpu_x_gpu_count/v1",
         ],
         "gpu_type": "H100",
         "gpu_count": 8,
         "ttl_seconds": 7200,
         "max_cost_usd": 36,
         "max_node_hourly_rate_usd": 18,
-        "observed_node_hourly_rate_usd": 0,
-        "observed_node_hourly_rate_status": "provider_reported_zero",
+        "observed_node_hourly_rate_usd": 18,
+        "observed_node_hourly_rate_status": "provider_reported_nonzero",
         "max_node_hours": 2,
         "provider_timeout_seconds": 300,
     }
@@ -592,7 +617,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "executor_id": executor_huid,
                     "executable": str(executable.resolve()),
                     "executable_sha256": _sha256(executable),
-                    "declared_version": "1.1.0",
+                    "declared_version": "1.2.0",
                 },
                 "access": {
                     "ssh_public_key_path": str(ssh_public_key.resolve()),
@@ -611,13 +636,17 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "wrapper_exit_code": 0,
                     "timed_out": False,
                     "credential_transport": "stdin-line/v1",
+                    "started_at": (now - timedelta(seconds=30)).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+                    "finished_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 },
                 "budget": {
                     "ttl_seconds": 7200,
                     "max_cost_usd": 36,
                     "max_node_hourly_rate_usd": 18,
-                    "observed_node_hourly_rate_usd": 0,
-                    "observed_node_hourly_rate_status": "provider_reported_zero",
+                    "observed_node_hourly_rate_usd": 18,
+                    "observed_node_hourly_rate_status": "provider_reported_nonzero",
                     "max_node_hours": 2,
                 },
             },
@@ -651,6 +680,23 @@ def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
     container_digest = container_reference.rsplit("@", 1)[1]
     revision_marker = hf_checkpoint / ".w8-hf-revision"
     revision_marker.write_text(hf_revision + "\n", encoding="utf-8")
+    container_image_id = "sha256:" + "a" * 64
+    container_inspection = root / "issue32-t1-container-inspect.json"
+    container_inspection.write_text(
+        json.dumps(
+            [
+                {
+                    "Id": container_image_id,
+                    "RepoDigests": [container_reference],
+                    "Os": "linux",
+                    "Architecture": "amd64",
+                }
+            ],
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     setup_attestation = root / "issue32-t1-setup-attestation.json"
     setup_attestation.write_text(
         json.dumps(
@@ -665,6 +711,9 @@ def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
                 "container_image_reference": container_reference,
                 "container_image_digest": container_digest,
                 "container_platform": runtime_pins["container_platform"],
+                "container_image_id": container_image_id,
+                "container_inspection_path": str(container_inspection),
+                "container_inspection_sha256": _sha256(container_inspection),
             },
             sort_keys=True,
         )
@@ -673,6 +722,7 @@ def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
     )
     module["HF_CHECKPOINT"] = hf_checkpoint
     module["HF_REVISION_MARKER_PATH"] = revision_marker
+    module["CONTAINER_INSPECTION_PATH"] = container_inspection
     module["SETUP_ATTESTATION_PATH"] = setup_attestation
     budget = root / "budget.json"
     budget.write_text('{"tranche_id":"T1"}\n', encoding="utf-8")
@@ -709,12 +759,17 @@ def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
         "container_image_reference": setup["container_image_reference"],
         "container_image_digest": setup["container_image_digest"],
         "container_platform": setup["container_platform"],
+        "container_image_id": setup["container_image_id"],
+        "container_inspection_path": setup["container_inspection_path"],
+        "container_inspection_sha256": setup["container_inspection_sha256"],
         "setup_attestation_path": str(setup_path),
         "setup_attestation_sha256": _sha256(setup_path),
     }
     module["data_receipt"] = lambda: {
         "sha256": module["TRAIN_SHA256"],
         "row_count": 128,
+        "manifest_path": "/data/glm47-pie-profile-long128-oracle-v2/manifest.json",
+        "manifest_sha256": module["TRAIN_MANIFEST_SHA256"],
     }
     module["check_wandb_authenticated_read"] = lambda: {
         "ok": True,
@@ -735,6 +790,9 @@ def _prepare_run(module: dict, root: Path) -> tuple[Path, dict[str, Path]]:
         "container_image_reference": setup["container_image_reference"],
         "container_image_digest": setup["container_image_digest"],
         "container_platform": setup["container_platform"],
+        "container_image_id": setup["container_image_id"],
+        "container_inspection_path": setup["container_inspection_path"],
+        "container_inspection_sha256": setup["container_inspection_sha256"],
         "setup_attestation_path": str(setup_path),
         "setup_attestation_sha256": _sha256(setup_path),
     }
@@ -803,7 +861,8 @@ def _install_fake_run_leg(
 ) -> None:
     validity = validity or {}
 
-    def fake_run_leg(spec, root):
+    def fake_run_leg(spec, root, *, deadline_utc=None):
+        assert deadline_utc is None or deadline_utc.tzinfo is not None
         calls.append(spec.leg_id)
         leg_root = root / "legs" / f"{spec.order:02d}_{spec.leg_id}"
         trial = leg_root / "trial_summary.json"
@@ -963,13 +1022,57 @@ def test_prepare_writes_immutable_receipts_without_training(
         "container_image_reference",
         "container_image_digest",
         "container_platform",
+        "container_image_id",
+        "container_inspection_path",
+        "container_inspection_sha256",
     }
+    assert set(manifest["supporting_artifacts"]) == {
+        "setup_attestation",
+        "hf_revision_marker",
+        "container_inspection",
+    }
+    assert request["prepared_evidence"]["setup"]["hf_revision_marker_content"] == setup[
+        "hf_revision"
+    ]
+    assert request["prepared_evidence"]["setup"]["container_inspection"][0][
+        "Id"
+    ] == setup["container_image_id"]
     copied_paths = module["_gate0_paths"](run_root)
     for name, source in gate0.items():
         if name not in copied_paths:
             continue
         destination = copied_paths[name]
         assert destination.read_bytes() == source.read_bytes()
+
+
+def test_data_receipt_requires_exact_launcher_manifest(tmp_path: Path) -> None:
+    module = _module()
+    data_dir = tmp_path / "data"
+    train = data_dir / "sft/train.jsonl"
+    train.parent.mkdir(parents=True)
+    train.write_text('{"messages":[],"metadata":{}}\n', encoding="utf-8")
+    train_sha = _sha256(train)
+    manifest = data_dir / "manifest.json"
+    module["write_json"](
+        manifest,
+        {
+            "profile": "glm47-pie-profile-long128-oracle-v2",
+            "train_count": 1,
+            "train_sha256": train_sha,
+        },
+    )
+    module["DATA_DIR"] = data_dir
+    module["TRAIN_SHA256"] = train_sha
+    module["TRAIN_ROW_COUNT"] = 1
+    module["TRAIN_MANIFEST_SHA256"] = _sha256(manifest)
+
+    receipt = module["data_receipt"]()
+
+    assert receipt["sha256"] == train_sha
+    assert receipt["manifest_sha256"] == _sha256(manifest)
+    manifest.unlink()
+    with pytest.raises(RuntimeError, match="launcher data manifest missing"):
+        module["data_receipt"]()
 
 
 def test_pair_phases_require_signed_chain_and_preserve_approval_bytes(tmp_path: Path) -> None:
@@ -1280,6 +1383,29 @@ def test_second_pair_does_not_run_a2_after_invalid_b2(tmp_path: Path) -> None:
     assert state["phase"] == "second_pair_repair_needed"
 
 
+def test_first_pair_deadline_stops_before_b1(tmp_path: Path) -> None:
+    module = _module()
+    calls: list[str] = []
+    _install_fake_run_leg(module, calls)
+
+    legs, complete = module["_run_pair_sequential"](
+        tmp_path / "run",
+        leg_ids=("a1", "b1"),
+        result_name="first_pair_result.json",
+        complete_status="first_pair_complete",
+        repair_state="first_pair_repair_needed",
+        approval_sha256="a" * 64,
+        request_sha256="b" * 64,
+        deadline_utc=module["_utc_now"]() - timedelta(seconds=1),
+    )
+
+    assert complete is False
+    assert calls == ["a1"]
+    assert legs[0]["deadline_exceeded"] is True
+    result = json.loads((tmp_path / "run/first_pair_result.json").read_text())
+    assert result["status"] == "first_pair_repair_needed"
+
+
 def test_gate0_schedule_and_budget_bindings_fail_closed(tmp_path: Path) -> None:
     module = _module()
     gate0 = _write_gate0_chain(tmp_path / "gate0")
@@ -1301,6 +1427,21 @@ def test_gate0_schedule_and_budget_bindings_fail_closed(tmp_path: Path) -> None:
     receipt["budget"]["max_cost_usd"] = 35
     module["write_json"](gate0["launch_receipt"], receipt)
     with pytest.raises(RuntimeError, match="budget binding mismatch"):
+        module["_validate_gate0_chain"](gate0, require_current_permit=True)
+
+
+def test_gate0_unique_allocation_reconciliation_fails_closed(tmp_path: Path) -> None:
+    module = _module()
+    gate0 = _write_gate0_chain(tmp_path / "gate0")
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    provider["create_reconciliation"]["final_active_pod_ids"].append("pod-retry-leak")
+    module["write_json"](gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    module["write_json"](gate0["launch_receipt"], receipt)
+
+    with pytest.raises(RuntimeError, match="unique allocation reconciliation"):
         module["_validate_gate0_chain"](gate0, require_current_permit=True)
 
 
@@ -1648,8 +1789,9 @@ def test_process_survivor_invalidates_leg_evidence_and_stops_next_leg(tmp_path: 
 
     calls: list[str] = []
 
-    def fake_run_leg(spec, run_root):
+    def fake_run_leg(spec, run_root, *, deadline_utc=None):
         del run_root
+        del deadline_utc
         calls.append(spec.leg_id)
         return {
             "leg_id": spec.leg_id,

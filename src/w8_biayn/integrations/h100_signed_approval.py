@@ -742,11 +742,9 @@ def _validate_payload(
         raise PermitVerificationError("max_cost_usd exceeds the $36 tranche")
     if not Decimal("0") < max_hourly_rate <= MAX_NODE_HOURLY_RATE_USD:
         raise PermitVerificationError("max_node_hourly_rate_usd exceeds $18")
-    if not Decimal("0") <= observed_hourly_rate <= max_hourly_rate:
-        raise PermitVerificationError("observed node rate must be between zero and the cap")
-    expected_rate_status = (
-        "provider_reported_zero" if observed_hourly_rate == 0 else "provider_reported_nonzero"
-    )
+    if not Decimal("0") < observed_hourly_rate <= max_hourly_rate:
+        raise PermitVerificationError("observed node rate must be positive and within the cap")
+    expected_rate_status = "provider_reported_nonzero"
     if observed_rate_status != expected_rate_status:
         raise PermitVerificationError("observed node rate status does not match the API value")
     if not Decimal("0") < max_node_hours <= MAX_NODE_HOURS:
@@ -823,6 +821,8 @@ def _validate_command(
         "--expected-lium-cli-version": str(payload["lium_cli_version"]),
         "--ssh-public-key-path": str(payload["ssh_public_key_path"]),
         "--ssh-public-key-sha256": str(payload["ssh_public_key_sha256"]),
+        "--expected-observed-rate": str(payload["observed_node_hourly_rate_usd"]),
+        "--expected-rate-authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
     }
     for option, expected in expected_options.items():
         if _command_option_values(argv, option) != [expected]:

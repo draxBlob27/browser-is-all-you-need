@@ -20,6 +20,8 @@ checkpoint, and GRPO gates.
   thresholds, source lineage, hardware shape, budget, and current experiment.
 - [ ] Preflight validates 8x H100 80GB NV18 hardware, source lineage, and the
   active budget tranche.
+- [ ] Preflight independently parses the raw OCI inspection, exact HF marker,
+  setup attestation, launcher data manifest, and runtime/checkpoint receipts.
 - [ ] A signed Gate 0 permit is consumed before the first Lium mutation, and
   signed Gate 1 decisions bind the resulting allocation and exact request,
   parent, and evidence hashes.
@@ -30,7 +32,8 @@ checkpoint, and GRPO gates.
 - [ ] T1 promotion requires two clean A/B pairs, at least 12 matched
   post-warmup steps, complete workload blocks, per-pair 3% MFU and
   actor-throughput gains, and historical +3% hurdles.
-- [ ] The 98% retention threshold is only an early-stop guardrail.
+- [ ] The 98% estimated-MFU and actor-throughput retention thresholds are only
+  early-stop guardrails; either metric below threshold rejects after A1/B1.
 - [ ] T2 confirmation requires at least four independent process-pair log
   ratios and a process-level one-sided 95% Student-t lower bound above zero.
 - [ ] GRPO follows confirmatory performance acceptance; final acceptance also
@@ -38,6 +41,9 @@ checkpoint, and GRPO gates.
   a key distinct from the sentry signer.
 - [ ] Invalid implementation paths are distinguished from valid negative
   performance results and inconclusive evidence.
+- [ ] Real runner manifests, including pre/post process-cleanliness receipts,
+  pass the Sentry schema and surviving processes fail independently of the
+  executor's `valid` boolean.
 - [ ] Focused tests, lint, docs, and a dry-run invocation pass.
 
 ## Notes
