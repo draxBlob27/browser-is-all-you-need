@@ -732,23 +732,43 @@ def consume_signed_decision_once(
 ) -> Path:
     """Durably consume one signed approval before execution."""
 
-    ledger = Path(ledger_dir).expanduser().resolve()
+    ledger = Path(ledger_dir).expanduser()
+    if not ledger.is_absolute():
+        raise DecisionReplayError("decision ledger path must be absolute")
     ledger.mkdir(mode=0o700, parents=True, exist_ok=True)
-    ledger_stat = ledger.lstat()
-    if not stat.S_ISDIR(ledger_stat.st_mode) or stat.S_ISLNK(ledger_stat.st_mode):
-        raise DecisionReplayError("decision ledger is not a real directory")
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        before = ledger.lstat()
+        ledger_descriptor = os.open(ledger, directory_flags)
+        after = os.fstat(ledger_descriptor)
+    except OSError as exc:
+        raise DecisionReplayError(
+            f"decision ledger is not a real private directory: {exc}"
+        ) from exc
+    if (
+        not stat.S_ISDIR(before.st_mode)
+        or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+        or after.st_uid != os.getuid()
+        or stat.S_IMODE(after.st_mode) & 0o077
+    ):
+        os.close(ledger_descriptor)
+        raise DecisionReplayError("decision ledger must be an owner-only real directory")
     claim_material = canonical_json_bytes(
         {"nonce": decision.nonce, "request_id": decision.request_id}
     )
     claim_id = hashlib.sha256(claim_material).hexdigest()
-    claim_path = ledger / f"{claim_id}.consumed.json"
+    claim_name = f"{claim_id}.consumed.json"
+    claim_path = ledger / claim_name
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(claim_path, flags, 0o600)
+        descriptor = os.open(claim_name, flags, 0o600, dir_fd=ledger_descriptor)
     except FileExistsError as exc:
+        os.close(ledger_descriptor)
         raise DecisionReplayError("decision request_id and nonce already consumed") from exc
     except OSError as exc:
+        os.close(ledger_descriptor)
         raise DecisionReplayError(f"unable to atomically consume decision: {exc}") from exc
     record = (
         canonical_json_bytes(
@@ -767,9 +787,11 @@ def consume_signed_decision_once(
             handle.write(record)
             handle.flush()
             os.fsync(handle.fileno())
-        _fsync_directory(ledger)
+        os.fsync(ledger_descriptor)
     except OSError as exc:
         raise DecisionReplayError(f"decision claim could not be durably recorded: {exc}") from exc
+    finally:
+        os.close(ledger_descriptor)
     return claim_path
 
 

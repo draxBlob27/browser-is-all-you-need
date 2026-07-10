@@ -11,6 +11,7 @@ import math
 import os
 import re
 import secrets
+import stat
 import statistics
 import subprocess
 import sys
@@ -54,7 +55,8 @@ DATA_DIR = Path("/data/glm47-pie-profile-long128-oracle-v2")
 TASKS_DIR = Path("/data/pie-tasks-full-20260706")
 HF_CHECKPOINT = Path("/root/models/GLM-4.7-Flash")
 REF_LOAD_DIR = Path("/root/models/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8")
-CANONICAL_RUN_ROOT = Path("/tmp/w8-issue32-t1")
+# The canonical evidence root is validated as a private non-symlink directory.
+CANONICAL_RUN_ROOT = Path("/tmp/w8-issue32-t1")  # nosec B108
 GATE1_CONSUMPTION_ROOT = Path("/data/w8-biayn/control-plane/gate1-consumption/v1")
 SETUP_ATTESTATION_PATH = Path(
     "/data/w8-biayn/control-plane/setup/issue32-t1-setup-attestation.json"
@@ -156,6 +158,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _require_canonical_run_root(run_root: Path) -> None:
     if run_root.expanduser().resolve() != CANONICAL_RUN_ROOT.expanduser().resolve():
         raise SystemExit(f"run root must be exactly {CANONICAL_RUN_ROOT}")
+
+
+def _validate_secure_run_root(run_root: Path, *, require_empty: bool) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(run_root, flags)
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        raise SystemExit(f"run root must be a real private directory: {run_root}: {exc}") from exc
+    try:
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise SystemExit(f"run root must be owned by the executor with mode 0700: {run_root}")
+        if require_empty and os.listdir(descriptor):
+            raise SystemExit(f"prepare requires a new or empty run root: {run_root}")
+    finally:
+        os.close(descriptor)
+
+
+def _prepare_secure_run_root(run_root: Path) -> None:
+    _require_canonical_run_root(run_root)
+    try:
+        os.mkdir(run_root, 0o700)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise SystemExit(f"cannot create canonical run root: {run_root}: {exc}") from exc
+    _validate_secure_run_root(run_root, require_empty=True)
 
 
 def _sha256(path: Path) -> str:
@@ -1107,7 +1141,7 @@ def run_leg(spec: LegSpec, run_root: Path) -> dict[str, Any]:
         monitor_started = True
         if pre_cleanup["ok"] and pre_process_cleanliness["ok"]:
             launcher_exit_code = subprocess.run(
-                ["bash", str(RUNNER)], env=env, check=False
+                ["/bin/bash", str(RUNNER)], env=env, check=False
             ).returncode
     finally:
         try:
@@ -1616,10 +1650,7 @@ def prepare_phase(
     gate0_booking_request: Path,
     gate0_provider_output: Path,
 ) -> int:
-    _require_canonical_run_root(run_root)
-    if run_root.exists() and any(run_root.iterdir()):
-        raise SystemExit(f"prepare requires a new or empty run root: {run_root}")
-    run_root.mkdir(parents=True, exist_ok=True)
+    _prepare_secure_run_root(run_root)
     receipts = run_root / "receipts"
     receipts.mkdir()
     budget_copy = run_root / "budget.json"
@@ -1972,6 +2003,7 @@ def first_pair_phase(
     executor_principal: str,
 ) -> int:
     _require_canonical_run_root(run_root)
+    _validate_secure_run_root(run_root, require_empty=False)
     _read_state(run_root, "prepared")
     request_path = run_root / "preflight_request.json"
     _, gate0 = _verify_preflight_request(
@@ -2135,6 +2167,7 @@ def second_pair_phase(
     executor_principal: str,
 ) -> int:
     _require_canonical_run_root(run_root)
+    _validate_secure_run_root(run_root, require_empty=False)
     _read_state(run_root, "first_pair_complete")
     request_path = run_root / "screen_request.json"
     _verify_screen_request(

@@ -148,8 +148,10 @@ one unchanged 8x H100 node:
   another hypothesis.
 - Gate 0 permits expire after at most ten minutes. The provider TTL remains
   two hours and is independently verified from the server-returned schedule.
-- The runner accepts only `/tmp/w8-issue32-t1`, uses a fixed persistent Gate 1
-  consumption registry, and records GPU/Ray/SGLang/training process inventory
+- The runner accepts only `/tmp/w8-issue32-t1`; that root and the fixed Gate 0
+  and Gate 1 registries must be owner-only, real directories opened without
+  following symlinks. Claims are created relative to the held registry
+  descriptor. The runner records GPU/Ray/SGLang/training process inventory
   before and after every leg. A surviving relevant process invalidates the leg.
 - Gate 1 requires a read-only setup attestation for the exact OCI digest and
   Hugging Face revision plus a matching revision marker in the model tree.

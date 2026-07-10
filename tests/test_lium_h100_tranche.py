@@ -25,7 +25,9 @@ from w8_biayn.integrations.h100_signed_approval import (
     PUBLIC_KEY_SCHEMA,
     SIGNATURE_DOMAIN,
     PermitVerificationError,
+    PermitReplayError,
     canonical_json_bytes,
+    consume_permit_once,
     domain_separated_message,
     key_id_for_public_key,
     load_and_verify_permit,
@@ -421,6 +423,40 @@ def test_production_verifier_accepts_canonical_ed25519_permit(tmp_path: Path) ->
     assert verified.request_id == harness["payload"]["request_id"]
     assert canonical_json_bytes({"b": 1, "a": 2}) == b'{"a":2,"b":1}'
     assert permit_signing_message(harness["payload"]).startswith(SIGNATURE_DOMAIN)
+
+
+def test_gate0_consumption_rejects_symlinked_or_permissive_ledgers(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    verified = load_and_verify_permit(
+        harness["permit"],
+        harness["public_key"],
+        expected_key_id=harness["key_id"],
+        expected_sentry_principal=SENTRY_PRINCIPAL,
+        expected_executor_principal=EXECUTOR_PRINCIPAL,
+        expected_executor_id=EXECUTOR_ID,
+        expected_provider=PROVIDER,
+        expected_profile=PROFILE,
+        expected_source_sha256=SOURCE_SHA256,
+        expected_runtime_sha256=RUNTIME_SHA256,
+        expected_data_sha256=DATA_SHA256,
+        expected_checkpoint_sha256=CHECKPOINT_SHA256,
+        parent_request_path=harness["parent_request"],
+        expected_provider_version=PROVIDER_VERSION,
+        expected_working_directory=harness["working_directory"],
+        expected_argv=harness["argv"],
+    )
+    target = tmp_path / "ledger-target"
+    target.mkdir(mode=0o700)
+    symlink = tmp_path / "ledger-link"
+    symlink.symlink_to(target, target_is_directory=True)
+    with pytest.raises(PermitReplayError, match="real private directory"):
+        consume_permit_once(verified, symlink)
+
+    symlink.unlink()
+    symlink.mkdir(mode=0o755)
+    symlink.chmod(0o755)
+    with pytest.raises(PermitReplayError, match="owner-only"):
+        consume_permit_once(verified, symlink)
 
 
 def test_default_gate0_ledger_uses_real_account_home_not_environment(

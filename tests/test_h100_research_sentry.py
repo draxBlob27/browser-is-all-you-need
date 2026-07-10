@@ -1683,6 +1683,23 @@ def test_execution_approval_is_single_use_and_concurrently_consumed_once(
         )
     assert calls == ["ran"]
 
+    target = tmp_path / "ledger-target"
+    target.mkdir(mode=0o700)
+    symlink = tmp_path / "ledger-link"
+    symlink.symlink_to(target, target_is_directory=True)
+    with pytest.raises(DecisionReplayError, match="real private directory"):
+        verify_consume_and_execute(
+            decision,
+            security.sentry_public_key_path,
+            expected_stage="preflight",
+            expected_signer_principal=security.sentry_principal,
+            expected_verifier_principal=security.executor_principal,
+            expected_request_sha256=request_hash,
+            ledger_dir=symlink,
+            callback=callback,
+            now=TEST_NOW,
+        )
+
     concurrent_calls: list[str] = []
 
     def concurrent_worker() -> str:

@@ -867,6 +867,25 @@ def test_ea02_cli_and_protocol_are_strictly_staged(tmp_path: Path) -> None:
         )
 
 
+def test_prepare_rejects_symlinked_or_permissive_canonical_run_root(tmp_path: Path) -> None:
+    module = _module()
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    symlink = tmp_path / "run"
+    symlink.symlink_to(target, target_is_directory=True)
+    module["CANONICAL_RUN_ROOT"] = symlink.resolve()
+
+    with pytest.raises(SystemExit, match="real private directory"):
+        module["_prepare_secure_run_root"](symlink)
+
+    symlink.unlink()
+    symlink.mkdir(mode=0o755)
+    symlink.chmod(0o755)
+    module["CANONICAL_RUN_ROOT"] = symlink.resolve()
+    with pytest.raises(SystemExit, match="mode 0700"):
+        module["_prepare_secure_run_root"](symlink)
+
+
 def test_runner_never_authors_or_invokes_scientific_decisions() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 

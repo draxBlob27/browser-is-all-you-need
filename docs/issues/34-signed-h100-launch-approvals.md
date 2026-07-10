@@ -25,8 +25,9 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
 - [ ] The Lium wrapper verifies and atomically consumes the permit before any
   provider subprocess can run.
 - [ ] Permit validity is at most ten minutes, the consumption registry is
-  fixed rather than caller-selected, and an exact active allocation name
-  blocks deletion/replay during the live permit window.
+  fixed rather than caller-selected, opened as an owner-only non-symlink
+  directory, and used through a held descriptor. An exact active allocation
+  name blocks deletion/replay during the live permit window.
 - [ ] The provider credential travels only over bounded stdin and never appears
   in argv, environment, files, logs, output, or receipts.
 - [ ] The permit binds one absolute, regular SSH public-key file by SHA-256; the
