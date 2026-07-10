@@ -103,8 +103,12 @@ GRPO and independent audit follow only after that confirmation passes.
 Supervisor tranche T1: at most 2.0 H100-node hours and at most USD 36 at the
 verified USD 18/hour rate. Use a two-hour TTL. Unused budget is not transferable
 to another experiment. A1/B1 has a hard one-hour deadline from allocation
-start. The supervisor must use the artifact-bound shutdown utility and retain
-its post-`lium ps` termination receipt on every terminal path.
+start. The Sentry independently rejects late leg receipts, request issuance,
+or evaluation. B2/A2 approval and each leg start must occur before that same
+boundary, while an already-started second-pair leg may finish under the provider
+TTL. The supervisor must run the artifact-bound shutdown utility through its
+hash-pinned Lium Python runtime and retain its post-`lium ps` termination receipt
+before independent audit and FINAL.
 
 ## Notes
 

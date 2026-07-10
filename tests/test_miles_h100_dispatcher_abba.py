@@ -427,7 +427,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "status": "VERIFY_SUCCESS",
                 },
                 "runtime_evidence": {
-                    "provider_version": "1.2.0",
+                    "provider_version": "1.3.0",
                     "interpreter": {
                         "path": str(interpreter),
                         "sha256": _sha256(interpreter),
@@ -489,7 +489,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
         "profile": "h100-8x",
         "provider_executable": str(executable.resolve()),
         "provider_executable_sha256": _sha256(executable),
-        "provider_version": "1.2.0",
+        "provider_version": "1.3.0",
         "provider_interpreter": str(interpreter),
         "provider_interpreter_sha256": _sha256(interpreter),
         "provider_interpreter_version": "3.11.14",
@@ -527,7 +527,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
             "--template-status",
             "VERIFY_SUCCESS",
             "--expected-provider-version",
-            "1.2.0",
+            "1.3.0",
             "--expected-interpreter-path",
             str(interpreter),
             "--expected-interpreter-sha256",
@@ -605,6 +605,8 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "key_id": public_document["key_id"],
                     "request_id": permit_payload["request_id"],
                     "nonce": permit_payload["nonce"],
+                    "issued_at": permit_payload["issued_at"],
+                    "expires_at": permit_payload["expires_at"],
                 },
                 "claim": {"path": str(claim.resolve()), "sha256": _sha256(claim)},
                 "parent_request": {
@@ -617,7 +619,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "executor_id": executor_huid,
                     "executable": str(executable.resolve()),
                     "executable_sha256": _sha256(executable),
-                    "declared_version": "1.2.0",
+                    "declared_version": "1.3.0",
                 },
                 "access": {
                     "ssh_public_key_path": str(ssh_public_key.resolve()),
@@ -636,9 +638,7 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                     "wrapper_exit_code": 0,
                     "timed_out": False,
                     "credential_transport": "stdin-line/v1",
-                    "started_at": (now - timedelta(seconds=30)).strftime(
-                        "%Y-%m-%dT%H:%M:%SZ"
-                    ),
+                    "started_at": (now - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "finished_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 },
                 "budget": {
@@ -1031,12 +1031,13 @@ def test_prepare_writes_immutable_receipts_without_training(
         "hf_revision_marker",
         "container_inspection",
     }
-    assert request["prepared_evidence"]["setup"]["hf_revision_marker_content"] == setup[
-        "hf_revision"
-    ]
-    assert request["prepared_evidence"]["setup"]["container_inspection"][0][
-        "Id"
-    ] == setup["container_image_id"]
+    assert (
+        request["prepared_evidence"]["setup"]["hf_revision_marker_content"] == setup["hf_revision"]
+    )
+    assert (
+        request["prepared_evidence"]["setup"]["container_inspection"][0]["Id"]
+        == setup["container_image_id"]
+    )
     copied_paths = module["_gate0_paths"](run_root)
     for name, source in gate0.items():
         if name not in copied_paths:
@@ -1396,14 +1397,144 @@ def test_first_pair_deadline_stops_before_b1(tmp_path: Path) -> None:
         repair_state="first_pair_repair_needed",
         approval_sha256="a" * 64,
         request_sha256="b" * 64,
-        deadline_utc=module["_utc_now"]() - timedelta(seconds=1),
+        authorization_start_deadline_utc=module["_utc_now"]() - timedelta(seconds=1),
+        run_completion_deadline_utc=module["_utc_now"]() - timedelta(seconds=1),
     )
 
     assert complete is False
-    assert calls == ["a1"]
-    assert legs[0]["deadline_exceeded"] is True
+    assert calls == []
+    assert legs == []
     result = json.loads((tmp_path / "run/first_pair_result.json").read_text())
     assert result["status"] == "first_pair_repair_needed"
+
+
+def test_second_pair_start_deadline_does_not_limit_leg_completion(tmp_path: Path) -> None:
+    module = _module()
+    deadline = datetime(2026, 7, 10, 14, 0, tzinfo=timezone.utc)
+    clock = iter(
+        [
+            deadline - timedelta(microseconds=1),
+            deadline,
+        ]
+    )
+    module["_utc_now"] = lambda: next(clock)
+    calls: list[str] = []
+    completion_deadlines: list[datetime | None] = []
+
+    def fake_run_leg(spec, root, *, deadline_utc=None):
+        del root
+        calls.append(spec.leg_id)
+        completion_deadlines.append(deadline_utc)
+        return {"leg_id": spec.leg_id, "valid": True}
+
+    module["run_leg"] = fake_run_leg
+    legs, complete = module["_run_pair_sequential"](
+        tmp_path / "run",
+        leg_ids=("b2", "a2"),
+        result_name="second_pair_result.json",
+        complete_status="second_pair_complete",
+        repair_state="second_pair_repair_needed",
+        approval_sha256="a" * 64,
+        request_sha256="b" * 64,
+        authorization_start_deadline_utc=deadline,
+    )
+
+    assert complete is False
+    assert calls == ["b2"]
+    assert completion_deadlines == [None]
+    assert legs == [{"leg_id": "b2", "valid": True}]
+    result = json.loads((tmp_path / "run/second_pair_result.json").read_text())
+    assert result["failed_leg"] == "a2"
+    assert "deadline reached before a2 execution start" in result["execution_error"]
+
+
+def test_second_pair_deadline_is_rechecked_before_approval_consumption(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    run_root, gate0 = _prepare_run(module, tmp_path)
+    private_key = gate0["gate1_private_key"]
+    public_key = gate0["gate1_public_key"]
+    calls: list[str] = []
+    _install_fake_run_leg(module, calls)
+    preflight = _write_signed_decision(
+        module,
+        tmp_path / "preflight.json",
+        private_key=private_key,
+        public_key=public_key,
+        stage="preflight",
+        request_path=run_root / "preflight_request.json",
+        parent_decision_sha256=_sha256(run_root / "gate0/permit.json"),
+        parent_request_sha256=_sha256(run_root / "gate0/booking_request.json"),
+    )
+    assert (
+        module["first_pair_phase"](
+            run_root,
+            preflight,
+            **_phase_kwargs(public_key),
+        )
+        == 0
+    )
+    request_path = run_root / "screen_request.json"
+    screen = _write_signed_decision(
+        module,
+        tmp_path / "screen.json",
+        private_key=private_key,
+        public_key=public_key,
+        stage="screen",
+        request_path=request_path,
+        parent_decision_sha256=_sha256(preflight),
+        parent_request_sha256=_sha256(run_root / "preflight_request.json"),
+    )
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    deadline = datetime.fromisoformat(
+        request["gate0"]["first_pair_deadline_at"].replace("Z", "+00:00")
+    )
+    consumed_before = sorted(module["GATE1_CONSUMPTION_ROOT"].glob("*.consumed.json"))
+    module["_utc_now"] = lambda: deadline
+
+    with pytest.raises(SystemExit, match="deadline reached before approval consumption"):
+        module["_verify_consume_and_preserve_approval"](
+            approval_path=screen,
+            public_key_path=public_key,
+            destination=run_root / "approvals/screen.json",
+            expected_stage=module["Stage"].SCREEN,
+            expected_sentry_principal=SENTRY_PRINCIPAL,
+            expected_executor_principal=EXECUTOR_PRINCIPAL,
+            expected_request_sha256=_sha256(request_path),
+            expected_parent_decision_sha256=_sha256(preflight),
+            expected_parent_request_sha256=_sha256(run_root / "preflight_request.json"),
+            expected_public_key_sha256=_sha256(public_key),
+            request_path=request_path,
+            run_root=run_root,
+            consumed_phase="second_pair_authorized",
+            authorization_deadline_utc=deadline,
+        )
+
+    assert calls == ["a1", "b1"]
+    assert not (run_root / "approvals/screen.json").exists()
+    assert sorted(module["GATE1_CONSUMPTION_ROOT"].glob("*.consumed.json")) == consumed_before
+
+
+def test_gate0_launch_start_must_be_inside_permit_interval(tmp_path: Path) -> None:
+    module = _module()
+    gate0 = _write_gate0_chain(tmp_path / "gate0")
+    module["_utc_now"] = lambda: datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+    accepted = module["_validate_gate0_chain"](gate0)
+    assert accepted["allocation_started_at"]
+
+    permit = json.loads(gate0["permit"].read_text(encoding="utf-8"))["payload"]
+    expires_at = datetime.fromisoformat(permit["expires_at"].replace("Z", "+00:00"))
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["execution"]["started_at"] = permit["expires_at"]
+    receipt["execution"]["finished_at"] = (expires_at + timedelta(seconds=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    module["write_json"](gate0["launch_receipt"], receipt)
+
+    with pytest.raises(RuntimeError, match="did not start within the permit validity interval"):
+        module["_validate_gate0_chain"](gate0)
 
 
 def test_gate0_schedule_and_budget_bindings_fail_closed(tmp_path: Path) -> None:
@@ -1418,7 +1549,7 @@ def test_gate0_schedule_and_budget_bindings_fail_closed(tmp_path: Path) -> None:
     module["write_json"](gate0["launch_receipt"], receipt)
 
     with pytest.raises(RuntimeError, match="schedule or TTL"):
-        module["_validate_gate0_chain"](gate0, require_current_permit=True)
+        module["_validate_gate0_chain"](gate0)
 
     provider["schedule"]["server_removal_scheduled_at"] = provider["schedule"]["termination_time"]
     module["write_json"](gate0["provider_output"], provider)
@@ -1427,7 +1558,7 @@ def test_gate0_schedule_and_budget_bindings_fail_closed(tmp_path: Path) -> None:
     receipt["budget"]["max_cost_usd"] = 35
     module["write_json"](gate0["launch_receipt"], receipt)
     with pytest.raises(RuntimeError, match="budget binding mismatch"):
-        module["_validate_gate0_chain"](gate0, require_current_permit=True)
+        module["_validate_gate0_chain"](gate0)
 
 
 def test_gate0_unique_allocation_reconciliation_fails_closed(tmp_path: Path) -> None:
@@ -1442,7 +1573,7 @@ def test_gate0_unique_allocation_reconciliation_fails_closed(tmp_path: Path) -> 
     module["write_json"](gate0["launch_receipt"], receipt)
 
     with pytest.raises(RuntimeError, match="unique allocation reconciliation"):
-        module["_validate_gate0_chain"](gate0, require_current_permit=True)
+        module["_validate_gate0_chain"](gate0)
 
 
 def test_gate0_ssh_public_key_binding_fails_closed(tmp_path: Path) -> None:
@@ -1457,7 +1588,7 @@ def test_gate0_ssh_public_key_binding_fails_closed(tmp_path: Path) -> None:
     module["write_json"](gate0["launch_receipt"], receipt)
 
     with pytest.raises(RuntimeError, match="SSH public-key binding mismatch"):
-        module["_validate_gate0_chain"](gate0, require_current_permit=True)
+        module["_validate_gate0_chain"](gate0)
 
 
 def test_telemetry_samples_full_fields_throughout_lifecycle(tmp_path: Path) -> None:

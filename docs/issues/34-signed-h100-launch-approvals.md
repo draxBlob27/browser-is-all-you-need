@@ -31,16 +31,26 @@ on-node approvals fail closed under tampering, expiry, replay, and concurrency.
 - [ ] The provider credential travels only over bounded stdin and never appears
   in argv, environment, files, logs, output, or receipts.
 - [ ] Raw provider `price_per_gpu * gpu_count` proves a positive rate within the
-  signed cap; missing-field zero and pending price changes fail closed.
+  signed cap immediately before and after the exact rent POST; missing-field
+  zero, pending price changes, and pre/post drift fail closed.
 - [ ] Automatic retries are disabled for the rent POST, and successful creation
   must reconcile two snapshots to one unique allocation after cleaning any
   same-name duplicates.
+- [ ] The outer wrapper reserves terminal evidence before permit consumption;
+  every consumed timeout, partial output, lost response, or local artifact
+  failure reconciles all newly attributable exact-name IDs to confirmed absence.
+- [ ] Unconfirmed cleanup has an append-only, exact-parent retry chain. Cleanup
+  authority survives Gate 0 expiry only when a consumed claim and failed-cleanup
+  receipt already exist; expired permits remain unusable for launch.
 - [ ] The permit binds one absolute, regular SSH public-key file by SHA-256; the
   exact key is passed explicitly through the installed Lium SDK and only its
   path and digest appear in provider output and receipts.
 - [ ] Provider script bytes execute from the verified open descriptor through
   the hash-bound interpreter; the Lium SDK/CLI versions and explicit bootstrap
   template image, tag, and status are verified before mutation.
+- [ ] Artifact-bound shutdown uses an absolute hash-pinned interpreter with the
+  required Lium SDK, not `env python3`, and a sterile-PATH production test proves
+  exact-allocation termination plus exclusive receipt behavior.
 - [ ] Tampered, expired, replayed, wrong-stage, wrong-principal, wrong-command,
   and concurrent-use permits fail with zero provider invocations.
 - [ ] On-node preflight and screen decisions bind the exact request and evidence

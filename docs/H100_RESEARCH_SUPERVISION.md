@@ -156,9 +156,23 @@ one unchanged 8x H100 node:
   another hypothesis.
 - Valid A1 and B1 plus their evidence must finish within one hour of the Gate 0
   launch-receipt start time. Each launcher receives only the remaining time;
-  expiration invalidates the leg and prevents B1 or the screen request.
+  expiration invalidates the leg and prevents B1 or the screen request. The
+  Sentry independently recomputes the deadline from its signed Gate 0 context
+  and rejects late leg receipts, late screen issuance, or late evaluation.
+  Screen approval and each B2/A2 start must also occur strictly before that
+  boundary; a leg that starts in time may finish under the separate provider TTL.
 - Gate 0 permits expire after at most ten minutes. The provider TTL remains
   two hours and is independently verified from the server-returned schedule.
+  Downstream setup proves launch began inside the permit interval rather than
+  incorrectly requiring the consumed booking permit to remain current.
+- Provider v1.3.0 snapshots the exact allocation name before consumption,
+  validates the raw positive rate immediately before and after the single rent
+  POST, and makes every consumed failure reconcile attributable IDs to absence.
+  Cleanup failures retain an append-only retry chain that remains cleanup-only
+  after Gate 0 expiry; an expired permit can never be revived for launch.
+- Supervisor shutdown executes through the same absolute hash-pinned Python
+  3.11 runtime that contains Lium SDK 0.0.3; a generic PATH-selected Python is
+  not an accepted cleanup path.
 - The runner accepts only `/tmp/w8-issue32-t1`; that root and the fixed Gate 0
   and Gate 1 registries must be owner-only, real directories opened without
   following symlinks. Claims are created relative to the held registry
@@ -197,17 +211,23 @@ provider allocation, output, cost, TTL, and termination receipts
 setup attestation and model-revision marker checksums
 raw container image-inspect evidence and launcher data-manifest checksum
 pre-leg and post-leg process-cleanliness receipts
+hash-bound evidence manifests for every T1 and T2 leg
+final confirmed-absent termination receipt created before independent audit
 ```
 
 The supervisor responds with one decision: `continue`, `stop`, `repair`,
 `repeat`, `promote`, or `audit`.
 
-On every rejection, failure, timeout, or completion, only the Research
-Supervisor invokes `scripts/lium_terminate_h100_pod.py` with the exact provider
-output, launch receipt, allocation ID, and allocation name. The credential is
-one bounded stdin line. The script refuses ID/name conflicts, never targets an
-unrelated pod, polls until the bound allocation is absent, and writes an
-exclusive `lium-h100-termination-receipt/v1` postflight receipt.
+Before a successful launch handoff, the local signed wrapper owns ambiguous
+outcome cleanup and its append-only terminal-reconciliation receipts. After a
+successful handoff, only the Research Supervisor invokes
+`scripts/lium_terminate_h100_pod.py` with the exact provider output, launch
+receipt, allocation ID, and allocation name. The credential is one bounded
+stdin line. The script refuses ID/name conflicts, never targets an unrelated
+pod, polls until the bound allocation is absent, and writes an exclusive
+`lium-h100-termination-receipt/v1` postflight receipt. FINAL and its independent
+audit both require that exact receipt, and its finish time must precede the
+auditor timestamp.
 
 ## Closure
 

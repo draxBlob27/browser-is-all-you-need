@@ -20,8 +20,9 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, NoReturn, Sequence
 
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 OUTPUT_SCHEMA = "lium-h100-pod-create/v2"
+RECONCILIATION_SCHEMA = "lium-h100-allocation-reconciliation/v1"
 MAX_TTL_SECONDS = 2 * 60 * 60
 MAX_RATE_USD_PER_HOUR = Decimal("18")
 MAX_POLL_TIMEOUT_SECONDS = 240
@@ -31,6 +32,8 @@ RECOVERY_LOOKUP_ATTEMPTS = 2
 MAX_RECOVERY_LOOKUP_SECONDS = SDK_HTTP_TIMEOUT_SECONDS * RECOVERY_LOOKUP_ATTEMPTS
 SUCCESS_RECONCILIATION_ATTEMPTS = 3
 MIN_SUCCESSFUL_RECONCILIATION_SNAPSHOTS = 2
+TERMINAL_RECONCILIATION_ATTEMPTS = 3
+MAX_TERMINAL_RECONCILIATION_PODS = 16
 RENT_MUTATION_ATTEMPT_POLICY = "single-attempt-sdk-request-boundary/v1"
 RATE_AUTHORITY = "provider_raw_price_per_gpu_x_gpu_count/v1"
 MAX_CREDENTIAL_BYTES = 4096
@@ -90,6 +93,26 @@ class RawRateEvidence:
     authority: str = RATE_AUTHORITY
 
 
+@dataclass(frozen=True)
+class RentBoundaryEvidence:
+    endpoint: str
+    before_post: RawRateEvidence
+    after_post: RawRateEvidence
+
+
+class RentBoundaryFailure(ProviderFailure):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        mutation_started: bool,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(code, message, details=details)
+        self.mutation_started = mutation_started
+
+
 def build_parser() -> MachineArgumentParser:
     parser = MachineArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", parser_class=MachineArgumentParser)
@@ -118,6 +141,14 @@ def build_parser() -> MachineArgumentParser:
     up.add_argument("--ports", type=int)
     up.add_argument("--poll-timeout", type=int, default=240)
     up.add_argument("--poll-interval", type=int, default=5)
+    reconcile = subparsers.add_parser(
+        "reconcile",
+        help=argparse.SUPPRESS,
+        description="Internal allocation reconciliation control surface",
+    )
+    reconcile.add_argument("--mode", choices=("snapshot", "cleanup"), required=True)
+    reconcile.add_argument("--name", required=True)
+    reconcile.add_argument("--preexisting-id", action="append", default=[])
     return parser
 
 
@@ -136,12 +167,15 @@ def main(
         return 0
     try:
         args = build_parser().parse_args(arguments)
-        if args.command != "up":
-            raise ProviderFailure("invalid_arguments", "the up command is required")
-        _validate_arguments(args)
-        ssh_public_key = (ssh_public_key_reader or _load_ssh_public_key)(
-            Path(args.ssh_public_key_path), args.ssh_public_key_sha256
-        )
+        if args.command == "up":
+            _validate_arguments(args)
+            ssh_public_key = (ssh_public_key_reader or _load_ssh_public_key)(
+                Path(args.ssh_public_key_path), args.ssh_public_key_sha256
+            )
+        elif args.command == "reconcile":
+            _validate_reconciliation_arguments(args)
+        else:
+            raise ProviderFailure("invalid_arguments", "a supported command is required")
         os.environ.pop("LIUM_API_KEY", None)
         factory = client_factory or _new_lium_client
         credential = (credential_reader or _read_stdin_credential)()
@@ -149,35 +183,42 @@ def main(
             client = factory(credential)
         finally:
             _wipe_bytearray(credential)
-        runtime = dict((runtime_probe or _collect_runtime_evidence)(args))
-        record = create_h100_pod(
-            client,
-            args,
-            ssh_public_key=ssh_public_key,
-            now_fn=now_fn,
-            runtime_evidence=runtime,
-        )
+        if args.command == "reconcile":
+            record = reconcile_exact_name_allocations(client, args)
+        else:
+            runtime = dict((runtime_probe or _collect_runtime_evidence)(args))
+            record = create_h100_pod(
+                client,
+                args,
+                ssh_public_key=ssh_public_key,
+                now_fn=now_fn,
+                runtime_evidence=runtime,
+            )
     except ProviderFailure as exc:
-        _emit(
-            {
-                "schema": OUTPUT_SCHEMA,
-                "status": "ERROR",
-                "error": exc.code,
-                "message": exc.message,
-                "details": exc.details,
-            }
-        )
+        is_reconciliation = "args" in locals() and args.command == "reconcile"
+        failure = {
+            "schema": RECONCILIATION_SCHEMA if is_reconciliation else OUTPUT_SCHEMA,
+            "status": "ERROR",
+            "error": exc.code,
+            "message": exc.message,
+            "details": exc.details,
+        }
+        if is_reconciliation:
+            failure.update({"mode": args.mode, "allocation_name": args.name})
+        _emit(failure)
         return 2
     except Exception:
-        _emit(
-            {
-                "schema": OUTPUT_SCHEMA,
-                "status": "ERROR",
-                "error": "sdk_failure",
-                "message": "Lium SDK operation failed",
-                "details": {},
-            }
-        )
+        is_reconciliation = "args" in locals() and args.command == "reconcile"
+        failure = {
+            "schema": RECONCILIATION_SCHEMA if is_reconciliation else OUTPUT_SCHEMA,
+            "status": "ERROR",
+            "error": "sdk_failure",
+            "message": "Lium SDK operation failed",
+            "details": {},
+        }
+        if is_reconciliation:
+            failure.update({"mode": args.mode, "allocation_name": args.name})
+        _emit(failure)
         return 3
     _emit(record)
     return 0
@@ -355,13 +396,29 @@ def create_h100_pod(
             "Raw executor rate changed before the rent mutation",
         )
     try:
-        created = _single_attempt_provider_up(
+        created, rent_boundary = _single_attempt_provider_up(
             client,
+            expected_rate_evidence=launch_rate,
+            expected_observed_rate=expected_observed_rate,
+            max_rate=max_rate,
             executor_id=fresh.id,
             name=args.name,
             template_id=str(template.id),
             ports=args.ports,
             ssh_keys=[ssh_public_key],
+        )
+    except RentBoundaryFailure as exc:
+        if not exc.mutation_started:
+            raise
+        _raise_after_ambiguous_creation(
+            client,
+            allocation_name=args.name,
+            preexisting_pod_ids=preexisting_pod_ids,
+            confirmed_error=exc.code,
+            confirmed_message=(
+                "Raw executor rate changed after rent; attributable pods were terminated"
+            ),
+            failure_details=exc.details,
         )
     except Exception:
         _raise_after_ambiguous_creation(
@@ -460,12 +517,18 @@ def create_h100_pod(
             "max_rate_usd_per_hour": float(max_rate),
             "rate_authority": launch_rate.authority,
             "rate_evidence": {
-                "executor_id": launch_rate.executor_id,
-                "gpu_count": launch_rate.gpu_count,
-                "available_gpu_count": launch_rate.available_gpu_count,
-                "price_per_gpu": float(launch_rate.price_per_gpu),
-                "price_per_hour": float(launch_rate.price_per_hour),
+                "executor_id": rent_boundary.before_post.executor_id,
+                "gpu_count": rent_boundary.before_post.gpu_count,
+                "available_gpu_count": rent_boundary.before_post.available_gpu_count,
+                "price_per_gpu": float(rent_boundary.before_post.price_per_gpu),
+                "price_per_hour": float(rent_boundary.before_post.price_per_hour),
                 "pending_price_change": False,
+            },
+            "rent_boundary": {
+                "status": "VERIFIED_PRE_AND_POST",
+                "endpoint": rent_boundary.endpoint,
+                "before_post": _raw_rate_record(rent_boundary.before_post),
+                "after_post": _raw_rate_record(rent_boundary.after_post),
             },
         },
         "template": {
@@ -510,8 +573,16 @@ def _new_lium_client(credential: bytearray) -> Any:
     return Lium(Config(api_key=api_key))
 
 
-def _single_attempt_provider_up(client: Any, **kwargs: Any) -> Any:
-    """Call the pinned SDK up path with automatic HTTP mutation retries disabled."""
+def _single_attempt_provider_up(
+    client: Any,
+    *,
+    expected_rate_evidence: RawRateEvidence,
+    expected_observed_rate: Decimal,
+    max_rate: Decimal,
+    executor_id: str,
+    **kwargs: Any,
+) -> tuple[Any, RentBoundaryEvidence]:
+    """Call SDK up once, bracketing its exact rent POST with raw rate reads."""
 
     request = getattr(client, "_request", None)
     undecorated = getattr(request, "__wrapped__", None)
@@ -521,18 +592,88 @@ def _single_attempt_provider_up(client: Any, **kwargs: Any) -> Any:
                 "sdk_mutation_boundary_unavailable",
                 "Pinned Lium SDK no longer exposes the single-attempt request boundary",
             )
-        return client.up(**kwargs)
+        raise ProviderFailure(
+            "sdk_mutation_boundary_unavailable",
+            "The provider client does not expose the pinned rent request boundary",
+        )
 
     instance_attributes = vars(client)
     sentinel = object()
     previous_instance_request = instance_attributes.get("_request", sentinel)
+    rent_endpoint = f"/executors/{executor_id}/rent"
+    boundary_evidence: RentBoundaryEvidence | None = None
+    rent_post_count = 0
+
+    def direct_request(method: str, endpoint: str, *args: Any, **request_kwargs: Any) -> Any:
+        return undecorated(client, method, endpoint, *args, **request_kwargs)
 
     def one_attempt(method: str, endpoint: str, *args: Any, **request_kwargs: Any) -> Any:
-        return undecorated(client, method, endpoint, *args, **request_kwargs)
+        nonlocal boundary_evidence, rent_post_count
+        if method.upper() != "POST":
+            return direct_request(method, endpoint, *args, **request_kwargs)
+        if endpoint != rent_endpoint or rent_post_count:
+            raise RentBoundaryFailure(
+                "unexpected_sdk_mutation",
+                "SDK attempted an unexpected or repeated provider mutation",
+                mutation_started=False,
+                details={"expected_endpoint": rent_endpoint},
+            )
+        try:
+            before_post = _raw_executor_rate_with_request(direct_request, executor_id)
+            _validate_rent_boundary_rate(
+                before_post,
+                expected_rate_evidence=expected_rate_evidence,
+                expected_observed_rate=expected_observed_rate,
+                max_rate=max_rate,
+                phase="before_post",
+            )
+        except ProviderFailure as exc:
+            raise RentBoundaryFailure(
+                "executor_rate_changed_at_rent_boundary",
+                "Raw executor rate validation failed at the rent POST boundary",
+                mutation_started=False,
+                details={"phase": "before_post", **exc.details},
+            ) from exc
+        rent_post_count += 1
+        response = direct_request(method, endpoint, *args, **request_kwargs)
+        try:
+            after_post = _raw_executor_rate_with_request(direct_request, executor_id)
+            _validate_rent_boundary_rate(
+                after_post,
+                expected_rate_evidence=before_post,
+                expected_observed_rate=expected_observed_rate,
+                max_rate=max_rate,
+                phase="after_post",
+            )
+        except ProviderFailure as exc:
+            details = {
+                "phase": "after_post",
+                "rent_endpoint": rent_endpoint,
+                "before_post": _raw_rate_record(before_post),
+            }
+            details.update(exc.details)
+            raise RentBoundaryFailure(
+                "executor_rate_changed_after_rent",
+                "Raw executor rate changed immediately after the rent POST",
+                mutation_started=True,
+                details=details,
+            ) from exc
+        boundary_evidence = RentBoundaryEvidence(
+            endpoint=rent_endpoint,
+            before_post=before_post,
+            after_post=after_post,
+        )
+        return response
 
     client._request = one_attempt
     try:
-        return client.up(**kwargs)
+        result = client.up(executor_id=executor_id, **kwargs)
+        if rent_post_count != 1 or boundary_evidence is None:
+            raise ProviderFailure(
+                "sdk_rent_boundary_not_observed",
+                "SDK up did not execute exactly one verified rent POST",
+            )
+        return result, boundary_evidence
     finally:
         if previous_instance_request is sentinel:
             del client._request
@@ -584,6 +725,117 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         raise ProviderFailure("invalid_arguments", "poll-interval exceeds poll-timeout")
 
 
+def _validate_reconciliation_arguments(args: argparse.Namespace) -> None:
+    if _NAME_RE.fullmatch(args.name) is None:
+        raise ProviderFailure(
+            "invalid_arguments", "name must be issue-owned: issue-<number>-<slug>"
+        )
+    if len(args.preexisting_id) > MAX_TERMINAL_RECONCILIATION_PODS:
+        raise ProviderFailure("invalid_arguments", "too many preexisting pod IDs")
+    if len(set(args.preexisting_id)) != len(args.preexisting_id):
+        raise ProviderFailure("invalid_arguments", "preexisting pod IDs must be unique")
+    if any(_HUID_RE.fullmatch(pod_id) is None for pod_id in args.preexisting_id):
+        raise ProviderFailure("invalid_arguments", "preexisting pod ID has invalid format")
+    if args.mode == "snapshot" and args.preexisting_id:
+        raise ProviderFailure("invalid_arguments", "snapshot does not accept preexisting IDs")
+
+
+def reconcile_exact_name_allocations(client: Any, args: argparse.Namespace) -> dict[str, Any]:
+    """Snapshot or remove exact-name allocations for the outer signed wrapper."""
+
+    preexisting_ids = frozenset(args.preexisting_id)
+    if args.mode == "snapshot":
+        try:
+            matches, ambiguous = _named_pod_snapshot(client, args.name)
+        except Exception as exc:
+            raise ProviderFailure(
+                "allocation_snapshot_failed",
+                "Exact-name allocation snapshot failed",
+                details={"mode": "snapshot", "allocation_name": args.name},
+            ) from exc
+        if ambiguous:
+            raise ProviderFailure(
+                "allocation_snapshot_ambiguous",
+                "Exact-name allocation metadata is ambiguous",
+                details={"mode": "snapshot", "allocation_name": args.name},
+            )
+        ids = sorted(matches)
+        if ids:
+            raise ProviderFailure(
+                "allocation_name_in_use",
+                "The signed allocation name is already active",
+                details={
+                    "mode": "snapshot",
+                    "allocation_name": args.name,
+                    "preexisting_exact_name_ids": ids,
+                },
+            )
+        return {
+            "schema": RECONCILIATION_SCHEMA,
+            "status": "SNAPSHOT_CLEAR",
+            "mode": "snapshot",
+            "allocation_name": args.name,
+            "preexisting_exact_name_ids": [],
+        }
+
+    observed_ids: set[str] = set()
+    terminated_ids: set[str] = set()
+    lookup_failures = 0
+    termination_failures = 0
+    ambiguous = False
+    final_ids: list[str] = []
+    for _ in range(TERMINAL_RECONCILIATION_ATTEMPTS):
+        try:
+            matches, snapshot_ambiguous = _named_pod_snapshot(client, args.name)
+        except Exception:
+            lookup_failures += 1
+            continue
+        ambiguous = ambiguous or snapshot_ambiguous
+        attributable = {
+            pod_id: pod for pod_id, pod in matches.items() if pod_id not in preexisting_ids
+        }
+        observed_ids.update(attributable)
+        final_ids = sorted(attributable)
+        if not attributable and not snapshot_ambiguous:
+            return {
+                "schema": RECONCILIATION_SCHEMA,
+                "status": "CONFIRMED_ABSENT",
+                "mode": "cleanup",
+                "allocation_name": args.name,
+                "preexisting_exact_name_ids": sorted(preexisting_ids),
+                "observed_attributable_ids": sorted(observed_ids),
+                "terminated_attributable_ids": sorted(terminated_ids),
+                "final_attributable_ids": [],
+                "lookup_failures": lookup_failures,
+                "termination_failures": termination_failures,
+            }
+        if len(observed_ids) > MAX_TERMINAL_RECONCILIATION_PODS:
+            ambiguous = True
+            break
+        for pod_id, pod in sorted(attributable.items()):
+            try:
+                client.down(pod)
+                terminated_ids.add(pod_id)
+            except Exception:
+                termination_failures += 1
+
+    raise ProviderFailure(
+        "allocation_cleanup_unconfirmed",
+        "Attributable exact-name allocation cleanup could not be confirmed",
+        details={
+            "mode": "cleanup",
+            "allocation_name": args.name,
+            "preexisting_exact_name_ids": sorted(preexisting_ids),
+            "observed_attributable_ids": sorted(observed_ids),
+            "terminated_attributable_ids": sorted(terminated_ids),
+            "final_attributable_ids": final_ids,
+            "lookup_failures": lookup_failures,
+            "termination_failures": termination_failures,
+            "attribution_ambiguous": ambiguous,
+        },
+    )
+
+
 def _resolve_executor_by_huid(client: Any, huid: str) -> ExecutorSnapshot:
     try:
         executors = client.ls()
@@ -614,8 +866,14 @@ def _executor_snapshot(executor: Any) -> ExecutorSnapshot:
 
 
 def _raw_executor_rate(client: Any, executor_id: str) -> RawRateEvidence:
+    return _raw_executor_rate_with_request(client._request, executor_id)
+
+
+def _raw_executor_rate_with_request(
+    request: Callable[..., Any], executor_id: str
+) -> RawRateEvidence:
     try:
-        response = client._request("GET", "/executors", params={"size": 1000})
+        response = request("GET", "/executors", params={"size": 1000})
         rows = response.json()
     except Exception as exc:
         raise ProviderFailure(
@@ -662,6 +920,42 @@ def _raw_executor_rate(client: Any, executor_id: str) -> RawRateEvidence:
         price_per_gpu=price_per_gpu,
         price_per_hour=price_per_gpu * Decimal(gpu_count),
     )
+
+
+def _raw_rate_record(evidence: RawRateEvidence) -> dict[str, Any]:
+    return {
+        "authority": evidence.authority,
+        "executor_id": evidence.executor_id,
+        "gpu_count": evidence.gpu_count,
+        "available_gpu_count": evidence.available_gpu_count,
+        "price_per_gpu": float(evidence.price_per_gpu),
+        "price_per_hour": float(evidence.price_per_hour),
+        "pending_price_change": False,
+    }
+
+
+def _validate_rent_boundary_rate(
+    evidence: RawRateEvidence,
+    *,
+    expected_rate_evidence: RawRateEvidence,
+    expected_observed_rate: Decimal,
+    max_rate: Decimal,
+    phase: str,
+) -> None:
+    if (
+        evidence != expected_rate_evidence
+        or evidence.price_per_hour != expected_observed_rate
+        or not Decimal("0") < evidence.price_per_hour <= max_rate
+    ):
+        raise ProviderFailure(
+            "executor_rate_boundary_mismatch",
+            "Raw executor rate does not match the signed rent authority",
+            details={
+                "phase": phase,
+                "expected": _raw_rate_record(expected_rate_evidence),
+                "observed": _raw_rate_record(evidence),
+            },
+        )
 
 
 def _validate_executor(
@@ -803,12 +1097,20 @@ def _recover_ambiguous_creation(
             client.down(candidates[pod_id])
         except Exception:
             cleanup_failed = True
+    final_attributable_ids: list[str] = []
+    try:
+        final_matches, final_ambiguous = _named_pod_snapshot(client, allocation_name)
+        attribution_ambiguous = attribution_ambiguous or final_ambiguous
+        final_attributable_ids = sorted(set(final_matches) - set(preexisting_pod_ids))
+    except Exception:
+        lookup_failed = True
     confirmed = (
         successful_lookups == RECOVERY_LOOKUP_ATTEMPTS
         and not lookup_failed
         and not attribution_ambiguous
         and bool(candidates)
         and not cleanup_failed
+        and not final_attributable_ids
     )
     return _cleanup_details(
         "CONFIRMED" if confirmed else "UNCONFIRMED",
@@ -823,19 +1125,25 @@ def _raise_after_ambiguous_creation(
     preexisting_pod_ids: frozenset[str],
     confirmed_error: str,
     confirmed_message: str,
+    failure_details: Mapping[str, Any] | None = None,
 ) -> NoReturn:
     cleanup = _recover_ambiguous_creation(
         client,
         allocation_name=allocation_name,
         preexisting_pod_ids=preexisting_pod_ids,
     )
+    details = dict(failure_details or {})
+    if failure_details is None:
+        details = cleanup
+    else:
+        details["cleanup"] = cleanup
     if cleanup["cleanup_status"] != "CONFIRMED":
         raise ProviderFailure(
             "pod_create_cleanup_unconfirmed",
             "Ambiguous pod creation cleanup could not be confirmed",
-            details=cleanup,
+            details=details,
         )
-    raise ProviderFailure(confirmed_error, confirmed_message, details=cleanup)
+    raise ProviderFailure(confirmed_error, confirmed_message, details=details)
 
 
 def _named_pod_snapshot(

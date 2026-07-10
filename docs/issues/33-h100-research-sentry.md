@@ -44,6 +44,13 @@ checkpoint, and GRPO gates.
 - [ ] Real runner manifests, including pre/post process-cleanliness receipts,
   pass the Sentry schema and surviving processes fail independently of the
   executor's `valid` boolean.
+- [ ] Screen independently derives the one-hour first-pair deadline from signed
+  Gate 0 launch time and rejects late A1/B1 completion, request issuance, or
+  Sentry evaluation even when a packet bypasses the canonical Executor path.
+- [ ] Promotion and confirmation independently parse hash-bound process
+  receipts for A2/B2 and every T2 leg, not only the first screen pair.
+- [ ] FINAL and the signed auditor manifest require the exact Gate 0-bound,
+  confirmed-absent termination receipt, completed before the audit timestamp.
 - [ ] Focused tests, lint, docs, and a dry-run invocation pass.
 
 ## Notes

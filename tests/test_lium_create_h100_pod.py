@@ -118,37 +118,53 @@ class FakeLium:
         return self.explicit_template
 
     def _request(self, method, endpoint, **kwargs):
-        self.calls.append(("raw_executor_rate", method, endpoint, kwargs))
-        if self.raw_rate_side_effects:
-            rows = self.raw_rate_side_effects.pop(0)
-            if isinstance(rows, Exception):
-                raise rows
-        elif self.raw_rate_rows is not None:
-            rows = self.raw_rate_rows
-        else:
-            rows = [
-                {
-                    "id": EXECUTOR_ID,
-                    "gpu_count": 8,
-                    "available_gpu_count": 8,
-                    "price_per_gpu": self.raw_price_per_gpu,
-                    "pending_price_per_hour": None,
-                    "price_change_effective_date": None,
-                }
-            ]
-        return SimpleNamespace(json=lambda: rows)
+        return self._request_impl(method, endpoint, **kwargs)
+
+    def _request_impl(self, method, endpoint, **kwargs):
+        if method == "GET" and endpoint == "/executors":
+            self.calls.append(("raw_executor_rate", method, endpoint, kwargs))
+            if self.raw_rate_side_effects:
+                rows = self.raw_rate_side_effects.pop(0)
+                if isinstance(rows, Exception):
+                    raise rows
+            elif self.raw_rate_rows is not None:
+                rows = self.raw_rate_rows
+            else:
+                rows = [
+                    {
+                        "id": EXECUTOR_ID,
+                        "gpu_count": 8,
+                        "available_gpu_count": 8,
+                        "price_per_gpu": self.raw_price_per_gpu,
+                        "pending_price_per_hour": None,
+                        "price_change_effective_date": None,
+                    }
+                ]
+            return SimpleNamespace(json=lambda: rows)
+        if method == "GET" and endpoint == f"/executors/{EXECUTOR_ID}":
+            self.calls.append(("sdk_internal_executor_get", endpoint))
+            return SimpleNamespace(json=lambda: {"id": EXECUTOR_ID})
+        if method == "POST" and endpoint == f"/executors/{EXECUTOR_ID}/rent":
+            self.calls.append(("rent_post", endpoint, kwargs))
+            name = kwargs["json"]["name"]
+            if self.up_error is None or self.up_creates_before_error:
+                self.active_pods.append(SimpleNamespace(id="pod-123", name=name))
+                self.active_pods.extend(
+                    SimpleNamespace(id=pod_id, name=name) for pod_id in self.up_duplicate_ids
+                )
+            if self.up_error is not None:
+                raise self.up_error
+            return SimpleNamespace(json=lambda: self.up_result)
+        raise AssertionError(f"unexpected request: {method} {endpoint}")
 
     def up(self, **kwargs):
         self.calls.append(("up", kwargs))
-        if self.up_error is None or self.up_creates_before_error:
-            self.active_pods.append(SimpleNamespace(id="pod-123", name=kwargs["name"]))
-            self.active_pods.extend(
-                SimpleNamespace(id=pod_id, name=kwargs["name"])
-                for pod_id in self.up_duplicate_ids
-            )
-        if self.up_error is not None:
-            raise self.up_error
-        return self.up_result
+        self._request("GET", f"/executors/{kwargs['executor_id']}")
+        return self._request(
+            "POST",
+            f"/executors/{kwargs['executor_id']}/rent",
+            json=kwargs,
+        ).json()
 
     def schedule_termination(self, pod, *, termination_time):
         self.calls.append(("schedule_termination", pod.id, termination_time))
@@ -179,6 +195,13 @@ class FakeLium:
         return {"removed": pod.id}
 
 
+def _fake_undecorated_request(client, method, endpoint, **kwargs):
+    return client._request_impl(method, endpoint, **kwargs)
+
+
+FakeLium._request.__wrapped__ = _fake_undecorated_request
+
+
 def _args(*extra: str) -> list[str]:
     return [
         "up",
@@ -197,7 +220,7 @@ def _args(*extra: str) -> list[str]:
         "--template-status",
         TEMPLATE_STATUS,
         "--expected-provider-version",
-        "1.2.0",
+        "1.3.0",
         "--expected-interpreter-path",
         INTERPRETER_PATH,
         "--expected-interpreter-sha256",
@@ -280,6 +303,8 @@ def test_valid_sdk_flow_schedules_before_wait_and_never_enters_ssh(capsys) -> No
     assert record["executor"]["observed_rate_status"] == "provider_reported_nonzero"
     assert record["executor"]["max_rate_usd_per_hour"] == 18.0
     assert record["executor"]["rate_authority"] == "provider_raw_price_per_gpu_x_gpu_count/v1"
+    assert record["executor"]["rent_boundary"]["status"] == "VERIFIED_PRE_AND_POST"
+    assert record["executor"]["rent_boundary"]["endpoint"] == (f"/executors/{EXECUTOR_ID}/rent")
     assert record["template"]["id"] == TEMPLATE_ID
     assert record["template"]["docker_image"] == TEMPLATE_IMAGE
     assert record["template"]["docker_image_tag"] == TEMPLATE_TAG
@@ -317,6 +342,10 @@ def test_valid_sdk_flow_schedules_before_wait_and_never_enters_ssh(capsys) -> No
         "ps",
         "raw_executor_rate",
         "up",
+        "sdk_internal_executor_get",
+        "raw_executor_rate",
+        "rent_post",
+        "raw_executor_rate",
         "schedule_termination",
         "wait_ready",
         "ps",
@@ -379,7 +408,7 @@ def test_post_create_exception_recovers_and_terminates_new_exact_name(capsys) ->
         "cleanup_count": 1,
         "cleanup_pod_ids": ["pod-123"],
     }
-    assert client.calls.count(("ps",)) == 3
+    assert client.calls.count(("ps",)) == 4
     assert ("down", "pod-123") in client.calls
     assert not any(call[0] in {"schedule_termination", "wait_ready"} for call in client.calls)
     assert client.active_pods == []
@@ -458,20 +487,54 @@ def test_sdk_rent_mutation_uses_undecorated_single_attempt_boundary() -> None:
             raise AssertionError("retry-decorated request path must not execute")
 
         def up(self, **kwargs):
-            return self._request("POST", "/executors/executor/rent", json=kwargs).json()
+            self._request("GET", f"/executors/{kwargs['executor_id']}")
+            return self._request(
+                "POST", f"/executors/{kwargs['executor_id']}/rent", json=kwargs
+            ).json()
 
     def undecorated_request(client, method, endpoint, **kwargs):
         client.single_attempt_calls += 1
+        if method == "GET" and endpoint == "/executors":
+            return SimpleNamespace(
+                json=lambda: [
+                    {
+                        "id": EXECUTOR_ID,
+                        "gpu_count": 8,
+                        "available_gpu_count": 8,
+                        "price_per_gpu": 2.25,
+                        "pending_price_per_hour": None,
+                        "price_change_effective_date": None,
+                    }
+                ]
+            )
+        if method == "GET":
+            return SimpleNamespace(json=lambda: {"id": EXECUTOR_ID})
         return SimpleNamespace(json=lambda: {"id": "pod-single-attempt"})
 
     PinnedSdkClient._request.__wrapped__ = undecorated_request
     client = PinnedSdkClient()
 
-    result = module._single_attempt_provider_up(client, executor_id=EXECUTOR_ID, name="issue-32-e06")
+    expected_rate = module.RawRateEvidence(
+        executor_id=EXECUTOR_ID,
+        gpu_count=8,
+        available_gpu_count=8,
+        price_per_gpu=module.Decimal("2.25"),
+        price_per_hour=module.Decimal("18"),
+    )
+    result, boundary = module._single_attempt_provider_up(
+        client,
+        expected_rate_evidence=expected_rate,
+        expected_observed_rate=module.Decimal("18"),
+        max_rate=module.Decimal("18"),
+        executor_id=EXECUTOR_ID,
+        name="issue-32-e06",
+    )
 
     assert result == {"id": "pod-single-attempt"}
+    assert boundary.before_post == expected_rate
+    assert boundary.after_post == expected_rate
     assert client.decorated_calls == 0
-    assert client.single_attempt_calls == 1
+    assert client.single_attempt_calls == 4
     assert "_request" not in vars(client)
 
 
@@ -489,7 +552,20 @@ def test_real_sdk_client_without_single_attempt_boundary_fails_closed() -> None:
     client = DriftedSdkClient()
 
     with pytest.raises(module.ProviderFailure) as exc_info:
-        module._single_attempt_provider_up(client, executor_id=EXECUTOR_ID, name="issue-32-e06")
+        module._single_attempt_provider_up(
+            client,
+            expected_rate_evidence=module.RawRateEvidence(
+                executor_id=EXECUTOR_ID,
+                gpu_count=8,
+                available_gpu_count=8,
+                price_per_gpu=module.Decimal("2.25"),
+                price_per_hour=module.Decimal("18"),
+            ),
+            expected_observed_rate=module.Decimal("18"),
+            max_rate=module.Decimal("18"),
+            executor_id=EXECUTOR_ID,
+            name="issue-32-e06",
+        )
 
     assert exc_info.value.code == "sdk_mutation_boundary_unavailable"
 
@@ -642,6 +718,65 @@ def test_raw_rate_drift_immediately_before_mutation_never_creates_pod(capsys) ->
     assert exit_code != 0
     assert record["error"] == "executor_rate_changed_before_mutation"
     assert not any(call[0] == "up" for call in client.calls)
+
+
+def test_sdk_internal_get_cannot_bypass_rent_boundary_rate_check(capsys) -> None:
+    module = _module()
+    client = FakeLium()
+    stable = [
+        {
+            "id": EXECUTOR_ID,
+            "gpu_count": 8,
+            "available_gpu_count": 8,
+            "price_per_gpu": 2.25,
+            "pending_price_per_hour": None,
+            "price_change_effective_date": None,
+        }
+    ]
+    drifted = [{**stable[0], "price_per_gpu": 2.0}]
+    client.raw_rate_side_effects = [stable, stable, stable, drifted]
+
+    exit_code, record = _run(module, client, capsys)
+
+    assert exit_code != 0
+    assert record["error"] == "executor_rate_changed_at_rent_boundary"
+    assert ("sdk_internal_executor_get", f"/executors/{EXECUTOR_ID}") in client.calls
+    assert not any(call[0] == "rent_post" for call in client.calls)
+    assert client.active_pods == []
+
+
+def test_post_rent_rate_mismatch_terminates_attributable_pod_with_evidence(capsys) -> None:
+    module = _module()
+    client = FakeLium()
+    stable = [
+        {
+            "id": EXECUTOR_ID,
+            "gpu_count": 8,
+            "available_gpu_count": 8,
+            "price_per_gpu": 2.25,
+            "pending_price_per_hour": None,
+            "price_change_effective_date": None,
+        }
+    ]
+    drifted = [{**stable[0], "price_per_gpu": 2.0}]
+    client.raw_rate_side_effects = [stable, stable, stable, stable, drifted]
+
+    exit_code, record = _run(module, client, capsys)
+
+    assert exit_code != 0
+    assert record["error"] == "executor_rate_changed_after_rent"
+    assert record["details"]["phase"] == "after_post"
+    assert record["details"]["before_post"]["price_per_hour"] == 18.0
+    assert record["details"]["observed"]["price_per_hour"] == 16.0
+    assert record["details"]["cleanup"] == {
+        "cleanup_status": "CONFIRMED",
+        "cleanup_count": 1,
+        "cleanup_pod_ids": ["pod-123"],
+    }
+    assert any(call[:2] == ("rent_post", f"/executors/{EXECUTOR_ID}/rent") for call in client.calls)
+    assert ("down", "pod-123") in client.calls
+    assert client.active_pods == []
+    assert not any(call[0] in {"schedule_termination", "wait_ready"} for call in client.calls)
 
 
 def test_missing_raw_rate_and_pending_rate_change_never_create_pod(capsys) -> None:
@@ -852,6 +987,39 @@ def test_version_does_not_construct_sdk(capsys) -> None:
 
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == module.VERSION
+
+
+def test_reconciliation_control_snapshots_and_removes_only_new_exact_name(
+    capsys,
+) -> None:
+    module = _module()
+    client = FakeLium()
+
+    snapshot_exit = module.main(
+        ["reconcile", "--mode", "snapshot", "--name", "issue-32-e06-h100"],
+        client_factory=lambda credential: client,
+        credential_reader=lambda: bytearray(b"supervisor-lium-key"),
+    )
+    snapshot = json.loads(capsys.readouterr().out)
+    client.active_pods = [
+        SimpleNamespace(id="pod-new-a", name="issue-32-e06-h100"),
+        SimpleNamespace(id="pod-unrelated", name="issue-99-unrelated"),
+    ]
+
+    cleanup_exit = module.main(
+        ["reconcile", "--mode", "cleanup", "--name", "issue-32-e06-h100"],
+        client_factory=lambda credential: client,
+        credential_reader=lambda: bytearray(b"supervisor-lium-key"),
+    )
+    cleanup = json.loads(capsys.readouterr().out)
+
+    assert snapshot_exit == 0
+    assert snapshot["status"] == "SNAPSHOT_CLEAR"
+    assert cleanup_exit == 0
+    assert cleanup["status"] == "CONFIRMED_ABSENT"
+    assert cleanup["observed_attributable_ids"] == ["pod-new-a"]
+    assert cleanup["terminated_attributable_ids"] == ["pod-new-a"]
+    assert [pod.id for pod in client.active_pods] == ["pod-unrelated"]
 
 
 def test_load_ssh_public_key_binds_one_regular_file(tmp_path: Path) -> None:

@@ -110,6 +110,55 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         f"if sys.argv[1:] == ['--version']:\n    print({PROVIDER_VERSION!r}); raise SystemExit(0)\n"
         "credential = sys.stdin.buffer.readline(4098).rstrip(b'\\n')\n"
         "if not credential: raise SystemExit(77)\n"
+        "state_path = os.environ['FAKE_ALLOCATION_STATE']\n"
+        "def load_state():\n"
+        "    if not os.path.exists(state_path): return []\n"
+        "    with open(state_path, encoding='utf-8') as handle: return json.load(handle)\n"
+        "def save_state(rows):\n"
+        "    if rows:\n"
+        "        with open(state_path, 'w', encoding='utf-8') as handle: json.dump(rows, handle)\n"
+        "    elif os.path.exists(state_path): os.unlink(state_path)\n"
+        "def option(name): return sys.argv[sys.argv.index(name) + 1]\n"
+        "if sys.argv[1:2] == ['reconcile']:\n"
+        "    mode, name = option('--mode'), option('--name')\n"
+        "    rows = load_state()\n"
+        "    matches = [row for row in rows if row.get('name') == name]\n"
+        "    if mode == 'snapshot':\n"
+        "        ids = sorted(row['id'] for row in matches)\n"
+        "        status = 'SNAPSHOT_CLEAR' if not ids else 'ERROR'\n"
+        "        record = {'schema':'lium-h100-allocation-reconciliation/v1',"
+        "'status':status,'mode':mode,'allocation_name':name,"
+        "'preexisting_exact_name_ids':ids}\n"
+        "        print(json.dumps(record, separators=(',', ':')), flush=True)\n"
+        "        raise SystemExit(0 if not ids else 4)\n"
+        "    once_file = os.environ.get('FAKE_RECONCILIATION_FAILURE_ONCE_FILE')\n"
+        "    if once_file and not os.path.exists(once_file):\n"
+        "        open(once_file, 'xb').close()\n"
+        "        record = {'schema':'lium-h100-allocation-reconciliation/v1',"
+        "'status':'ERROR','mode':mode,'allocation_name':name,"
+        "'error':'allocation_cleanup_unconfirmed','details':{}}\n"
+        "        print(json.dumps(record, separators=(',', ':')), flush=True); raise SystemExit(70)\n"
+        "    if os.environ.get('FAKE_RECONCILIATION_FAILURE') == 'partial':\n"
+        "        print('{\\\"schema\\\":', flush=True); raise SystemExit(70)\n"
+        "    if os.environ.get('FAKE_RECONCILIATION_FAILURE') == 'lookup':\n"
+        "        record = {'schema':'lium-h100-allocation-reconciliation/v1',"
+        "'status':'ERROR','mode':mode,'allocation_name':name,"
+        "'error':'allocation_cleanup_unconfirmed','details':{}}\n"
+        "        print(json.dumps(record, separators=(',', ':')), flush=True); raise SystemExit(70)\n"
+        "    preexisting = {sys.argv[index + 1] for index, token in enumerate(sys.argv[:-1]) "
+        "if token == '--preexisting-id'}\n"
+        "    attributable = [row for row in matches if row['id'] not in preexisting]\n"
+        "    save_state([row for row in rows if row not in attributable])\n"
+        "    final_ids = sorted(row['id'] for row in load_state() "
+        "if row.get('name') == name and row['id'] not in preexisting)\n"
+        "    record = {'schema':'lium-h100-allocation-reconciliation/v1',"
+        "'status':'CONFIRMED_ABSENT' if not final_ids else 'ERROR','mode':mode,"
+        "'allocation_name':name,'preexisting_exact_name_ids':sorted(preexisting),"
+        "'observed_attributable_ids':sorted(row['id'] for row in attributable),"
+        "'terminated_attributable_ids':sorted(row['id'] for row in attributable),"
+        "'final_attributable_ids':final_ids,'lookup_failures':0,'termination_failures':0}\n"
+        "    print(json.dumps(record, separators=(',', ':')), flush=True)\n"
+        "    raise SystemExit(0 if not final_ids else 71)\n"
         "row = json.dumps({\n"
         "    'argv': sys.argv[1:],\n"
         "    'cwd': os.getcwd(),\n"
@@ -123,12 +172,51 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "    os.write(fd, row.encode('utf-8'))\n"
         "finally:\n"
         "    os.close(fd)\n"
-        "state = os.environ['FAKE_ALLOCATION_STATE']\n"
-        "if os.path.exists(state): raise SystemExit(73)\n"
-        "open(state, 'xb').close()\n"
+        "if load_state(): raise SystemExit(73)\n"
+        "name, pod_id = option('--name'), 'fake-pod-123'\n"
+        "extra_ids = [value for value in "
+        "os.environ.get('FAKE_EXTRA_ALLOCATION_IDS', '').split(',') if value]\n"
+        "save_state([{'id':value,'name':name} for value in [pod_id, *extra_ids]])\n"
         "with open(os.environ['FAKE_MUTATION_LOG'], 'ab') as h: h.write(b'up\\n')\n"
-        "print('fake-lium-booking-output', flush=True)\n"
-        "time.sleep(float(os.environ.get('FAKE_LIUM_SLEEP', '0')))\n",
+        "raw_executor_id = os.environ.get('FAKE_RAW_EXECUTOR_ID', sys.argv[2])\n"
+        "raw_rate = {'authority':option('--expected-rate-authority'),"
+        "'executor_id':raw_executor_id,'gpu_count':8,'available_gpu_count':8,"
+        "'price_per_gpu':2.25,'price_per_hour':float(option('--expected-observed-rate')),"
+        "'pending_price_change':False}\n"
+        "record = {\n"
+        " 'schema':'lium-h100-pod-create/v2','status':'RUNNING',\n"
+        " 'pod':{'id':pod_id,'name':name,'huid':'fake-huid','ssh_cmd':'ssh fake'},\n"
+        " 'executor':{'id':raw_executor_id,'huid':sys.argv[2],'gpu_count':8,"
+        "'observed_rate_usd_per_hour':float(option('--expected-observed-rate')),"
+        "'max_rate_usd_per_hour':float(option('--max-rate')),"
+        "'rate_authority':option('--expected-rate-authority'),"
+        "'rate_evidence':{key:value for key,value in raw_rate.items() if key != 'authority'},"
+        "'rent_boundary':{'status':'VERIFIED_PRE_AND_POST',"
+        "'endpoint':f'/executors/{raw_executor_id}/rent',"
+        "'before_post':raw_rate,'after_post':dict(raw_rate)}},\n"
+        " 'template':{'id':option('--template-id'),'docker_image':option('--template-image'),"
+        "'docker_image_tag':option('--template-tag'),'status':option('--template-status')},\n"
+        " 'access':{'ssh_public_key_path':option('--ssh-public-key-path'),"
+        "'ssh_public_key_sha256':option('--ssh-public-key-sha256')},\n"
+        " 'schedule':{'ttl_seconds':7200},\n"
+        " 'create_reconciliation':{'status':'CONFIRMED_UNIQUE','allocation_name':name,"
+        "'pod_id':pod_id,'final_active_pod_ids':[pod_id]}\n"
+        "}\n"
+        "boundary_tamper = os.environ.get('FAKE_RENT_BOUNDARY_TAMPER')\n"
+        "if boundary_tamper == 'missing': del record['executor']['rent_boundary']\n"
+        "elif boundary_tamper == 'status': "
+        "record['executor']['rent_boundary']['status'] = 'UNVERIFIED'\n"
+        "elif boundary_tamper == 'endpoint': "
+        "record['executor']['rent_boundary']['endpoint'] = '/executors/attacker/rent'\n"
+        "elif boundary_tamper == 'after_rate': "
+        "record['executor']['rent_boundary']['after_post']['price_per_hour'] = 17\n"
+        "elif boundary_tamper == 'aggregate_rate': "
+        "record['executor']['rate_evidence']['price_per_hour'] = 17\n"
+        "output_mode = os.environ.get('FAKE_PROVIDER_OUTPUT_MODE', 'valid')\n"
+        "if output_mode == 'valid': print(json.dumps(record, separators=(',', ':')), flush=True)\n"
+        "elif output_mode == 'partial': print('{\\\"schema\\\":', flush=True)\n"
+        "time.sleep(float(os.environ.get('FAKE_LIUM_SLEEP', '0')))\n"
+        "raise SystemExit(int(os.environ.get('FAKE_PROVIDER_EXIT', '0')))\n",
         encoding="utf-8",
     )
     fake_lium.chmod(0o755)
@@ -325,8 +413,9 @@ def _wrapper_argv(
     working_directory: Path | None = None,
     receipt: Path | None = None,
     provider_output: Path | None = None,
+    retry_terminal_reconciliation: bool = False,
 ) -> list[str]:
-    return [
+    arguments = [
         sys.executable,
         str(harness["driver"]),
         str(harness["ledger"]),
@@ -364,9 +453,10 @@ def _wrapper_argv(
         str(receipt or harness["receipt"]),
         "--provider-output",
         str(provider_output or harness["provider_output"]),
-        "--",
-        *(command or harness["argv"]),
     ]
+    if retry_terminal_reconciliation:
+        arguments.append("--retry-terminal-reconciliation")
+    return [*arguments, "--", *(command or harness["argv"])]
 
 
 def _run_wrapper(
@@ -392,6 +482,12 @@ def _invocations(harness: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _terminal_receipt(harness: dict[str, Any]) -> dict[str, Any]:
+    paths = list(harness["ledger"].glob("*.terminal-reconciliation.json"))
+    assert len(paths) == 1
+    return json.loads(paths[0].read_text(encoding="utf-8"))
+
+
 def _resign(harness: dict[str, Any]) -> None:
     _write_signed_permit(
         harness["permit"],
@@ -399,6 +495,54 @@ def _resign(harness: dict[str, Any]) -> None:
         harness["key_id"],
         harness["payload"],
     )
+
+
+def _seed_cleanup_unconfirmed_chain(harness: dict[str, Any]) -> tuple[Path, Path]:
+    permit_sha256 = hashlib.sha256(harness["permit"].read_bytes()).hexdigest()
+    claim_material = canonical_json_bytes(
+        {
+            "nonce": harness["payload"]["nonce"],
+            "request_id": harness["payload"]["request_id"],
+        }
+    )
+    claim_id = hashlib.sha256(claim_material).hexdigest()
+    harness["ledger"].mkdir(mode=0o700, exist_ok=True)
+    harness["ledger"].chmod(0o700)
+    claim_path = harness["ledger"] / f"{claim_id}.consumed.json"
+    claim_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "key_id": harness["key_id"],
+                "nonce": harness["payload"]["nonce"],
+                "permit_sha256": permit_sha256,
+                "request_id": harness["payload"]["request_id"],
+                "consumed_at": harness["payload"]["issued_at"],
+            }
+        )
+        + b"\n"
+    )
+    terminal_path = harness["ledger"] / f"{claim_id}.terminal-reconciliation.json"
+    terminal_path.write_text(
+        json.dumps(
+            {
+                "schema": signed_approval.TERMINAL_RECONCILIATION_RECEIPT_SCHEMA,
+                "status": "CLEANUP_UNCONFIRMED",
+                "permit": {"sha256": permit_sha256},
+                "claim": {
+                    "path": str(claim_path.resolve()),
+                    "sha256": hashlib.sha256(claim_path.read_bytes()).hexdigest(),
+                },
+                "allocation": {
+                    "name": ALLOCATION_NAME,
+                    "preexisting_exact_name_ids": [],
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return claim_path, terminal_path
 
 
 def test_production_verifier_accepts_canonical_ed25519_permit(tmp_path: Path) -> None:
@@ -518,6 +662,24 @@ def test_valid_permit_invokes_exact_signed_argv_once(tmp_path: Path) -> None:
     assert len(list(harness["ledger"].glob("*.consumed.json"))) == 1
 
 
+def test_huid_selector_matches_provider_uuid_or_huid(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    selector_huid = "gentle-hawk-2a"
+    raw_executor_id = "4f4ad1c1-7d95-41a7-bd0d-35aa950d73ac"
+    harness["payload"]["executor_id"] = selector_huid
+    harness["argv"][2] = selector_huid
+    harness["payload"]["environment"]["FAKE_RAW_EXECUTOR_ID"] = raw_executor_id
+    _resign(harness)
+
+    completed = _run_wrapper(harness, executor_id=selector_huid)
+    record = json.loads(harness["provider_output"].read_bytes())
+
+    assert completed.returncode == 0, completed.stderr
+    assert record["executor"]["id"] == raw_executor_id
+    assert record["executor"]["huid"] == selector_huid
+    assert record["executor"]["rent_boundary"]["endpoint"] == (f"/executors/{raw_executor_id}/rent")
+
+
 def test_launch_receipt_binds_evidence_without_secret_values(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
 
@@ -535,13 +697,12 @@ def test_launch_receipt_binds_evidence_without_secret_values(tmp_path: Path) -> 
         receipt["provider"]["executable_sha256"] == harness["payload"]["provider_executable_sha256"]
     )
     assert receipt["provider"]["declared_version"] == PROVIDER_VERSION
-    assert harness["provider_output"].read_bytes() == b"fake-lium-booking-output\n"
+    provider_output = harness["provider_output"].read_bytes()
+    provider_record = json.loads(provider_output)
+    assert provider_record["status"] == "RUNNING"
     assert receipt["provider_output"]["path"] == str(harness["provider_output"])
-    assert (
-        receipt["provider_output"]["sha256"]
-        == hashlib.sha256(b"fake-lium-booking-output\n").hexdigest()
-    )
-    assert receipt["provider_output"]["size_bytes"] == len(b"fake-lium-booking-output\n")
+    assert receipt["provider_output"]["sha256"] == hashlib.sha256(provider_output).hexdigest()
+    assert receipt["provider_output"]["size_bytes"] == len(provider_output)
     assert receipt["execution"]["cwd"] == str(harness["working_directory"])
     assert receipt["execution"]["argv"] == harness["argv"]
     assert receipt["execution"]["exit_code"] == 0
@@ -557,9 +718,7 @@ def test_launch_receipt_binds_evidence_without_secret_values(tmp_path: Path) -> 
     )
     assert receipt["execution"]["started_at"] <= receipt["execution"]["finished_at"]
     assert receipt["budget"]["observed_node_hourly_rate_usd"] == 18
-    assert receipt["budget"]["observed_node_hourly_rate_status"] == (
-        "provider_reported_nonzero"
-    )
+    assert receipt["budget"]["observed_node_hourly_rate_status"] == ("provider_reported_nonzero")
     assert receipt["budget"]["max_node_hourly_rate_usd"] == 18
     assert len(receipt["claim"]["sha256"]) == 64
     assert harness["credential"] not in receipt_text
@@ -589,10 +748,71 @@ def test_provider_timeout_preserves_output_and_durable_failure_receipt(
     assert receipt["execution"]["exit_code"] != 0
     assert receipt["execution"]["wrapper_exit_code"] == 124
     assert receipt["execution"]["provider_timeout_seconds"] == 1
-    assert output == b"fake-lium-booking-output\n"
+    assert json.loads(output)["status"] == "RUNNING"
     assert receipt["provider_output"]["sha256"] == hashlib.sha256(output).hexdigest()
     assert receipt["provider_output"]["size_bytes"] == len(output)
     assert len(_invocations(harness)) == 1
+    assert not harness["allocation_state"].exists()
+    terminal = _terminal_receipt(harness)
+    assert terminal["status"] == "FAILURE_RECONCILED"
+    assert terminal["terminal_failure"]["kind"] == "ProviderTimeout"
+    assert terminal["reconciliation"]["record"]["status"] == "CONFIRMED_ABSENT"
+    assert terminal["artifacts"]["captured_provider_output"] == {
+        "sha256": hashlib.sha256(output).hexdigest(),
+        "size_bytes": len(output),
+    }
+
+
+@pytest.mark.parametrize("output_mode", ["missing", "partial"])
+def test_missing_or_partial_provider_output_reconciles_all_attributable_allocations(
+    tmp_path: Path, output_mode: str
+) -> None:
+    harness = _make_harness(tmp_path)
+    harness["payload"]["environment"]["FAKE_PROVIDER_OUTPUT_MODE"] = output_mode
+    harness["payload"]["environment"]["FAKE_EXTRA_ALLOCATION_IDS"] = (
+        "fake-pod-duplicate-a,fake-pod-duplicate-b"
+    )
+    _resign(harness)
+
+    completed = _run_wrapper(harness)
+    terminal = _terminal_receipt(harness)
+
+    assert completed.returncode == 125
+    assert not harness["allocation_state"].exists()
+    assert terminal["status"] == "FAILURE_RECONCILED"
+    assert terminal["reconciliation"]["record"]["observed_attributable_ids"] == [
+        "fake-pod-123",
+        "fake-pod-duplicate-a",
+        "fake-pod-duplicate-b",
+    ]
+    assert terminal["reconciliation"]["record"]["final_attributable_ids"] == []
+    assert (
+        terminal["artifacts"]["captured_provider_output"]["sha256"]
+        == hashlib.sha256(harness["provider_output"].read_bytes()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["missing", "status", "endpoint", "after_rate", "aggregate_rate"],
+)
+def test_outer_wrapper_rejects_tampered_rent_boundary_and_reconciles(
+    tmp_path: Path, tamper: str
+) -> None:
+    harness = _make_harness(tmp_path)
+    harness["payload"]["environment"]["FAKE_RENT_BOUNDARY_TAMPER"] = tamper
+    _resign(harness)
+
+    completed = _run_wrapper(harness)
+    launch_receipt = json.loads(harness["receipt"].read_text(encoding="utf-8"))
+    terminal = _terminal_receipt(harness)
+
+    assert completed.returncode == 125
+    assert launch_receipt["status"] == "PROVIDER_OUTPUT_INVALID"
+    assert launch_receipt["execution"]["provider_output_valid"] is False
+    assert terminal["status"] == "FAILURE_RECONCILED"
+    assert terminal["reconciliation"]["record"]["status"] == "CONFIRMED_ABSENT"
+    assert not harness["allocation_state"].exists()
 
 
 def test_provider_output_tamper_is_detectable_from_receipt_hash(tmp_path: Path) -> None:
@@ -913,9 +1133,203 @@ def test_replay_is_rejected_without_second_provider_invocation(tmp_path: Path) -
 
     assert first.returncode == 0
     assert replay.returncode != 0
-    assert "PermitReplayError" in replay.stderr
+    assert "PermitVerificationError" in replay.stderr
     assert before_replay == 1
     assert len(_invocations(harness)) == before_replay
+
+
+def test_outer_snapshot_rejects_preexisting_exact_name_before_consumption(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    harness["allocation_state"].write_text(
+        json.dumps([{"id": "preexisting-pod", "name": ALLOCATION_NAME}]),
+        encoding="utf-8",
+    )
+
+    completed = _run_wrapper(harness)
+
+    assert completed.returncode == 2
+    assert _invocations(harness) == []
+    assert not harness["mutation_log"].exists()
+    assert not harness["ledger"].exists()
+    assert json.loads(harness["allocation_state"].read_text(encoding="utf-8")) == [
+        {"id": "preexisting-pod", "name": ALLOCATION_NAME}
+    ]
+
+
+def test_terminal_slot_conflict_rejects_before_claim_or_provider_mutation(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+    claim_material = canonical_json_bytes(
+        {
+            "nonce": harness["payload"]["nonce"],
+            "request_id": harness["payload"]["request_id"],
+        }
+    )
+    claim_id = hashlib.sha256(claim_material).hexdigest()
+    harness["ledger"].mkdir(mode=0o700)
+    terminal_path = harness["ledger"] / f"{claim_id}.terminal-reconciliation.json"
+    terminal_path.write_text("reserved-by-prior-attempt\n", encoding="utf-8")
+
+    completed = _run_wrapper(harness)
+
+    assert completed.returncode == 2
+    assert "PermitReplayError" in completed.stderr
+    assert not list(harness["ledger"].glob("*.consumed.json"))
+    assert _invocations(harness) == []
+    assert not harness["mutation_log"].exists()
+    assert terminal_path.read_text(encoding="utf-8") == "reserved-by-prior-attempt\n"
+
+
+def test_cleanup_retry_is_append_only_and_never_relaunches_provider(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    once_file = tmp_path / "reconciliation-failed-once.state"
+    harness["payload"]["environment"]["FAKE_PROVIDER_OUTPUT_MODE"] = "partial"
+    harness["payload"]["environment"]["FAKE_RECONCILIATION_FAILURE_ONCE_FILE"] = str(once_file)
+    _resign(harness)
+
+    first = _run_wrapper(harness)
+    terminal_paths = list(harness["ledger"].glob("*.terminal-reconciliation.json"))
+    assert len(terminal_paths) == 1
+    original_terminal_bytes = terminal_paths[0].read_bytes()
+    original_terminal = json.loads(original_terminal_bytes)
+    assert first.returncode == 125
+    assert original_terminal["status"] == "CLEANUP_UNCONFIRMED"
+    assert original_terminal["retry_control"]["next_attempt"] == 1
+    assert harness["allocation_state"].exists()
+
+    retry = _run_wrapper(harness, retry_terminal_reconciliation=True)
+    retry_paths = list(harness["ledger"].glob("*.terminal-reconciliation.retry-0001.json"))
+
+    assert retry.returncode == 0, retry.stderr
+    assert terminal_paths[0].read_bytes() == original_terminal_bytes
+    assert len(retry_paths) == 1
+    retry_receipt = json.loads(retry_paths[0].read_text(encoding="utf-8"))
+    assert retry_receipt["status"] == "RETRY_RECONCILED"
+    assert retry_receipt["attempt"] == 1
+    assert (
+        retry_receipt["parent_receipt"]["sha256"]
+        == hashlib.sha256(original_terminal_bytes).hexdigest()
+    )
+    assert retry_receipt["reconciliation"]["record"]["final_attributable_ids"] == []
+    assert not harness["allocation_state"].exists()
+    assert harness["mutation_log"].read_text(encoding="utf-8").splitlines() == ["up"]
+    assert len(_invocations(harness)) == 1
+
+    no_second_retry = _run_wrapper(harness, retry_terminal_reconciliation=True)
+    assert no_second_retry.returncode == 2
+    assert not list(harness["ledger"].glob("*.retry-0002.json"))
+    assert len(_invocations(harness)) == 1
+
+
+def test_expired_permit_cannot_launch_but_can_retry_bound_cleanup(tmp_path: Path) -> None:
+    launch_root = tmp_path / "launch"
+    launch_root.mkdir()
+    launch_harness = _make_harness(launch_root)
+    launch_harness["payload"]["issued_at"] = "2026-07-10T00:00:00Z"
+    launch_harness["payload"]["expires_at"] = "2026-07-10T00:10:00Z"
+    _resign(launch_harness)
+
+    rejected_launch = _run_wrapper(launch_harness)
+
+    assert rejected_launch.returncode == 2
+    assert "permit is expired" in rejected_launch.stderr
+    assert not launch_harness["mutation_log"].exists()
+    assert not launch_harness["ledger"].exists()
+
+    retry_root = tmp_path / "retry"
+    retry_root.mkdir()
+    retry_harness = _make_harness(retry_root)
+    retry_harness["payload"]["issued_at"] = "2026-07-10T00:00:00Z"
+    retry_harness["payload"]["expires_at"] = "2026-07-10T00:10:00Z"
+    _resign(retry_harness)
+    _seed_cleanup_unconfirmed_chain(retry_harness)
+    retry_harness["allocation_state"].write_text(
+        json.dumps([{"id": "paid-pod-from-lost-response", "name": ALLOCATION_NAME}]),
+        encoding="utf-8",
+    )
+
+    cleanup = _run_wrapper(retry_harness, retry_terminal_reconciliation=True)
+
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert not retry_harness["allocation_state"].exists()
+    assert not retry_harness["mutation_log"].exists()
+    assert len(_invocations(retry_harness)) == 0
+    retry_receipts = list(retry_harness["ledger"].glob("*.terminal-reconciliation.retry-0001.json"))
+    assert len(retry_receipts) == 1
+    assert json.loads(retry_receipts[0].read_text(encoding="utf-8"))["status"] == (
+        "RETRY_RECONCILED"
+    )
+
+
+def test_exact_reserved_cleanup_retry_is_resumable(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness["payload"]["environment"]["FAKE_PROVIDER_OUTPUT_MODE"] = "partial"
+    harness["payload"]["environment"]["FAKE_RECONCILIATION_FAILURE_ONCE_FILE"] = str(
+        tmp_path / "reconciliation-failed-once.state"
+    )
+    _resign(harness)
+    first = _run_wrapper(harness)
+    assert first.returncode == 125
+    terminal_path = next(harness["ledger"].glob("*.terminal-reconciliation.json"))
+    retry_path = terminal_path.with_name(
+        f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+    )
+    retry_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema": signed_approval.TERMINAL_RECONCILIATION_RETRY_SCHEMA,
+                "status": "RESERVED",
+                "attempt": 1,
+                "permit_sha256": hashlib.sha256(harness["permit"].read_bytes()).hexdigest(),
+                "parent_receipt_sha256": hashlib.sha256(terminal_path.read_bytes()).hexdigest(),
+            }
+        )
+        + b"\n"
+    )
+
+    resumed = _run_wrapper(harness, retry_terminal_reconciliation=True)
+
+    assert resumed.returncode == 0, resumed.stderr
+    assert json.loads(retry_path.read_text(encoding="utf-8"))["status"] == "RETRY_RECONCILED"
+    assert not harness["allocation_state"].exists()
+    assert harness["mutation_log"].read_text(encoding="utf-8").splitlines() == ["up"]
+
+
+def test_tampered_reserved_cleanup_retry_fails_before_cleanup(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _seed_cleanup_unconfirmed_chain(harness)
+    harness["allocation_state"].write_text(
+        json.dumps([{"id": "still-paid-pod", "name": ALLOCATION_NAME}]),
+        encoding="utf-8",
+    )
+    terminal_path = next(harness["ledger"].glob("*.terminal-reconciliation.json"))
+    retry_path = terminal_path.with_name(
+        f"{terminal_path.name.removesuffix('.json')}.retry-0001.json"
+    )
+    retry_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema": signed_approval.TERMINAL_RECONCILIATION_RETRY_SCHEMA,
+                "status": "RESERVED",
+                "attempt": 1,
+                "permit_sha256": hashlib.sha256(harness["permit"].read_bytes()).hexdigest(),
+                "parent_receipt_sha256": "f" * 64,
+            }
+        )
+        + b"\n"
+    )
+
+    rejected = _run_wrapper(harness, retry_terminal_reconciliation=True)
+
+    assert rejected.returncode == 2
+    assert "retry reservation mismatch" in rejected.stderr
+    assert json.loads(harness["allocation_state"].read_text(encoding="utf-8")) == [
+        {"id": "still-paid-pod", "name": ALLOCATION_NAME}
+    ]
+    assert not harness["mutation_log"].exists()
 
 
 def test_production_cli_rejects_fresh_ledger_selection(tmp_path: Path) -> None:
@@ -954,9 +1368,9 @@ def test_deleted_claim_still_cannot_mutate_same_allocation_twice(tmp_path: Path)
     second = _run_wrapper(harness)
 
     assert first.returncode == 0
-    assert second.returncode == 73
+    assert second.returncode == 2
     assert harness["mutation_log"].read_text(encoding="utf-8").splitlines() == ["up"]
-    assert len(_invocations(harness)) == 2
+    assert len(_invocations(harness)) == 1
 
 
 def test_script_path_swap_immediately_before_popen_executes_held_bytes(
@@ -1010,7 +1424,7 @@ def test_script_path_swap_immediately_before_popen_executes_held_bytes(
         os.close(script_fd)
 
     assert process.returncode == 0
-    assert output == b"fake-lium-booking-output\n"
+    assert json.loads(output)["status"] == "RUNNING"
     assert b"SWAPPED-BYTES-EXECUTED" not in output
 
 
@@ -1037,4 +1451,8 @@ def test_concurrent_use_invokes_provider_at_most_once(tmp_path: Path) -> None:
 
     assert sorted(process.returncode for process in processes) == [0, 2]
     assert len(_invocations(harness)) == 1
-    assert any("PermitReplayError" in stderr for _, stderr in outputs)
+    assert any(
+        error in stderr
+        for _, stderr in outputs
+        for error in ("PermitReplayError", "PermitVerificationError")
+    )

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/Cellar/python@3.11/3.11.14_3/Frameworks/Python.framework/Versions/3.11/bin/python3.11
 """Terminate one artifact-bound Lium H100 allocation and prove it is absent."""
 
 from __future__ import annotations
@@ -312,7 +312,9 @@ def _sha256(path: Path) -> str:
 
 def _write_exclusive_json(path: Path, payload: Mapping[str, Any]) -> None:
     if not path.is_absolute():
-        raise TerminationFailure("receipt_path_invalid", "Termination receipt path must be absolute")
+        raise TerminationFailure(
+            "receipt_path_invalid", "Termination receipt path must be absolute"
+        )
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -328,7 +330,9 @@ def _write_exclusive_json(path: Path, payload: Mapping[str, Any]) -> None:
     except FileExistsError as exc:
         raise TerminationFailure("receipt_exists", "Termination receipt already exists") from exc
     except OSError as exc:
-        raise TerminationFailure("receipt_write_failed", "Could not write termination receipt") from exc
+        raise TerminationFailure(
+            "receipt_write_failed", "Could not write termination receipt"
+        ) from exc
 
 
 def _utc_timestamp() -> str:

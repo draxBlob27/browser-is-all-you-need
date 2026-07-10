@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 SCRIPT = Path("scripts/lium_terminate_h100_pod.py")
@@ -24,9 +27,7 @@ def _module():
 
 class FakeLium:
     def __init__(self, *, present: bool = True, down_removes: bool = True) -> None:
-        self.pods = (
-            [SimpleNamespace(id=ALLOCATION_ID, name=ALLOCATION_NAME)] if present else []
-        )
+        self.pods = [SimpleNamespace(id=ALLOCATION_ID, name=ALLOCATION_NAME)] if present else []
         self.down_removes = down_removes
         self.calls: list[tuple] = []
 
@@ -155,3 +156,80 @@ def test_same_name_other_id_is_never_terminated(tmp_path: Path, capsys) -> None:
     assert code == 2
     assert rendered["error"] == "allocation_identity_conflict"
     assert not any(call[0] == "down" for call in client.calls)
+
+
+def test_executable_uses_pinned_lium_runtime_under_sterile_path(tmp_path: Path) -> None:
+    shebang = SCRIPT.read_text(encoding="utf-8").splitlines()[0]
+    interpreter = Path(shebang.removeprefix("#!"))
+    if not interpreter.is_file():
+        pytest.skip("the host-pinned supervisor interpreter is not installed")
+    provider, launch = _artifacts(tmp_path)
+    receipt = tmp_path / "termination.json"
+    marker = tmp_path / "down-count.txt"
+    fake_root = tmp_path / "fake-sdk"
+    package = fake_root / "lium"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "sdk.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "class Config:\n"
+        "    def __init__(self, *, api_key):\n"
+        "        assert api_key == 'supervisor-key'\n"
+        "class Pod:\n"
+        f"    id = {ALLOCATION_ID!r}\n"
+        f"    name = {ALLOCATION_NAME!r}\n"
+        "class Lium:\n"
+        "    def __init__(self, config):\n"
+        "        self.marker = Path(os.environ['FAKE_DOWN_MARKER'])\n"
+        "    def ps(self):\n"
+        "        return [] if self.marker.exists() else [Pod()]\n"
+        "    def down(self, pod):\n"
+        "        assert pod.id == Pod.id and pod.name == Pod.name\n"
+        "        assert not self.marker.exists()\n"
+        "        self.marker.write_text('1\\n', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    command = [
+        str(SCRIPT.resolve()),
+        "--provider-output",
+        str(provider.resolve()),
+        "--launch-receipt",
+        str(launch.resolve()),
+        "--allocation-id",
+        ALLOCATION_ID,
+        "--allocation-name",
+        ALLOCATION_NAME,
+        "--receipt",
+        str(receipt.resolve()),
+        "--yes",
+    ]
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "PYTHONPATH": str(fake_root),
+        "FAKE_DOWN_MARKER": str(marker),
+    }
+
+    first = subprocess.run(
+        command,
+        input=b"supervisor-key\n",
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+    second = subprocess.run(
+        command,
+        input=b"supervisor-key\n",
+        capture_output=True,
+        check=False,
+        env={key: value for key, value in environment.items() if key != "LIUM_API_KEY"},
+    )
+
+    assert first.returncode == 0, first.stderr.decode()
+    assert json.loads(first.stdout)["status"] == "TERMINATED"
+    assert marker.read_text(encoding="utf-8") == "1\n"
+    assert second.returncode == 3
+    assert json.loads(second.stdout)["error"] == "receipt_exists"
+    assert marker.read_text(encoding="utf-8") == "1\n"
+    assert "LIUM_API_KEY" not in environment

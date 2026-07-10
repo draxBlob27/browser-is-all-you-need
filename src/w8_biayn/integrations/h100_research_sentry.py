@@ -97,6 +97,7 @@ class SentryPolicy:
     required_tranche_id: str = "T1"
     maximum_node_hours: float = 2.0
     maximum_usd: float = 36.0
+    first_pair_deadline_seconds: int = 3600
     minimum_telemetry_rows_per_gpu: int = 2
     minimum_telemetry_overlap_fraction: float = 0.8
 
@@ -1054,11 +1055,9 @@ def _reconcile_preflight_intent(
         "row_count"
     ) != fixed_workload.get("dataset_rows"):
         reasons.append("preflight_data_intent_row_count_mismatch")
-    if data_intent.get("manifest_sha256") != data_receipt.get(
+    if data_intent.get("manifest_sha256") != data_receipt.get("manifest_sha256") or data_intent.get(
         "manifest_sha256"
-    ) or data_intent.get("manifest_sha256") != fixed_workload.get(
-        "dataset_manifest_sha256"
-    ):
+    ) != fixed_workload.get("dataset_manifest_sha256"):
         reasons.append("preflight_data_intent_manifest_hash_mismatch")
 
     checkpoint_intent = intents.get("checkpoint", {})
@@ -1103,9 +1102,10 @@ def _setup_evidence_reasons(
     reasons: list[str] = []
     attestation = evidence.get("attestation")
     attestation = attestation if isinstance(attestation, Mapping) else {}
-    if set(attestation) != _SETUP_ATTESTATION_FIELDS or attestation.get(
-        "schema"
-    ) != "w8-h100-setup-attestation/v1":
+    if (
+        set(attestation) != _SETUP_ATTESTATION_FIELDS
+        or attestation.get("schema") != "w8-h100-setup-attestation/v1"
+    ):
         reasons.append("preflight_setup_attestation_schema_invalid")
     if _parse_time(attestation.get("created_at_utc")) is None:
         reasons.append("preflight_setup_attestation_timestamp_invalid")
@@ -1211,6 +1211,7 @@ def evaluate_preflight(
         booking_request_path=booking_request_path,
         provider_output_path=provider_output_path,
         security=security,
+        policy=policy,
     )
     intent = _reconcile_preflight_intent(
         gate0=gate0,
@@ -1307,6 +1308,8 @@ def evaluate_screen(
         control_path=control_path,
         candidate_path=candidate_path,
         expected_source=prior_context.get("source_identity"),
+        expected_gate0=prior_context.get("gate0"),
+        evaluation_time=_security_now(security.now if security is not None else None),
         policy=policy,
     )
     inputs.extend(_request_provenance_inputs(request))
@@ -1389,12 +1392,22 @@ def evaluate_promotion(
         result = _envelope(Stage.PROMOTION, Decision.INVALID, reasons, policy)
         result["prior_stage"] = prior
         return _finish(result, Stage.PROMOTION, inputs, command, security)
+    runner_evidence = _validate_promotion_runner_evidence(
+        screen_decision_path=screen_decision_path,
+        screen_payload=prior["payload"],
+        control_paths=control_paths,
+        candidate_paths=candidate_paths,
+    )
+    inputs.extend(runner_evidence["inputs"])
     hardware = prior["payload"]["context"]["hardware"]
     pairs = [
         _evaluate_pair(f"T1-P{index}", control, candidate, hardware, policy, True)
         for index, (control, candidate) in enumerate(zip(control_paths, candidate_paths), 1)
     ]
-    invalid = [reason for pair in pairs if not pair["valid"] for reason in pair["reasons"]]
+    invalid = [
+        *runner_evidence["reasons"],
+        *(reason for pair in pairs if not pair["valid"] for reason in pair["reasons"]),
+    ]
     if not invalid:
         invalid.extend(
             reason for pair in pairs for reason in _control_baseline_reasons(pair, policy)
@@ -1425,6 +1438,9 @@ def evaluate_promotion(
         decision, reasons = Decision.PROMOTABLE, []
     result = _envelope(Stage.PROMOTION, decision, reasons, policy)
     result["prior_stage"] = prior
+    result["runner_evidence"] = {
+        key: value for key, value in runner_evidence.items() if key != "inputs"
+    }
     result["pairs"] = pairs
     result["promotion_rule"] = {
         "independent_process_pair_gate": True,
@@ -1593,6 +1609,7 @@ def evaluate_final(
     grpo_decision_path: str | Path,
     audit_path: str | Path,
     contract_path: str | Path,
+    termination_receipt_path: str | Path,
     security: SentrySecurity | None = None,
     policy: SentryPolicy | None = None,
     command: str | None = None,
@@ -1601,11 +1618,17 @@ def evaluate_final(
     confirmation = _validate_prior(confirmation_decision_path, Stage.CONFIRMATION, security)
     grpo = _validate_prior(grpo_decision_path, Stage.GRPO, security)
     contract = _validate_contract(contract_path, policy)
+    confirmation_context = (confirmation.get("payload") or {}).get("context", {})
+    termination = _validate_termination_receipt(
+        termination_receipt_path,
+        expected_gate0=confirmation_context.get("gate0"),
+    )
     audit = _validate_audit(
         audit_path,
         contract_path=contract_path,
         confirmation_decision_path=confirmation_decision_path,
         grpo_decision_path=grpo_decision_path,
+        termination_receipt_path=termination_receipt_path,
         contract=contract,
         security=security,
     )
@@ -1614,7 +1637,9 @@ def evaluate_final(
         ("grpo_decision", grpo_decision_path),
         ("audit", audit_path),
         ("contract", contract_path),
+        ("termination_receipt", termination_receipt_path),
     ]
+    inputs.extend((item["role"], item["path"]) for item in termination.get("verified_inputs", []))
     inputs.extend((item["role"], item["path"]) for item in audit.get("verified_inputs", []))
     chain_reasons: list[str] = []
     if grpo["passed"] and not _provenance_input_matches_exact(
@@ -1637,6 +1662,7 @@ def evaluate_final(
         *([] if grpo["passed"] else grpo["reasons"]),
         *chain_reasons,
         *contract["reasons"],
+        *termination["reasons"],
         *audit["reasons"],
     ]
     decision = Decision.VERIFIED if not reasons else Decision.INVALID
@@ -1644,6 +1670,7 @@ def evaluate_final(
     result["confirmation"] = confirmation
     result["grpo"] = grpo
     result["audit"] = audit
+    result["termination"] = termination
     result["context"] = (confirmation.get("payload") or {}).get("context", {})
     result["acceptance_contract_sha256"] = contract_sha256
     return _finish(result, Stage.FINAL, inputs, command, security)
@@ -1664,6 +1691,7 @@ def evaluate_stage(
     candidate_paths: Sequence[str | Path] = (),
     grpo_path: str | Path | None = None,
     audit_path: str | Path | None = None,
+    termination_receipt_path: str | Path | None = None,
     request_path: str | Path | None = None,
     gate0_permit_path: str | Path | None = None,
     gate0_public_key_path: str | Path | None = None,
@@ -1770,6 +1798,7 @@ def evaluate_stage(
             ("grpo_decision", grpo_decision_path),
             ("audit", audit_path),
             ("contract", contract_path),
+            ("termination_receipt", termination_receipt_path),
         ):
             if value is None:
                 missing.append(f"{name}_missing")
@@ -1779,6 +1808,7 @@ def evaluate_stage(
                 grpo_decision_path=grpo_decision_path,  # type: ignore[arg-type]
                 audit_path=audit_path,  # type: ignore[arg-type]
                 contract_path=contract_path,  # type: ignore[arg-type]
+                termination_receipt_path=termination_receipt_path,  # type: ignore[arg-type]
                 security=security,
                 policy=policy,
                 command=command,
@@ -2387,6 +2417,7 @@ def _validate_gate0_chain(
     booking_request_path: str | Path | None,
     provider_output_path: str | Path | None,
     security: SentrySecurity | None,
+    policy: SentryPolicy,
 ) -> dict[str, Any]:
     supplied = {
         "permit": permit_path,
@@ -2439,12 +2470,13 @@ def _validate_gate0_chain(
     nonce = str(payload.get("nonce") or "")
     if _REQUEST_ID_RE.fullmatch(request_id) is None or _HEX_256_RE.fullmatch(nonce) is None:
         reasons.append("gate0_request_id_or_nonce_invalid")
+    issued_at: datetime | None = None
+    expires_at: datetime | None = None
     try:
         issued_at = _require_security_time(payload.get("issued_at"), "gate0 issued_at")
         expires_at = _require_security_time(payload.get("expires_at"), "gate0 expires_at")
-        current = _security_now(security.now if security is not None else None)
-        if current < issued_at or current >= expires_at:
-            reasons.append("gate0_permit_outside_validity_window")
+        if expires_at <= issued_at or expires_at - issued_at > timedelta(minutes=10):
+            reasons.append("gate0_permit_lifetime_invalid")
     except DecisionSecurityError as exc:
         reasons.append(str(exc))
     if security is not None and (
@@ -2496,12 +2528,33 @@ def _validate_gate0_chain(
         or execution.get("timed_out") is not False
     ):
         reasons.append("gate0_launch_receipt_status_invalid")
+    allocation_started_at = _parse_time(execution.get("started_at"))
+    allocation_finished_at = _parse_time(execution.get("finished_at"))
+    if (
+        allocation_started_at is None
+        or allocation_finished_at is None
+        or allocation_finished_at < allocation_started_at
+    ):
+        reasons.append("gate0_launch_receipt_timeline_invalid")
+        first_pair_deadline_at = None
+    else:
+        first_pair_deadline_at = allocation_started_at + timedelta(
+            seconds=policy.first_pair_deadline_seconds
+        )
+        if (
+            issued_at is None
+            or expires_at is None
+            or not issued_at <= allocation_started_at < expires_at
+        ):
+            reasons.append("gate0_launch_started_outside_permit_interval")
     receipt_permit = receipt.get("permit") if isinstance(receipt.get("permit"), dict) else {}
     if (
         receipt_permit.get("sha256") != permit_hash
         or receipt_permit.get("key_id") != public_key.key_id
         or receipt_permit.get("request_id") != request_id
         or receipt_permit.get("nonce") != nonce
+        or receipt_permit.get("issued_at") != payload.get("issued_at")
+        or receipt_permit.get("expires_at") != payload.get("expires_at")
     ):
         reasons.append("gate0_launch_receipt_permit_mismatch")
     receipt_parent = (
@@ -2546,7 +2599,7 @@ def _validate_gate0_chain(
     gpu_label = f"{executor.get('gpu_type', '')} {executor.get('gpu_model', '')}".upper()
     provider_schema = provider_output.get("schema")
     if (
-        provider_schema not in {"lium-h100-pod-create/v1", "lium-h100-pod-create/v2"}
+        provider_schema != "lium-h100-pod-create/v2"
         or provider_output.get("status") != "RUNNING"
         or not allocation_id
         or not allocation_name
@@ -2569,8 +2622,7 @@ def _validate_gate0_chain(
             or reconciliation.get("pod_id") != allocation_id
             or reconciliation.get("final_active_pod_ids") != [allocation_id]
             or (_integer(reconciliation.get("successful_snapshots")) or 0) < 2
-            or reconciliation.get("duplicate_cleanup_status")
-            not in {"NOT_REQUIRED", "CONFIRMED"}
+            or reconciliation.get("duplicate_cleanup_status") not in {"NOT_REQUIRED", "CONFIRMED"}
         ):
             reasons.append("gate0_provider_unique_allocation_unproven")
         provider_template = (
@@ -2610,17 +2662,24 @@ def _validate_gate0_chain(
         if (
             executor.get("observed_rate_status") != payload.get("observed_node_hourly_rate_status")
             or executor.get("observed_rate_status") != "provider_reported_nonzero"
-            or executor.get("rate_authority")
-            != "provider_raw_price_per_gpu_x_gpu_count/v1"
+            or executor.get("rate_authority") != "provider_raw_price_per_gpu_x_gpu_count/v1"
         ):
             reasons.append("gate0_provider_rate_authority_mismatch")
         rate_evidence = (
-            executor.get("rate_evidence")
-            if isinstance(executor.get("rate_evidence"), dict)
-            else {}
+            executor.get("rate_evidence") if isinstance(executor.get("rate_evidence"), dict) else {}
         )
+        expected_rate_authority = "provider_raw_price_per_gpu_x_gpu_count/v1"
+        aggregate_rate_fields = {
+            "executor_id",
+            "gpu_count",
+            "available_gpu_count",
+            "price_per_gpu",
+            "price_per_hour",
+            "pending_price_change",
+        }
         if (
-            rate_evidence.get("executor_id") != executor.get("id")
+            set(rate_evidence) != aggregate_rate_fields
+            or rate_evidence.get("executor_id") != executor.get("id")
             or _integer(rate_evidence.get("gpu_count")) != 8
             or (_integer(rate_evidence.get("available_gpu_count")) or 0) < 8
             or not math.isclose(
@@ -2634,6 +2693,29 @@ def _validate_gate0_chain(
             or rate_evidence.get("pending_price_change") is not False
         ):
             reasons.append("gate0_provider_raw_rate_evidence_mismatch")
+        rent_boundary = (
+            executor.get("rent_boundary") if isinstance(executor.get("rent_boundary"), dict) else {}
+        )
+        expected_raw_rate = {
+            "authority": expected_rate_authority,
+            **rate_evidence,
+        }
+        signed_observed_rate = _finite(payload.get("observed_node_hourly_rate_usd"))
+        price_per_gpu = _finite(rate_evidence.get("price_per_gpu"))
+        price_per_hour = _finite(rate_evidence.get("price_per_hour"))
+        if (
+            rent_boundary.get("status") != "VERIFIED_PRE_AND_POST"
+            or rent_boundary.get("endpoint") != f"/executors/{executor.get('id')}/rent"
+            or rent_boundary.get("before_post") != expected_raw_rate
+            or rent_boundary.get("after_post") != expected_raw_rate
+            or expected_raw_rate.get("authority") != executor.get("rate_authority")
+            or signed_observed_rate is None
+            or price_per_gpu is None
+            or price_per_hour is None
+            or not math.isclose(price_per_hour, signed_observed_rate)
+            or not math.isclose(price_per_gpu * 8, price_per_hour)
+        ):
+            reasons.append("gate0_provider_rent_boundary_invalid")
     expected_access = {
         "ssh_public_key_path": payload.get("ssh_public_key_path"),
         "ssh_public_key_sha256": payload.get("ssh_public_key_sha256"),
@@ -2730,6 +2812,16 @@ def _validate_gate0_chain(
         "allocation_name": allocation_name,
         "request_id": request_id,
         "nonce": nonce,
+        "allocation_started_at": (
+            _format_security_time(allocation_started_at)
+            if allocation_started_at is not None
+            else None
+        ),
+        "first_pair_deadline_at": (
+            _format_security_time(first_pair_deadline_at)
+            if first_pair_deadline_at is not None
+            else None
+        ),
         "gate1_trust": booking.get("gate1_trust", {}),
         "intent_artifacts": booking.get("intent_artifacts", {}),
     }
@@ -2803,6 +2895,7 @@ def _load_stage_request(
     for field in (
         "input_hashes",
         "evidence_hashes",
+        "evidence_manifest_hashes",
         "trial_summary_hashes",
         "wandb_readback_hashes",
         "parent_promotion_sha256",
@@ -2887,9 +2980,10 @@ def _validate_preflight_request(
     }
     supporting_artifacts = manifest.get("supporting_artifacts")
     supporting_hashes = manifest.get("supporting_sha256")
-    if not isinstance(supporting_artifacts, dict) or set(
-        supporting_artifacts
-    ) != expected_supporting:
+    if (
+        not isinstance(supporting_artifacts, dict)
+        or set(supporting_artifacts) != expected_supporting
+    ):
         reasons.append("prepare_manifest_supporting_artifact_map_invalid")
         supporting_artifacts = {}
     if not _valid_hash_map(supporting_hashes, expected_supporting):
@@ -2919,9 +3013,9 @@ def _validate_preflight_request(
             reasons.append(f"prepare_{name}_receipt_malformed")
     try:
         setup_attestation = read_json(supporting_resolved["setup_attestation"])
-        marker_content = supporting_resolved["hf_revision_marker"].read_text(
-            encoding="utf-8"
-        ).strip()
+        marker_content = (
+            supporting_resolved["hf_revision_marker"].read_text(encoding="utf-8").strip()
+        )
         container_inspection = json.loads(
             supporting_resolved["container_inspection"].read_text(encoding="utf-8")
         )
@@ -2976,6 +3070,8 @@ def _validate_screen_request(
     control_path: str | Path,
     candidate_path: str | Path,
     expected_source: Any,
+    expected_gate0: Any,
+    evaluation_time: datetime,
     policy: SentryPolicy,
 ) -> dict[str, Any]:
     payload, result = _load_stage_request(path, Stage.SCREEN, policy)
@@ -2996,6 +3092,34 @@ def _validate_screen_request(
         reasons.append("screen_request_unexpected_preflight_hashes")
     if result.get("source_identity") != expected_source:
         reasons.append("screen_request_prior_source_identity_mismatch")
+    recorded_gate0 = payload.get("gate0")
+    if (
+        not isinstance(expected_gate0, Mapping)
+        or not isinstance(recorded_gate0, Mapping)
+        or dict(recorded_gate0) != dict(expected_gate0)
+    ):
+        reasons.append("screen_request_gate0_context_mismatch")
+    allocation_started_at = (
+        _parse_time(expected_gate0.get("allocation_started_at"))
+        if isinstance(expected_gate0, Mapping)
+        else None
+    )
+    first_pair_deadline_at = (
+        _parse_time(expected_gate0.get("first_pair_deadline_at"))
+        if isinstance(expected_gate0, Mapping)
+        else None
+    )
+    if (
+        allocation_started_at is None
+        or first_pair_deadline_at is None
+        or first_pair_deadline_at
+        != allocation_started_at + timedelta(seconds=policy.first_pair_deadline_seconds)
+    ):
+        reasons.append("screen_first_pair_deadline_context_invalid")
+        first_pair_deadline_at = None
+    request_issued_at = _parse_time(payload.get("issued_at"))
+    if request_issued_at is None:
+        reasons.append("screen_request_issued_at_invalid")
     request_source = Path(path).expanduser().resolve()
     source_path = request_source.parent / "receipts" / "source.json"
     _add_request_reference(result, "request_source_receipt", source_path)
@@ -3042,6 +3166,7 @@ def _validate_screen_request(
     except ValueError:
         expected_trials = {}
         reasons.append("screen_trial_summary_missing_or_ambiguous")
+    leg_finished_at: dict[str, datetime] = {}
     for leg_id in sorted(leg_ids):
         leg = leg_map.get(leg_id)
         if leg is None:
@@ -3064,7 +3189,7 @@ def _validate_screen_request(
             reasons.append(f"screen_{leg_id}_result_manifest_hash_mismatch")
         if leg.get("valid") is not True:
             reasons.append(f"screen_{leg_id}_runner_leg_not_valid")
-        manifest_reasons, manifest_inputs = _validate_runner_evidence_manifest(
+        manifest_reasons, manifest_inputs, resolved_evidence = _validate_runner_evidence_manifest(
             manifest,
             leg_id=leg_id,
             expected_trial=trial,
@@ -3072,6 +3197,30 @@ def _validate_screen_request(
         reasons.extend(manifest_reasons)
         for role, reference in manifest_inputs:
             _add_request_reference(result, role, reference)
+        run_receipt_path = resolved_evidence.get("run_receipt")
+        try:
+            run_receipt = read_key_value(run_receipt_path) if run_receipt_path is not None else {}
+        except OSError:
+            run_receipt = {}
+        finished_at = _parse_time(run_receipt.get("run_finished_at_utc"))
+        if finished_at is None:
+            reasons.append(f"screen_{leg_id}_run_finished_at_invalid")
+        else:
+            leg_finished_at[leg_id] = finished_at
+    if first_pair_deadline_at is not None:
+        for leg_id in sorted(leg_ids):
+            finished_at = leg_finished_at.get(leg_id)
+            if finished_at is None or finished_at >= first_pair_deadline_at:
+                reasons.append(f"screen_{leg_id}_finished_at_or_after_first_pair_deadline")
+        if request_issued_at is not None:
+            if request_issued_at >= first_pair_deadline_at:
+                reasons.append("screen_request_issued_at_or_after_first_pair_deadline")
+            if leg_finished_at and request_issued_at < max(leg_finished_at.values()):
+                reasons.append("screen_request_issued_before_first_pair_completed")
+            if evaluation_time < request_issued_at:
+                reasons.append("screen_evaluation_precedes_request")
+        if evaluation_time >= first_pair_deadline_at:
+            reasons.append("screen_evaluation_at_or_after_first_pair_deadline")
     result["passed"] = not reasons
     result["reasons"] = sorted(set(reasons))
     return result
@@ -3103,10 +3252,14 @@ def _validate_confirmation_request(
         *(f"b{index}" for index in range(1, 5)),
     }
     trial_hashes = payload.get("trial_summary_hashes")
+    evidence_manifest_hashes = payload.get("evidence_manifest_hashes")
     readback_hashes = payload.get("wandb_readback_hashes")
     if not _valid_hash_map(trial_hashes, expected_labels):
         reasons.append("confirmation_trial_summary_hashes_invalid")
         trial_hashes = {}
+    if not _valid_hash_map(evidence_manifest_hashes, expected_labels):
+        reasons.append("confirmation_evidence_manifest_hashes_invalid")
+        evidence_manifest_hashes = {}
     if not _valid_hash_map(readback_hashes, expected_labels):
         reasons.append("confirmation_wandb_readback_hashes_invalid")
         readback_hashes = {}
@@ -3126,6 +3279,22 @@ def _validate_confirmation_request(
             _add_request_reference(result, f"request_trial_summary:{label}", trial)
             if _hash_file(trial) != trial_hashes.get(label):
                 reasons.append(f"confirmation_{label}_trial_summary_hash_mismatch")
+            manifest = trial.parent / "leg_evidence_manifest.json"
+            if not manifest.is_file():
+                reasons.append(f"confirmation_{label}_evidence_manifest_missing")
+            else:
+                _add_request_reference(result, f"request_evidence_manifest:{label}", manifest)
+                if _hash_file(manifest) != evidence_manifest_hashes.get(label):
+                    reasons.append(f"confirmation_{label}_evidence_manifest_hash_mismatch")
+                manifest_reasons, manifest_inputs, _ = _validate_runner_evidence_manifest(
+                    manifest,
+                    leg_id=label,
+                    expected_trial=trial,
+                    reason_scope="confirmation",
+                )
+                reasons.extend(manifest_reasons)
+                for role, reference in manifest_inputs:
+                    _add_request_reference(result, role, reference)
             readbacks = sorted(trial.parent.rglob("wandb_readback.json"))
             if len(readbacks) != 1:
                 reasons.append(f"confirmation_{label}_wandb_readback_missing_or_ambiguous")
@@ -3255,11 +3424,13 @@ def _validate_runner_evidence_manifest(
     *,
     leg_id: str,
     expected_trial: Path,
-) -> tuple[list[str], list[tuple[str, Path]]]:
+    reason_scope: str = "screen",
+) -> tuple[list[str], list[tuple[str, Path]], dict[str, Path]]:
+    prefix = f"{reason_scope}_{leg_id}"
     try:
         payload = read_json(path)
     except (OSError, ValueError, json.JSONDecodeError):
-        return [f"screen_{leg_id}_evidence_manifest_malformed"], []
+        return [f"{prefix}_evidence_manifest_malformed"], [], {}
     reasons: list[str] = []
     expected_names = {
         "trial_summary",
@@ -3276,43 +3447,51 @@ def _validate_runner_evidence_manifest(
         "wandb_artifact_manifest",
     }
     if payload.get("schema_version") != 1:
-        reasons.append(f"screen_{leg_id}_evidence_manifest_schema_invalid")
+        reasons.append(f"{prefix}_evidence_manifest_schema_invalid")
     if payload.get("authority") != "executor_raw_evidence":
-        reasons.append(f"screen_{leg_id}_evidence_manifest_authority_invalid")
+        reasons.append(f"{prefix}_evidence_manifest_authority_invalid")
     if payload.get("leg") != leg_id:
-        reasons.append(f"screen_{leg_id}_evidence_manifest_leg_mismatch")
+        reasons.append(f"{prefix}_evidence_manifest_leg_mismatch")
     if payload.get("valid") is not True:
-        reasons.append(f"screen_{leg_id}_evidence_manifest_not_valid")
+        reasons.append(f"{prefix}_evidence_manifest_not_valid")
     paths = payload.get("paths")
     hashes = payload.get("sha256")
     if not isinstance(paths, dict) or set(paths) != expected_names:
-        reasons.append(f"screen_{leg_id}_evidence_paths_invalid")
+        reasons.append(f"{prefix}_evidence_paths_invalid")
         paths = {}
     if not _valid_hash_map(hashes, expected_names):
-        reasons.append(f"screen_{leg_id}_evidence_constituent_hashes_invalid")
+        reasons.append(f"{prefix}_evidence_constituent_hashes_invalid")
         hashes = {}
     inputs: list[tuple[str, Path]] = []
     resolved: dict[str, Path] = {}
     for name in sorted(expected_names):
         reference = _resolve_request_reference(path.parent, paths.get(name))
         if reference is None:
-            reasons.append(f"screen_{leg_id}_{name}_missing")
+            reasons.append(f"{prefix}_{name}_missing")
             continue
         resolved[name] = reference
         inputs.append((f"request_evidence:{leg_id}:{name}", reference))
         if _hash_file(reference) != hashes.get(name):
-            reasons.append(f"screen_{leg_id}_{name}_hash_mismatch")
+            reasons.append(f"{prefix}_{name}_hash_mismatch")
         if name == "trial_summary" and not _same_path(reference, expected_trial):
-            reasons.append(f"screen_{leg_id}_manifest_trial_path_mismatch")
-    reasons.extend(_process_cleanliness_evidence_reasons(resolved, leg_id=leg_id))
-    return reasons, inputs
+            reasons.append(f"{prefix}_manifest_trial_path_mismatch")
+    reasons.extend(
+        _process_cleanliness_evidence_reasons(
+            resolved,
+            leg_id=leg_id,
+            reason_scope=reason_scope,
+        )
+    )
+    return reasons, inputs, resolved
 
 
 def _process_cleanliness_evidence_reasons(
     resolved: Mapping[str, Path],
     *,
     leg_id: str,
+    reason_scope: str = "screen",
 ) -> list[str]:
+    prefix = f"{reason_scope}_{leg_id}"
     reasons: list[str] = []
     receipts: dict[str, Mapping[str, Any]] = {}
     timestamps: dict[str, datetime | None] = {}
@@ -3346,7 +3525,7 @@ def _process_cleanliness_evidence_reasons(
             or _integer(commands.get("gpu_process_inventory_returncode")) != 0
             or _integer(commands.get("process_inventory_returncode")) != 0
         ):
-            reasons.append(f"screen_{leg_id}_process_cleanliness_{position}_invalid")
+            reasons.append(f"{prefix}_process_cleanliness_{position}_invalid")
     run_receipt_path = resolved.get("run_receipt")
     try:
         run_receipt = read_key_value(run_receipt_path) if run_receipt_path is not None else {}
@@ -3365,8 +3544,124 @@ def _process_cleanliness_evidence_reasons(
         or (started - before).total_seconds() > 300
         or (finished - after).total_seconds() > 300
     ):
-        reasons.append(f"screen_{leg_id}_process_cleanliness_timeline_invalid")
+        reasons.append(f"{prefix}_process_cleanliness_timeline_invalid")
     return reasons
+
+
+def _validate_promotion_runner_evidence(
+    *,
+    screen_decision_path: str | Path,
+    screen_payload: Mapping[str, Any],
+    control_paths: Sequence[str | Path],
+    candidate_paths: Sequence[str | Path],
+) -> dict[str, Any]:
+    labeled = {
+        "a1": control_paths[0],
+        "a2": control_paths[1],
+        "b1": candidate_paths[0],
+        "b2": candidate_paths[1],
+    }
+    reasons: list[str] = []
+    inputs: list[tuple[str, Path]] = []
+    manifests: dict[str, Path] = {}
+    for label, trial_value in labeled.items():
+        try:
+            trial = _resolve_summary(trial_value)
+        except ValueError:
+            reasons.append(f"promotion_{label}_trial_summary_missing_or_ambiguous")
+            continue
+        manifest = trial.parent / "leg_evidence_manifest.json"
+        if not manifest.is_file():
+            reasons.append(f"promotion_{label}_evidence_manifest_missing")
+            continue
+        manifests[label] = manifest.resolve()
+        inputs.append((f"runner_evidence_manifest:{label}", manifest))
+        manifest_reasons, manifest_inputs, _ = _validate_runner_evidence_manifest(
+            manifest,
+            leg_id=label,
+            expected_trial=trial,
+            reason_scope="promotion",
+        )
+        reasons.extend(manifest_reasons)
+        inputs.extend(manifest_inputs)
+    aggregate_path = _shared_runner_artifact(manifests.values(), "executor_evidence_manifest.json")
+    second_pair_path = _shared_runner_artifact(manifests.values(), "second_pair_result.json")
+    if aggregate_path is None:
+        reasons.append("promotion_executor_evidence_manifest_missing_or_ambiguous")
+    else:
+        inputs.append(("runner_executor_evidence_manifest", aggregate_path))
+        try:
+            aggregate = read_json(aggregate_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            aggregate = {}
+        recorded = aggregate.get("leg_manifest_sha256")
+        expected = {str(path): _hash_file(path) for path in manifests.values()}
+        resolved_recorded: dict[str, Any] = {}
+        if isinstance(recorded, Mapping):
+            for raw_path, digest in recorded.items():
+                reference = _resolve_request_reference(aggregate_path.parent, raw_path)
+                if reference is not None:
+                    resolved_recorded[str(reference)] = digest
+        if (
+            aggregate.get("schema_version") != 1
+            or aggregate.get("authority") != "executor_raw_evidence"
+            or resolved_recorded != expected
+            or set(manifests) != {"a1", "a2", "b1", "b2"}
+        ):
+            reasons.append("promotion_executor_evidence_manifest_invalid")
+    if second_pair_path is None:
+        reasons.append("promotion_second_pair_result_missing_or_ambiguous")
+    else:
+        inputs.append(("runner_second_pair_result", second_pair_path))
+        try:
+            second_pair = read_json(second_pair_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            second_pair = {}
+        legs = second_pair.get("legs")
+        leg_map = (
+            {str(item.get("leg_id") or ""): item for item in legs if isinstance(item, Mapping)}
+            if isinstance(legs, list)
+            else {}
+        )
+        expected_second = {"b2": manifests.get("b2"), "a2": manifests.get("a2")}
+        if (
+            second_pair.get("status") != "second_pair_complete"
+            or second_pair.get("authority") != "executor_evidence"
+            or second_pair.get("repair_required") is not False
+            or list(leg_map) != ["b2", "a2"]
+            or second_pair.get("signed_approval_sha256")
+            != _hash_file(Path(screen_decision_path).expanduser().resolve())
+            or second_pair.get("request_sha256") != screen_payload.get("request_sha256")
+        ):
+            reasons.append("promotion_second_pair_result_binding_invalid")
+        for label, manifest in expected_second.items():
+            leg = leg_map.get(label, {})
+            if (
+                manifest is None
+                or leg.get("valid") is not True
+                or _resolve_request_reference(second_pair_path.parent, leg.get("evidence_manifest"))
+                != manifest
+                or leg.get("evidence_manifest_sha256") != _hash_file(manifest)
+            ):
+                reasons.append(f"promotion_{label}_second_pair_manifest_binding_invalid")
+    return {
+        "passed": not reasons,
+        "reasons": sorted(set(reasons)),
+        "inputs": inputs,
+        "manifest_sha256": {label: _hash_file(path) for label, path in sorted(manifests.items())},
+        "executor_evidence_manifest": str(aggregate_path) if aggregate_path else None,
+        "second_pair_result": str(second_pair_path) if second_pair_path else None,
+    }
+
+
+def _shared_runner_artifact(paths: Iterable[Path], filename: str) -> Path | None:
+    candidates: set[Path] = set()
+    for path in paths:
+        for ancestor in (path.parent, *path.parents[:4]):
+            candidate = ancestor / filename
+            if candidate.is_file():
+                candidates.add(candidate.resolve())
+    return next(iter(candidates)) if len(candidates) == 1 else None
 
 
 def _valid_hash_map(value: Any, expected_keys: set[str]) -> bool:
@@ -3413,6 +3708,7 @@ def _apply_request_binding(result: dict[str, Any], request: dict[str, Any]) -> N
     for field in (
         "input_hashes",
         "evidence_hashes",
+        "evidence_manifest_hashes",
         "trial_summary_hashes",
         "wandb_readback_hashes",
         "parent_promotion_sha256",
@@ -3527,18 +3823,15 @@ def _validate_contract(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
                     "first_pair_deadline_seconds_from_allocation_start"
                 )
             )
-            == 3600,
+            == policy.first_pair_deadline_seconds,
             "contract_first_pair_deadline_mismatch",
         ),
         (
-            _valid_sha256(
-                (payload.get("fixed_workload") or {}).get("dataset_manifest_sha256")
-            ),
+            _valid_sha256((payload.get("fixed_workload") or {}).get("dataset_manifest_sha256")),
             "contract_dataset_manifest_hash_missing",
         ),
         (
-            (payload.get("budget") or {}).get("immediate_termination_receipt_required")
-            is True,
+            (payload.get("budget") or {}).get("immediate_termination_receipt_required") is True,
             "contract_termination_receipt_requirement_missing",
         ),
         (
@@ -3549,10 +3842,49 @@ def _validate_contract(path: str | Path, policy: SentryPolicy) -> dict[str, Any]
             "contract_shutdown_control_mismatch",
         ),
         (
+            (payload.get("authorization") or {}).get("supervisor_shutdown_interpreter")
+            == "/opt/homebrew/Cellar/python@3.11/3.11.14_3/Frameworks/Python.framework/Versions/3.11/bin/python3.11"
+            and (payload.get("authorization") or {}).get("supervisor_shutdown_interpreter_sha256")
+            == "5ca50299a6980ccfa9b12e582aa5262ef576dd5db23a8cf4595054e84f35f1b0"
+            and (payload.get("authorization") or {}).get("supervisor_shutdown_interpreter_version")
+            == "3.11.14",
+            "contract_shutdown_interpreter_mismatch",
+        ),
+        (
+            (payload.get("runtime_pins") or {}).get("lium_provider_version") == "1.3.0"
+            and (payload.get("authorization") or {}).get("provider_output_schema")
+            == "lium-h100-pod-create/v2"
+            and (payload.get("authorization") or {}).get(
+                "provider_terminal_reconciliation_receipt_schema"
+            )
+            == "h100-lium-terminal-reconciliation-receipt/v1"
+            and (payload.get("authorization") or {}).get(
+                "provider_terminal_reconciliation_retry_receipt_schema"
+            )
+            == "h100-lium-terminal-reconciliation-retry-receipt/v1"
+            and (payload.get("authorization") or {}).get("provider_rent_boundary_evidence_required")
+            is True
+            and (payload.get("authorization") or {}).get("cleanup_retry_survives_gate0_expiry")
+            is True,
+            "contract_provider_terminal_control_mismatch",
+        ),
+        (
             {"auditor_key_id", "parent_decision_sha256"}.issubset(
                 set((payload.get("audit_artifact") or {}).get("required_fields") or [])
             ),
             "contract_required_audit_fields_missing",
+        ),
+        (
+            set((payload.get("audit_artifact") or {}).get("required_constituents") or [])
+            == {
+                "confirmation_decision",
+                "grpo_decision",
+                "contract",
+                "termination_receipt",
+            }
+            and (payload.get("audit_artifact") or {}).get("termination_receipt_must_precede_audit")
+            is True,
+            "contract_audit_termination_binding_missing",
         ),
     )
     reasons.extend(reason for passed, reason in checks if not passed)
@@ -4130,12 +4462,145 @@ def _signed_contract_binding_reasons(payload: dict[str, Any], stage: Stage) -> l
     return reasons
 
 
+def _validate_termination_receipt(
+    receipt_path: str | Path,
+    *,
+    expected_gate0: Any,
+) -> dict[str, Any]:
+    source = Path(receipt_path).expanduser().resolve()
+    try:
+        payload = read_json(source)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "passed": False,
+            "reasons": ["termination_receipt_missing_or_malformed"],
+            "detail": str(exc),
+            "verified_inputs": [],
+        }
+    reasons: list[str] = []
+    gate0 = expected_gate0 if isinstance(expected_gate0, Mapping) else {}
+    status = payload.get("status")
+    started = _parse_time(payload.get("started_at_utc"))
+    finished = _parse_time(payload.get("finished_at_utc"))
+    if (
+        payload.get("schema") != "lium-h100-termination-receipt/v1"
+        or status not in {"TERMINATED", "ALREADY_ABSENT"}
+        or started is None
+        or finished is None
+        or finished < started
+    ):
+        reasons.append("termination_receipt_status_or_timeline_invalid")
+    allocation = payload.get("allocation") if isinstance(payload.get("allocation"), Mapping) else {}
+    expected_id = str(gate0.get("allocation_id") or "")
+    expected_name = str(gate0.get("allocation_name") or "")
+    if (
+        not expected_id
+        or not expected_name
+        or allocation.get("id") != expected_id
+        or allocation.get("name") != expected_name
+    ):
+        reasons.append("termination_receipt_gate0_allocation_mismatch")
+    source_binding = payload.get("source") if isinstance(payload.get("source"), Mapping) else {}
+    provider_path = _resolve_audit_path(source.parent, source_binding.get("provider_output_path"))
+    launch_path = _resolve_audit_path(source.parent, source_binding.get("launch_receipt_path"))
+    verified_inputs: list[dict[str, str]] = []
+    if (
+        provider_path is None
+        or source_binding.get("provider_output_sha256") != gate0.get("provider_output_sha256")
+        or _hash_file(provider_path) != source_binding.get("provider_output_sha256")
+    ):
+        reasons.append("termination_receipt_provider_output_binding_invalid")
+        provider: dict[str, Any] = {}
+    else:
+        verified_inputs.append({"role": "termination_provider_output", "path": str(provider_path)})
+        try:
+            provider = read_json(provider_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            provider = {}
+            reasons.append("termination_receipt_provider_output_malformed")
+    if (
+        launch_path is None
+        or source_binding.get("launch_receipt_sha256") != gate0.get("launch_receipt_sha256")
+        or _hash_file(launch_path) != source_binding.get("launch_receipt_sha256")
+    ):
+        reasons.append("termination_receipt_launch_receipt_binding_invalid")
+        launch: dict[str, Any] = {}
+    else:
+        verified_inputs.append({"role": "termination_launch_receipt", "path": str(launch_path)})
+        try:
+            launch = read_json(launch_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            launch = {}
+            reasons.append("termination_receipt_launch_receipt_malformed")
+    pod = provider.get("pod") if isinstance(provider.get("pod"), Mapping) else {}
+    reconciliation = (
+        provider.get("create_reconciliation")
+        if isinstance(provider.get("create_reconciliation"), Mapping)
+        else {}
+    )
+    if (
+        provider.get("schema") != "lium-h100-pod-create/v2"
+        or provider.get("status") != "RUNNING"
+        or pod.get("id") != expected_id
+        or pod.get("name") != expected_name
+        or reconciliation.get("status") != "CONFIRMED_UNIQUE"
+        or reconciliation.get("pod_id") != expected_id
+        or reconciliation.get("allocation_name") != expected_name
+        or reconciliation.get("final_active_pod_ids") != [expected_id]
+    ):
+        reasons.append("termination_receipt_provider_allocation_mismatch")
+    launch_output = (
+        launch.get("provider_output") if isinstance(launch.get("provider_output"), Mapping) else {}
+    )
+    launch_allocation = (
+        launch.get("allocation") if isinstance(launch.get("allocation"), Mapping) else {}
+    )
+    if (
+        launch.get("schema") != LAUNCH_RECEIPT_SCHEMA
+        or launch.get("status") != "COMPLETED"
+        or provider_path is None
+        or launch_output.get("sha256") != gate0.get("provider_output_sha256")
+        or _integer(launch_output.get("size_bytes")) != provider_path.stat().st_size
+        or _resolve_audit_path(launch_path.parent, launch_output.get("path")) != provider_path
+        or launch_allocation.get("name") != expected_name
+    ):
+        reasons.append("termination_receipt_launch_allocation_mismatch")
+    preflight = payload.get("preflight") if isinstance(payload.get("preflight"), Mapping) else {}
+    postflight = payload.get("postflight") if isinstance(payload.get("postflight"), Mapping) else {}
+    snapshot_fields_valid = all(
+        snapshot.get("identity_conflict") is False
+        and _integer(snapshot.get("id_conflict_count")) == 0
+        and _integer(snapshot.get("name_conflict_count")) == 0
+        for snapshot in (preflight, postflight)
+    )
+    if (
+        not snapshot_fields_valid
+        or postflight.get("target_present") is not False
+        or postflight.get("confirmed_absent") is not True
+        or (_integer(postflight.get("poll_attempts")) or 0) not in range(1, 6)
+        or (status == "TERMINATED" and preflight.get("target_present") is not True)
+        or (status == "ALREADY_ABSENT" and preflight.get("target_present") is not False)
+    ):
+        reasons.append("termination_receipt_absence_proof_invalid")
+    return {
+        "passed": not reasons,
+        "reasons": sorted(set(reasons)),
+        "artifact": str(source),
+        "status": status,
+        "allocation_id": allocation.get("id"),
+        "allocation_name": allocation.get("name"),
+        "confirmed_absent": postflight.get("confirmed_absent"),
+        "verified_inputs": verified_inputs,
+    }
+
+
 def _validate_audit(
     audit_path: str | Path,
     *,
     contract_path: str | Path,
     confirmation_decision_path: str | Path,
     grpo_decision_path: str | Path,
+    termination_receipt_path: str | Path,
     contract: dict[str, Any],
     security: SentrySecurity | None,
 ) -> dict[str, Any]:
@@ -4222,6 +4687,7 @@ def _validate_audit(
         "confirmation_decision": Path(confirmation_decision_path).expanduser().resolve(),
         "grpo_decision": Path(grpo_decision_path).expanduser().resolve(),
         "contract": Path(contract_path).expanduser().resolve(),
+        "termination_receipt": Path(termination_receipt_path).expanduser().resolve(),
     }
     for role, expected_path in expected_paths.items():
         expected_hash = _hash_file(expected_path) if expected_path.is_file() else None
@@ -4229,18 +4695,18 @@ def _validate_audit(
         manifest_item = manifest_constituents.get(role)
         if audit_item is None:
             reasons.append(f"audit_required_constituent_missing:{role}")
-            continue
-        audit_resolved = _resolve_audit_path(base, audit_item.get("path"))
-        if (
-            audit_resolved != expected_path
-            or expected_hash is None
-            or audit_item.get("sha256") != expected_hash
-        ):
-            reasons.append(f"audit_required_constituent_mismatch:{role}")
         else:
-            verified_inputs.append(
-                {"role": f"audit_constituent:{role}", "path": str(audit_resolved)}
-            )
+            audit_resolved = _resolve_audit_path(base, audit_item.get("path"))
+            if (
+                audit_resolved != expected_path
+                or expected_hash is None
+                or audit_item.get("sha256") != expected_hash
+            ):
+                reasons.append(f"audit_required_constituent_mismatch:{role}")
+            else:
+                verified_inputs.append(
+                    {"role": f"audit_constituent:{role}", "path": str(audit_resolved)}
+                )
         if manifest_item is None:
             reasons.append(f"audit_manifest_required_constituent_missing:{role}")
             continue
@@ -4249,9 +4715,30 @@ def _validate_audit(
             manifest_resolved != expected_path
             or expected_hash is None
             or manifest_item.get("sha256") != expected_hash
+            or audit_item is None
             or manifest_item != audit_item
         ):
             reasons.append(f"audit_manifest_required_constituent_mismatch:{role}")
+    termination_item = audit_constituents.get("termination_receipt")
+    manifest_termination_item = manifest_constituents.get("termination_receipt")
+    termination_path = expected_paths["termination_receipt"]
+    termination_hash = _hash_file(termination_path) if termination_path.is_file() else None
+    termination_is_exact_constituent = (
+        termination_item is not None
+        and manifest_termination_item == termination_item
+        and _resolve_audit_path(base, termination_item.get("path")) == termination_path
+        and termination_item.get("sha256") == termination_hash
+    )
+    if termination_is_exact_constituent and timestamp is not None:
+        try:
+            termination_payload = read_json(termination_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            termination_payload = {}
+        termination_finished_at = _parse_time(termination_payload.get("finished_at_utc"))
+        if termination_finished_at is None:
+            reasons.append("audit_termination_finished_at_invalid")
+        elif termination_finished_at > timestamp:
+            reasons.append("audit_termination_finished_after_auditor_timestamp")
     if _hash_path(Path(contract_path).resolve()) != payload.get("contract_sha256"):
         reasons.append("audit_contract_checksum_mismatch")
     return {
@@ -4672,6 +5159,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidate", action="append", default=[])
     parser.add_argument("--grpo-artifact")
     parser.add_argument("--audit")
+    parser.add_argument("--termination-receipt")
     parser.add_argument("--request")
     parser.add_argument("--gate0-permit")
     parser.add_argument("--gate0-public-key")
@@ -4826,6 +5314,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         candidate_paths=args.candidate,
         grpo_path=args.grpo_artifact,
         audit_path=args.audit,
+        termination_receipt_path=args.termination_receipt,
         request_path=args.request,
         gate0_permit_path=args.gate0_permit,
         gate0_public_key_path=args.gate0_public_key,

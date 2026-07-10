@@ -384,10 +384,9 @@ def load_setup_attestation(path: Path = SETUP_ATTESTATION_PATH) -> dict[str, Any
         expected_reference=container_reference,
         expected_platform=str(attestation.get("container_platform") or ""),
     )
-    if (
-        inspection["sha256"] != attestation.get("container_inspection_sha256")
-        or inspection["image_id"] != attestation.get("container_image_id")
-    ):
+    if inspection["sha256"] != attestation.get("container_inspection_sha256") or inspection[
+        "image_id"
+    ] != attestation.get("container_image_id"):
         raise RuntimeError("setup attestation container inspection binding mismatch")
     runtime_pins = load_acceptance_contract().get("runtime_pins", {})
     expected = {
@@ -1396,9 +1395,7 @@ def build_leg_evidence_manifest(
     hashes: dict[str, str],
     valid: bool,
 ) -> dict[str, Any]:
-    if set(evidence_paths) != set(LEG_EVIDENCE_NAMES) or set(hashes) != set(
-        LEG_EVIDENCE_NAMES
-    ):
+    if set(evidence_paths) != set(LEG_EVIDENCE_NAMES) or set(hashes) != set(LEG_EVIDENCE_NAMES):
         raise RuntimeError("leg evidence is incomplete")
     return {
         "schema_version": 1,
@@ -1555,9 +1552,7 @@ def _gate0_paths(run_root: Path) -> dict[str, Path]:
     }
 
 
-def _validate_gate0_chain(
-    paths: dict[str, Path], *, require_current_permit: bool
-) -> dict[str, Any]:
+def _validate_gate0_chain(paths: dict[str, Path]) -> dict[str, Any]:
     permit = _read_json_object(paths["permit"], "Gate0 permit")
     receipt = _read_json_object(paths["launch_receipt"], "Gate0 launch receipt")
     booking_request = _read_json_object(paths["booking_request"], "Gate0 booking request")
@@ -1586,10 +1581,6 @@ def _validate_gate0_chain(
     expires_at = _parse_utc(payload.get("expires_at"), "Gate0 expires_at")
     if expires_at <= issued_at or expires_at - issued_at > timedelta(minutes=10):
         raise RuntimeError("Gate0 permit lifetime is invalid")
-    if require_current_permit:
-        now = _utc_now()
-        if now < issued_at or now >= expires_at:
-            raise RuntimeError("Gate0 permit is outside its validity window")
     sentry_principal = str(payload.get("sentry_principal") or "")
     executor_principal = str(payload.get("executor_principal") or "")
     if not sentry_principal or not executor_principal:
@@ -1634,8 +1625,11 @@ def _validate_gate0_chain(
         allocation_started_at = _parse_utc(
             execution.get("started_at"), "Gate0 allocation started_at"
         )
+        allocation_finished_at = _parse_utc(
+            execution.get("finished_at"), "Gate0 allocation finished_at"
+        )
     except RuntimeError as exc:
-        raise RuntimeError(f"Gate0 launch receipt start time is invalid: {exc}") from exc
+        raise RuntimeError(f"Gate0 launch receipt timeline is invalid: {exc}") from exc
     if (
         receipt.get("schema") != "h100-lium-launch-receipt/v2"
         or receipt.get("status") != "COMPLETED"
@@ -1644,12 +1638,18 @@ def _validate_gate0_chain(
         or execution.get("timed_out") is not False
     ):
         raise RuntimeError("Gate0 launch receipt does not prove a successful launch")
+    if allocation_finished_at < allocation_started_at:
+        raise RuntimeError("Gate0 launch receipt timeline is invalid")
+    if not issued_at <= allocation_started_at < expires_at:
+        raise RuntimeError("Gate0 launch did not start within the permit validity interval")
     receipt_permit = receipt.get("permit") if isinstance(receipt.get("permit"), dict) else {}
     if (
         receipt_permit.get("sha256") != hashes["permit"]
         or receipt_permit.get("key_id") != key_id
         or receipt_permit.get("request_id") != request_id
         or receipt_permit.get("nonce") != nonce
+        or receipt_permit.get("issued_at") != payload.get("issued_at")
+        or receipt_permit.get("expires_at") != payload.get("expires_at")
     ):
         raise RuntimeError("Gate0 launch receipt permit binding mismatch")
     receipt_parent = (
@@ -1871,7 +1871,7 @@ def prepare_phase(
         copied_gate0 = _gate0_paths(run_root)
         for name, destination in copied_gate0.items():
             _copy_exact(source_gate0[name], destination)
-        gate0 = _validate_gate0_chain(copied_gate0, require_current_permit=True)
+        gate0 = _validate_gate0_chain(copied_gate0)
     except (OSError, RuntimeError) as exc:
         write_json(run_root / "prepare_result.json", {"status": "failed", "error": str(exc)})
         return 2
@@ -2052,7 +2052,7 @@ def _verify_preflight_request(
     }
     if request.get("prepared_evidence") != prepared_evidence:
         raise SystemExit("preflight request prepared evidence mismatch")
-    gate0 = _validate_gate0_chain(_gate0_paths(run_root), require_current_permit=False)
+    gate0 = _validate_gate0_chain(_gate0_paths(run_root))
     if request.get("gate0") != gate0:
         raise SystemExit("preflight request Gate0 chain mismatch")
     if request.get("parent_decision_sha256") != gate0["permit_sha256"]:
@@ -2106,6 +2106,7 @@ def _verify_consume_and_preserve_approval(
     request_path: Path,
     run_root: Path,
     consumed_phase: str,
+    authorization_deadline_utc: datetime | None = None,
 ) -> str:
     request_hash_before = _sha256(request_path)
     if request_hash_before != expected_request_sha256:
@@ -2139,6 +2140,10 @@ def _verify_consume_and_preserve_approval(
             raise DecisionSecurityError("trusted sentry public key changed during verification")
         if _sha256(request_path) != request_hash_before:
             raise DecisionSecurityError("stage request changed during verification")
+        if authorization_deadline_utc is not None and _utc_now() >= authorization_deadline_utc:
+            raise DecisionSecurityError(
+                "signed one-hour deadline reached before approval consumption"
+            )
         consume_signed_decision_once(verified, GATE1_CONSUMPTION_ROOT)
         _write_state(run_root, consumed_phase, approval_consumed=True)
     except DecisionReplayError as exc:
@@ -2160,13 +2165,25 @@ def _run_pair_sequential(
     repair_state: str,
     approval_sha256: str,
     request_sha256: str,
-    deadline_utc: datetime | None = None,
+    authorization_start_deadline_utc: datetime | None = None,
+    run_completion_deadline_utc: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     result_path = run_root / result_name
     legs: list[dict[str, Any]] = []
     for position, leg_id in enumerate(leg_ids):
         try:
-            leg = run_leg(LEG_SPECS[leg_id], run_root, deadline_utc=deadline_utc)
+            if (
+                authorization_start_deadline_utc is not None
+                and _utc_now() >= authorization_start_deadline_utc
+            ):
+                raise RuntimeError(
+                    f"signed one-hour deadline reached before {leg_id} execution start"
+                )
+            leg = run_leg(
+                LEG_SPECS[leg_id],
+                run_root,
+                deadline_utc=run_completion_deadline_utc,
+            )
         except (Exception, SystemExit) as exc:
             payload = {
                 "status": repair_state,
@@ -2184,7 +2201,7 @@ def _run_pair_sequential(
             _write_state(run_root, repair_state, failed_leg=leg_id, approval_consumed=True)
             return legs, False
         legs.append(leg)
-        if deadline_utc is not None and _utc_now() >= deadline_utc:
+        if run_completion_deadline_utc is not None and _utc_now() >= run_completion_deadline_utc:
             leg["valid"] = False
             leg["deadline_exceeded"] = True
         if not leg.get("valid"):
@@ -2279,7 +2296,12 @@ def first_pair_phase(
         repair_state="first_pair_repair_needed",
         approval_sha256=approval_sha256,
         request_sha256=request_sha256,
-        deadline_utc=_parse_utc(gate0["first_pair_deadline_at"], "first-pair deadline"),
+        authorization_start_deadline_utc=_parse_utc(
+            gate0["first_pair_deadline_at"], "first-pair deadline"
+        ),
+        run_completion_deadline_utc=_parse_utc(
+            gate0["first_pair_deadline_at"], "first-pair deadline"
+        ),
     )
     if not complete:
         return 1
@@ -2401,12 +2423,21 @@ def second_pair_phase(
     _validate_secure_run_root(run_root, require_empty=False)
     _read_state(run_root, "first_pair_complete")
     request_path = run_root / "screen_request.json"
-    _verify_screen_request(
+    _, gate0 = _verify_screen_request(
         run_root,
         expected_sentry_principal=sentry_principal,
         expected_executor_principal=executor_principal,
         require_current=True,
     )
+    deadline_utc = _parse_utc(gate0["first_pair_deadline_at"], "signed one-hour deadline")
+    if _utc_now() >= deadline_utc:
+        _write_state(
+            run_root,
+            "second_pair_repair_needed",
+            reason="signed_one_hour_deadline_exceeded_before_approval_consumption",
+            approval_consumed=False,
+        )
+        raise SystemExit("signed one-hour deadline reached before approval consumption")
     request_sha256 = _sha256(request_path)
     preflight_approval_sha256 = _sha256(run_root / "approvals/preflight.json")
     preflight_request_sha256 = _sha256(run_root / "preflight_request.json")
@@ -2432,6 +2463,7 @@ def second_pair_phase(
         request_path=request_path,
         run_root=run_root,
         consumed_phase="second_pair_authorized",
+        authorization_deadline_utc=deadline_utc,
     )
     _write_state(run_root, "second_pair_running", approval_consumed=True)
     _verify_screen_request(
@@ -2450,6 +2482,7 @@ def second_pair_phase(
         repair_state="second_pair_repair_needed",
         approval_sha256=approval_sha256,
         request_sha256=request_sha256,
+        authorization_start_deadline_utc=deadline_utc,
     )
     if not complete:
         return 1

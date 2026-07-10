@@ -29,6 +29,10 @@ PERMIT_SCHEMA = "h100-lium-booking-permit/v4"
 PUBLIC_KEY_SCHEMA = "h100-lium-ed25519-public-key/v1"
 SIGNATURE_DOMAIN = b"w8-biayn/h100-lium-booking-permit/ed25519/v4\x00"
 LAUNCH_RECEIPT_SCHEMA = "h100-lium-launch-receipt/v2"
+TERMINAL_RECONCILIATION_RECEIPT_SCHEMA = "h100-lium-terminal-reconciliation-receipt/v1"
+TERMINAL_RECONCILIATION_RETRY_SCHEMA = "h100-lium-terminal-reconciliation-retry-receipt/v1"
+PROVIDER_OUTPUT_SCHEMA = "lium-h100-pod-create/v2"
+PROVIDER_RECONCILIATION_SCHEMA = "lium-h100-allocation-reconciliation/v1"
 REQUIRED_STAGE = "lium-booking"
 REQUIRED_DECISION = "PROMOTABLE"
 REQUIRED_PROVIDER = "lium"
@@ -43,6 +47,9 @@ DEFAULT_PROVIDER_TIMEOUT_SECONDS = 300
 MAX_PROVIDER_TIMEOUT_SECONDS = 300
 CREDENTIAL_TRANSPORT = "stdin-line/v1"
 MAX_CREDENTIAL_BYTES = 4096
+MAX_PROVIDER_OUTPUT_BYTES = 256 * 1024
+MAX_RECONCILIATION_OUTPUT_BYTES = 64 * 1024
+RECONCILIATION_TIMEOUT_SECONDS = 120
 GATE0_CONSUMPTION_ROOT = (
     Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
     / ".local/state/w8-biayn/control-plane/gate0-consumption/v1"
@@ -413,31 +420,9 @@ def consume_permit_once(
 ) -> Path:
     """Atomically consume the request-id/nonce pair before provider execution."""
 
-    ledger = Path(ledger_dir).expanduser()
-    if not ledger.is_absolute():
-        raise PermitReplayError("permit ledger path must be absolute")
-    ledger.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        before = ledger.lstat()
-        ledger_descriptor = os.open(ledger, directory_flags)
-        after = os.fstat(ledger_descriptor)
-    except OSError as exc:
-        raise PermitReplayError(f"permit ledger is not a real private directory: {exc}") from exc
-    if (
-        not stat.S_ISDIR(before.st_mode)
-        or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
-        or after.st_uid != os.getuid()
-        or stat.S_IMODE(after.st_mode) & 0o077
-    ):
-        os.close(ledger_descriptor)
-        raise PermitReplayError("permit ledger must be an owner-only real directory")
-
-    claim_material = canonical_json_bytes({"nonce": permit.nonce, "request_id": permit.request_id})
-    claim_id = hashlib.sha256(claim_material).hexdigest()
-    claim_name = f"{claim_id}.consumed.json"
-    claim_path = ledger / claim_name
+    ledger, ledger_descriptor = _open_private_ledger(ledger_dir)
+    claim_path = _permit_claim_path(permit, ledger)
+    claim_name = claim_path.name
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -476,6 +461,36 @@ def consume_permit_once(
     return claim_path
 
 
+def _open_private_ledger(ledger_dir: str | Path) -> tuple[Path, int]:
+    ledger = Path(ledger_dir).expanduser()
+    if not ledger.is_absolute():
+        raise PermitReplayError("permit ledger path must be absolute")
+    ledger.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        before = ledger.lstat()
+        ledger_descriptor = os.open(ledger, directory_flags)
+        after = os.fstat(ledger_descriptor)
+    except OSError as exc:
+        raise PermitReplayError(f"permit ledger is not a real private directory: {exc}") from exc
+    if (
+        not stat.S_ISDIR(before.st_mode)
+        or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+        or after.st_uid != os.getuid()
+        or stat.S_IMODE(after.st_mode) & 0o077
+    ):
+        os.close(ledger_descriptor)
+        raise PermitReplayError("permit ledger must be an owner-only real directory")
+    return ledger, ledger_descriptor
+
+
+def _permit_claim_path(permit: VerifiedPermit, ledger: Path) -> Path:
+    claim_material = canonical_json_bytes({"nonce": permit.nonce, "request_id": permit.request_id})
+    claim_id = hashlib.sha256(claim_material).hexdigest()
+    return ledger / f"{claim_id}.consumed.json"
+
+
 def wrapper_main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Launch one exact signed Lium H100 booking command"
@@ -497,6 +512,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--working-directory", required=True)
     parser.add_argument("--receipt", required=True)
     parser.add_argument("--provider-output", required=True)
+    parser.add_argument("--retry-terminal-reconciliation", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = list(args.command)
@@ -505,7 +521,16 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
     if not command:
         parser.error("the exact signed lium up argv is required after --")
 
+    executable_descriptor: int | None = None
+    interpreter_descriptor: int | None = None
+    cli_descriptor: int | None = None
+    credential: bytearray | None = None
     try:
+        verification_now = (
+            _cleanup_retry_verification_time(Path(args.permit))
+            if args.retry_terminal_reconciliation
+            else None
+        )
         permit = load_and_verify_permit(
             args.permit,
             args.public_key,
@@ -523,6 +548,7 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
             expected_provider_version=args.provider_version,
             expected_working_directory=args.working_directory,
             expected_argv=command,
+            now=verification_now,
         )
         provider_environment = _build_provider_environment(permit.payload)
         executable_descriptor = _open_verified_executable(permit)
@@ -536,90 +562,234 @@ def wrapper_main(argv: Sequence[str] | None = None) -> int:
             provider_environment=provider_environment,
         )
         credential = _read_stdin_credential()
-        claim_path = consume_permit_once(permit, GATE0_CONSUMPTION_ROOT)
-        _reserve_receipt(Path(args.receipt), permit)
-        _reserve_provider_output(Path(args.provider_output))
-    except PermitError as exc:
-        for descriptor_name in (
-            "cli_descriptor",
-            "interpreter_descriptor",
-            "executable_descriptor",
-        ):
-            if descriptor_name in locals():
-                os.close(locals()[descriptor_name])
-        if "credential" in locals():
+        if args.retry_terminal_reconciliation:
+            retry_exit_code = _retry_terminal_reconciliation(
+                permit,
+                executable_descriptor=executable_descriptor,
+                interpreter_descriptor=interpreter_descriptor,
+                provider_environment=provider_environment,
+                credential=credential,
+            )
+            _close_descriptors(cli_descriptor, interpreter_descriptor, executable_descriptor)
             _wipe_bytearray(credential)
-        _print_failure(type(exc).__name__, str(exc))
-        return 2
-
-    started_at = _utc_timestamp()
-    provider_output = b""
-    execution_error = False
-    timed_out = False
-    try:
-        process = _start_provider_process(
+            return retry_exit_code
+        pre_snapshot = _snapshot_exact_allocation_name(
             permit,
             executable_descriptor=executable_descriptor,
             interpreter_descriptor=interpreter_descriptor,
             provider_environment=provider_environment,
+            credential=credential,
         )
-        credential.append(10)
+        claim_path, terminal_receipt_path = _reserve_terminal_reconciliation_receipt(
+            permit,
+            ledger_dir=GATE0_CONSUMPTION_ROOT,
+            pre_snapshot=pre_snapshot,
+        )
         try:
-            provider_output, _ = process.communicate(
-                input=credential, timeout=int(permit.payload["provider_timeout_seconds"])
+            consumed_claim_path = consume_permit_once(permit, GATE0_CONSUMPTION_ROOT)
+        except PermitError as exc:
+            _write_unconsumed_terminal_receipt(
+                permit,
+                claim_path=claim_path,
+                terminal_receipt_path=terminal_receipt_path,
+                pre_snapshot=pre_snapshot,
+                failure_kind=type(exc).__name__,
             )
-            exit_code: int | None = process.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            process.kill()
-            provider_output, _ = process.communicate()
-            exit_code = process.returncode
-    except (OSError, PermitError):
-        execution_error = True
-        exit_code = None
+            raise
+        claim_path = consumed_claim_path
+    except PermitError as exc:
+        _close_descriptors(cli_descriptor, interpreter_descriptor, executable_descriptor)
+        if credential is not None:
+            _wipe_bytearray(credential)
+        _print_failure(type(exc).__name__, str(exc))
+        return 2
+
+    receipt_path = Path(args.receipt)
+    provider_output_path = Path(args.provider_output)
+    provider_output = b""
+    provider_output_valid = False
+    execution_error = False
+    timed_out = False
+    exit_code: int | None = None
+    wrapper_exit_code = 0
+    failure_kind = ""
+    failure_message = ""
+    receipt_reserved = False
+    output_reserved = False
+    started_at = _utc_timestamp()
+    try:
+        try:
+            _reserve_receipt(receipt_path, permit)
+            receipt_reserved = True
+            _reserve_provider_output(provider_output_path)
+            output_reserved = True
+        except PermitError as exc:
+            wrapper_exit_code = 125
+            failure_kind = type(exc).__name__
+            failure_message = str(exc)
+
+        if not failure_kind:
+            try:
+                process = _start_provider_process(
+                    permit,
+                    executable_descriptor=executable_descriptor,
+                    interpreter_descriptor=interpreter_descriptor,
+                    provider_environment=provider_environment,
+                )
+                credential_line = bytearray(credential)
+                credential_line.append(10)
+                try:
+                    try:
+                        provider_output, _ = process.communicate(
+                            input=credential_line,
+                            timeout=int(permit.payload["provider_timeout_seconds"]),
+                        )
+                        exit_code = process.returncode
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                        process.kill()
+                        provider_output, _ = process.communicate()
+                        exit_code = process.returncode
+                finally:
+                    _wipe_bytearray(credential_line)
+            except (OSError, PermitError):
+                execution_error = True
+                exit_code = None
+
+            if execution_error:
+                wrapper_exit_code = 126
+                failure_kind = "ProviderExecutionError"
+                failure_message = "verified executable could not be invoked"
+            elif timed_out:
+                wrapper_exit_code = 124
+                failure_kind = "ProviderTimeout"
+                failure_message = "provider launch exceeded signed timeout"
+            elif exit_code != 0:
+                wrapper_exit_code = (
+                    int(exit_code) if isinstance(exit_code, int) and exit_code > 0 else 125
+                )
+                failure_kind = "ProviderNonzeroExit"
+                failure_message = "provider launch returned nonzero"
+            else:
+                try:
+                    _validate_successful_provider_output(provider_output, permit)
+                    provider_output_valid = True
+                except PermitError as exc:
+                    wrapper_exit_code = 125
+                    failure_kind = type(exc).__name__
+                    failure_message = str(exc)
+
+        if output_reserved:
+            try:
+                _replace_reserved_output(provider_output_path, provider_output)
+            except PermitError as exc:
+                wrapper_exit_code = 125
+                failure_kind = type(exc).__name__
+                failure_message = str(exc)
+
+        finished_at = _utc_timestamp()
+        if receipt_reserved:
+            receipt = _build_launch_receipt(
+                permit=permit,
+                permit_path=Path(args.permit),
+                claim_path=claim_path,
+                parent_request_path=Path(args.parent_request),
+                provider_output_path=provider_output_path,
+                provider_output=provider_output,
+                started_at=started_at,
+                finished_at=finished_at,
+                exit_code=exit_code,
+                wrapper_exit_code=wrapper_exit_code,
+                execution_error=execution_error,
+                timed_out=timed_out,
+                provider_output_valid=provider_output_valid,
+                terminal_failure_kind=failure_kind,
+            )
+            try:
+                _replace_reserved_receipt(receipt_path, receipt)
+            except PermitError as exc:
+                wrapper_exit_code = 125
+                failure_kind = type(exc).__name__
+                failure_message = str(exc)
+
+        if failure_kind:
+            reconciliation_confirmed = _finish_terminal_reconciliation(
+                permit,
+                claim_path=claim_path,
+                terminal_receipt_path=terminal_receipt_path,
+                pre_snapshot=pre_snapshot,
+                executable_descriptor=executable_descriptor,
+                interpreter_descriptor=interpreter_descriptor,
+                provider_environment=provider_environment,
+                credential=credential,
+                provider_output=provider_output,
+                provider_output_path=provider_output_path,
+                launch_receipt_path=receipt_path,
+                failure_kind=failure_kind,
+                wrapper_exit_code=wrapper_exit_code,
+            )
+            _print_failure(failure_kind, failure_message)
+            return wrapper_exit_code if reconciliation_confirmed else 125
+
+        success_receipt = _build_terminal_reconciliation_receipt(
+            permit,
+            claim_path=claim_path,
+            pre_snapshot=pre_snapshot,
+            status="LAUNCH_COMPLETED",
+            failure_kind="",
+            wrapper_exit_code=0,
+            reconciliation={"status": "NOT_REQUIRED"},
+            provider_output=provider_output,
+            provider_output_path=provider_output_path,
+            launch_receipt_path=receipt_path,
+        )
+        try:
+            _replace_reserved_terminal_reconciliation_receipt(
+                terminal_receipt_path, success_receipt
+            )
+        except PermitError as exc:
+            reconciliation_confirmed = _finish_terminal_reconciliation(
+                permit,
+                claim_path=claim_path,
+                terminal_receipt_path=terminal_receipt_path,
+                pre_snapshot=pre_snapshot,
+                executable_descriptor=executable_descriptor,
+                interpreter_descriptor=interpreter_descriptor,
+                provider_environment=provider_environment,
+                credential=credential,
+                provider_output=provider_output,
+                provider_output_path=provider_output_path,
+                launch_receipt_path=receipt_path,
+                failure_kind=type(exc).__name__,
+                wrapper_exit_code=125,
+            )
+            _print_failure(type(exc).__name__, str(exc))
+            return 125 if reconciliation_confirmed else 125
+        return 0
+    except Exception:
+        try:
+            _finish_terminal_reconciliation(
+                permit,
+                claim_path=claim_path,
+                terminal_receipt_path=terminal_receipt_path,
+                pre_snapshot=pre_snapshot,
+                executable_descriptor=executable_descriptor,
+                interpreter_descriptor=interpreter_descriptor,
+                provider_environment=provider_environment,
+                credential=credential,
+                provider_output=provider_output,
+                provider_output_path=provider_output_path,
+                launch_receipt_path=receipt_path,
+                failure_kind="WrapperInternalError",
+                wrapper_exit_code=125,
+            )
+        except Exception:
+            pass
+        _print_failure("WrapperInternalError", "signed launch wrapper failed closed")
+        return 125
     finally:
         _wipe_bytearray(credential)
-        os.close(cli_descriptor)
-        os.close(interpreter_descriptor)
-        os.close(executable_descriptor)
-    finished_at = _utc_timestamp()
-    if execution_error:
-        wrapper_exit_code = 126
-    elif timed_out:
-        wrapper_exit_code = 124
-    else:
-        wrapper_exit_code = int(exit_code)
-    try:
-        _replace_reserved_output(Path(args.provider_output), provider_output)
-    except PermitError as exc:
-        _print_failure(type(exc).__name__, str(exc))
-        return 125
-    receipt = _build_launch_receipt(
-        permit=permit,
-        permit_path=Path(args.permit),
-        claim_path=claim_path,
-        parent_request_path=Path(args.parent_request),
-        provider_output_path=Path(args.provider_output),
-        provider_output=provider_output,
-        started_at=started_at,
-        finished_at=finished_at,
-        exit_code=exit_code,
-        wrapper_exit_code=wrapper_exit_code,
-        execution_error=execution_error,
-        timed_out=timed_out,
-    )
-    try:
-        _replace_reserved_receipt(Path(args.receipt), receipt)
-    except PermitError as exc:
-        _print_failure(type(exc).__name__, str(exc))
-        return 125
-    if execution_error:
-        _print_failure("ProviderExecutionError", "verified executable could not be invoked")
-        return wrapper_exit_code
-    if timed_out:
-        _print_failure("ProviderTimeout", "provider launch exceeded signed timeout")
-        return wrapper_exit_code
-    return wrapper_exit_code
+        _close_descriptors(cli_descriptor, interpreter_descriptor, executable_descriptor)
 
 
 def _validate_payload(
@@ -1191,6 +1361,285 @@ def _start_provider_process(
     )
 
 
+def _close_descriptors(*descriptors: int | None) -> None:
+    for descriptor in descriptors:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _provider_control_args(
+    permit: VerifiedPermit,
+    *,
+    mode: str,
+    preexisting_ids: Sequence[str] = (),
+) -> list[str]:
+    arguments = [
+        "reconcile",
+        "--mode",
+        mode,
+        "--name",
+        str(permit.payload["allocation_name"]),
+    ]
+    for pod_id in sorted(preexisting_ids):
+        arguments.extend(("--preexisting-id", pod_id))
+    return arguments
+
+
+def _run_provider_control(
+    permit: VerifiedPermit,
+    *,
+    mode: str,
+    executable_descriptor: int,
+    interpreter_descriptor: int,
+    provider_environment: Mapping[str, str],
+    credential: bytearray,
+    preexisting_ids: Sequence[str] = (),
+) -> dict[str, Any]:
+    _recheck_path_identity(
+        Path(permit.provider_interpreter),
+        interpreter_descriptor,
+        str(permit.payload["provider_interpreter_sha256"]),
+        label="provider interpreter",
+    )
+    try:
+        process = subprocess.Popen(
+            _provider_loader_command(
+                permit,
+                executable_descriptor,
+                _provider_control_args(
+                    permit,
+                    mode=mode,
+                    preexisting_ids=preexisting_ids,
+                ),
+            ),
+            executable=permit.provider_interpreter,
+            cwd=permit.working_directory,
+            env=dict(provider_environment),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            pass_fds=(executable_descriptor,),
+        )
+    except OSError as exc:
+        raise PermitVerificationError("allocation reconciliation could not start") from exc
+    credential_line = bytearray(credential)
+    credential_line.append(10)
+    timed_out = False
+    try:
+        try:
+            output, _ = process.communicate(
+                input=credential_line,
+                timeout=RECONCILIATION_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            process.kill()
+            output, _ = process.communicate()
+    finally:
+        _wipe_bytearray(credential_line)
+    if len(output) > MAX_RECONCILIATION_OUTPUT_BYTES:
+        raise PermitVerificationError("allocation reconciliation output is too large")
+    record = _load_single_json_record(output, label="allocation reconciliation output")
+    if record.get("schema") != PROVIDER_RECONCILIATION_SCHEMA:
+        raise PermitVerificationError("allocation reconciliation schema mismatch")
+    if record.get("mode") != mode:
+        raise PermitVerificationError("allocation reconciliation mode mismatch")
+    if record.get("allocation_name") != permit.payload["allocation_name"]:
+        raise PermitVerificationError("allocation reconciliation name mismatch")
+    return {
+        "exit_code": process.returncode,
+        "timed_out": timed_out,
+        "output_sha256": hashlib.sha256(output).hexdigest(),
+        "output_size_bytes": len(output),
+        "record": record,
+    }
+
+
+def _snapshot_exact_allocation_name(
+    permit: VerifiedPermit,
+    *,
+    executable_descriptor: int,
+    interpreter_descriptor: int,
+    provider_environment: Mapping[str, str],
+    credential: bytearray,
+) -> dict[str, Any]:
+    result = _run_provider_control(
+        permit,
+        mode="snapshot",
+        executable_descriptor=executable_descriptor,
+        interpreter_descriptor=interpreter_descriptor,
+        provider_environment=provider_environment,
+        credential=credential,
+    )
+    record = result["record"]
+    if (
+        result["timed_out"]
+        or result["exit_code"] != 0
+        or record.get("status") != "SNAPSHOT_CLEAR"
+        or record.get("preexisting_exact_name_ids") != []
+    ):
+        raise PermitVerificationError("signed allocation name is not clear before consumption")
+    return result
+
+
+def _validate_successful_provider_output(output: bytes, permit: VerifiedPermit) -> None:
+    if len(output) > MAX_PROVIDER_OUTPUT_BYTES:
+        raise PermitVerificationError("provider output exceeds the bounded evidence size")
+    record = _load_single_json_record(output, label="provider output")
+    if record.get("schema") != PROVIDER_OUTPUT_SCHEMA or record.get("status") != "RUNNING":
+        raise PermitVerificationError("provider output is not a successful allocation record")
+    pod = record.get("pod")
+    executor = record.get("executor")
+    template = record.get("template")
+    access = record.get("access")
+    schedule = record.get("schedule")
+    reconciliation = record.get("create_reconciliation")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (pod, executor, template, access, schedule, reconciliation)
+    ):
+        raise PermitVerificationError("provider output evidence sections are incomplete")
+    pod_id = pod.get("id")
+    if not isinstance(pod_id, str) or not pod_id:
+        raise PermitVerificationError("provider output pod ID is missing")
+    raw_executor_id = executor.get("id")
+    raw_executor_huid = executor.get("huid")
+    if (
+        not isinstance(raw_executor_id, str)
+        or not raw_executor_id
+        or not isinstance(raw_executor_huid, str)
+        or not raw_executor_huid
+        or permit.payload["executor_id"] not in {raw_executor_id, raw_executor_huid}
+    ):
+        raise PermitVerificationError("provider output executor selector mismatch")
+    expected = {
+        "pod.name": (pod.get("name"), permit.payload["allocation_name"]),
+        "executor.gpu_count": (executor.get("gpu_count"), permit.payload["gpu_count"]),
+        "template.id": (template.get("id"), permit.payload["template_id"]),
+        "template.image": (template.get("docker_image"), permit.payload["template_image"]),
+        "template.tag": (template.get("docker_image_tag"), permit.payload["template_tag"]),
+        "template.status": (template.get("status"), permit.payload["template_status"]),
+        "access.path": (
+            access.get("ssh_public_key_path"),
+            permit.payload["ssh_public_key_path"],
+        ),
+        "access.sha256": (
+            access.get("ssh_public_key_sha256"),
+            permit.payload["ssh_public_key_sha256"],
+        ),
+        "schedule.ttl": (schedule.get("ttl_seconds"), permit.payload["ttl_seconds"]),
+    }
+    if any(actual != wanted for actual, wanted in expected.values()):
+        raise PermitVerificationError("provider output does not match signed allocation bindings")
+    try:
+        observed_rate = Decimal(str(executor.get("observed_rate_usd_per_hour")))
+        max_rate = Decimal(str(executor.get("max_rate_usd_per_hour")))
+    except InvalidOperation as exc:
+        raise PermitVerificationError("provider output rate evidence is invalid") from exc
+    if (
+        observed_rate != _require_decimal(permit.payload, "observed_node_hourly_rate_usd")
+        or max_rate != _require_decimal(permit.payload, "max_node_hourly_rate_usd")
+        or executor.get("rate_authority") != "provider_raw_price_per_gpu_x_gpu_count/v1"
+    ):
+        raise PermitVerificationError("provider output rate evidence mismatch")
+    aggregate_rate = executor.get("rate_evidence")
+    rent_boundary = executor.get("rent_boundary")
+    if not isinstance(aggregate_rate, Mapping) or not isinstance(rent_boundary, Mapping):
+        raise PermitVerificationError("provider output rent-boundary evidence is missing")
+    if (
+        rent_boundary.get("status") != "VERIFIED_PRE_AND_POST"
+        or rent_boundary.get("endpoint") != f"/executors/{raw_executor_id}/rent"
+    ):
+        raise PermitVerificationError("provider output rent-boundary identity mismatch")
+    before_post = _validate_raw_rate_snapshot(
+        rent_boundary.get("before_post"),
+        raw_executor_id=raw_executor_id,
+        signed_observed_rate=observed_rate,
+        label="before_post",
+    )
+    after_post = _validate_raw_rate_snapshot(
+        rent_boundary.get("after_post"),
+        raw_executor_id=raw_executor_id,
+        signed_observed_rate=observed_rate,
+        label="after_post",
+    )
+    aggregate = _validate_raw_rate_snapshot(
+        {"authority": executor.get("rate_authority"), **dict(aggregate_rate)},
+        raw_executor_id=raw_executor_id,
+        signed_observed_rate=observed_rate,
+        label="aggregate",
+    )
+    if before_post != after_post or before_post != aggregate:
+        raise PermitVerificationError("provider output rent-boundary rate evidence diverges")
+    if (
+        reconciliation.get("status") != "CONFIRMED_UNIQUE"
+        or reconciliation.get("allocation_name") != permit.payload["allocation_name"]
+        or reconciliation.get("pod_id") != pod_id
+        or reconciliation.get("final_active_pod_ids") != [pod_id]
+    ):
+        raise PermitVerificationError("provider output creation reconciliation is invalid")
+
+
+def _validate_raw_rate_snapshot(
+    value: Any,
+    *,
+    raw_executor_id: str,
+    signed_observed_rate: Decimal,
+    label: str,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise PermitVerificationError(f"provider output {label} rate evidence is missing")
+    gpu_count = value.get("gpu_count")
+    available_gpu_count = value.get("available_gpu_count")
+    if (
+        isinstance(gpu_count, bool)
+        or gpu_count != REQUIRED_GPU_COUNT
+        or isinstance(available_gpu_count, bool)
+        or not isinstance(available_gpu_count, int)
+        or available_gpu_count < REQUIRED_GPU_COUNT
+    ):
+        raise PermitVerificationError(f"provider output {label} GPU rate shape is invalid")
+    price_per_gpu = _require_decimal(value, "price_per_gpu")
+    price_per_hour = _require_decimal(value, "price_per_hour")
+    if (
+        value.get("authority") != "provider_raw_price_per_gpu_x_gpu_count/v1"
+        or value.get("executor_id") != raw_executor_id
+        or value.get("pending_price_change") is not False
+        or price_per_gpu <= 0
+        or price_per_hour != signed_observed_rate
+        or price_per_gpu * Decimal(REQUIRED_GPU_COUNT) != price_per_hour
+    ):
+        raise PermitVerificationError(f"provider output {label} raw rate is invalid")
+    return {
+        "authority": value["authority"],
+        "executor_id": value["executor_id"],
+        "gpu_count": gpu_count,
+        "available_gpu_count": available_gpu_count,
+        "price_per_gpu": price_per_gpu,
+        "price_per_hour": price_per_hour,
+        "pending_price_change": False,
+    }
+
+
+def _load_single_json_record(output: bytes, *, label: str) -> dict[str, Any]:
+    try:
+        text = output.decode("utf-8")
+        lines = text.splitlines()
+        if len(lines) != 1 or not lines[0]:
+            raise ValueError("expected one JSON line")
+        value = json.loads(
+            lines[0],
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_non_finite,
+        )
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise PermitVerificationError(f"{label} is not exactly one JSON record") from exc
+    if not isinstance(value, dict):
+        raise PermitVerificationError(f"{label} root must be an object")
+    return value
+
+
 def _read_stdin_credential() -> bytearray:
     line = sys.stdin.buffer.readline(MAX_CREDENTIAL_BYTES + 2)
     tail = sys.stdin.buffer.read(1)
@@ -1257,6 +1706,507 @@ def _reserve_provider_output(path: Path) -> None:
         raise PermitVerificationError(f"cannot reserve provider output: {exc}") from exc
 
 
+def _terminal_reconciliation_receipt_path(claim_path: Path) -> Path:
+    suffix = ".consumed.json"
+    if not claim_path.name.endswith(suffix):
+        raise PermitVerificationError("permit claim path has an unexpected name")
+    return claim_path.with_name(
+        claim_path.name.removesuffix(suffix) + ".terminal-reconciliation.json"
+    )
+
+
+def _terminal_reconciliation_retry_path(claim_path: Path, attempt: int) -> Path:
+    if attempt < 1:
+        raise PermitVerificationError("terminal reconciliation retry attempt is invalid")
+    terminal_path = _terminal_reconciliation_receipt_path(claim_path)
+    return terminal_path.with_name(
+        f"{terminal_path.name.removesuffix('.json')}.retry-{attempt:04d}.json"
+    )
+
+
+def _cleanup_retry_verification_time(permit_path: Path) -> datetime:
+    """Verify stale cleanup authority without reviving stale launch authority."""
+
+    envelope = _load_json_object(permit_path, max_bytes=64 * 1024)
+    payload = envelope.get("payload")
+    if not isinstance(payload, Mapping):
+        raise PermitFormatError("permit payload must be an object")
+    issued_at = _parse_utc(payload.get("issued_at"), "issued_at")
+    expires_at = _parse_utc(payload.get("expires_at"), "expires_at")
+    if expires_at <= issued_at:
+        raise PermitVerificationError("permit validity interval is invalid")
+    return issued_at
+
+
+def _reserve_terminal_reconciliation_receipt(
+    permit: VerifiedPermit,
+    *,
+    ledger_dir: str | Path,
+    pre_snapshot: Mapping[str, Any],
+) -> tuple[Path, Path]:
+    ledger, ledger_descriptor = _open_private_ledger(ledger_dir)
+    claim_path = _permit_claim_path(permit, ledger)
+    path = _terminal_reconciliation_receipt_path(claim_path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    placeholder = {
+        "schema": TERMINAL_RECONCILIATION_RECEIPT_SCHEMA,
+        "status": "RESERVED",
+        "permit_sha256": permit.permit_sha256,
+        "claim_path": str(claim_path.resolve()),
+        "pre_snapshot_sha256": hashlib.sha256(canonical_json_bytes(pre_snapshot)).hexdigest(),
+    }
+    try:
+        descriptor = os.open(path.name, flags, 0o600, dir_fd=ledger_descriptor)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            handle.write(canonical_json_bytes(placeholder) + b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fsync(ledger_descriptor)
+    except FileExistsError as exc:
+        raise PermitReplayError("terminal reconciliation receipt already exists") from exc
+    except OSError as exc:
+        raise PermitVerificationError(
+            "terminal reconciliation receipt could not be reserved"
+        ) from exc
+    finally:
+        os.close(ledger_descriptor)
+    return claim_path, path
+
+
+def _write_unconsumed_terminal_receipt(
+    permit: VerifiedPermit,
+    *,
+    claim_path: Path,
+    terminal_receipt_path: Path,
+    pre_snapshot: Mapping[str, Any],
+    failure_kind: str,
+) -> None:
+    receipt = {
+        "schema": TERMINAL_RECONCILIATION_RECEIPT_SCHEMA,
+        "status": "CONSUMPTION_FAILED_NO_PROVIDER_MUTATION",
+        "written_at_utc": _utc_timestamp(),
+        "permit": {
+            "sha256": permit.permit_sha256,
+            "key_id": permit.key_id,
+            "request_id": permit.request_id,
+            "nonce": permit.nonce,
+        },
+        "claim": {
+            "expected_path": str(claim_path.resolve()),
+            "artifact": _artifact_binding(claim_path),
+        },
+        "pre_snapshot": {
+            "sha256": hashlib.sha256(canonical_json_bytes(pre_snapshot)).hexdigest(),
+            "evidence": dict(pre_snapshot),
+        },
+        "terminal_failure": {"kind": failure_kind, "wrapper_exit_code": 2},
+        "reconciliation": {"status": "NOT_REQUIRED_NO_PROVIDER_MUTATION"},
+    }
+    try:
+        _replace_reserved_terminal_reconciliation_receipt(terminal_receipt_path, receipt)
+    except PermitError:
+        pass
+
+
+def _artifact_binding(path: Path) -> dict[str, Any]:
+    binding: dict[str, Any] = {"path": str(path.resolve())}
+    try:
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise OSError("not a regular file")
+        binding.update(
+            {
+                "status": "PRESENT",
+                "sha256": _sha256_bound_file(path, label="terminal evidence artifact"),
+                "size_bytes": metadata.st_size,
+            }
+        )
+    except (OSError, PermitError):
+        binding.update({"status": "UNAVAILABLE", "sha256": None, "size_bytes": None})
+    return binding
+
+
+def _retry_control_record(claim_path: Path, attempt: int) -> dict[str, Any]:
+    return {
+        "cli_flag": "--retry-terminal-reconciliation",
+        "credential_transport": CREDENTIAL_TRANSPORT,
+        "next_attempt": attempt,
+        "next_receipt_path": str(
+            _terminal_reconciliation_retry_path(claim_path, attempt).resolve()
+        ),
+        "mutation_scope": "terminate-attributable-exact-name-allocations-only",
+    }
+
+
+def _build_terminal_reconciliation_receipt(
+    permit: VerifiedPermit,
+    *,
+    claim_path: Path,
+    pre_snapshot: Mapping[str, Any],
+    status: str,
+    failure_kind: str,
+    wrapper_exit_code: int,
+    reconciliation: Mapping[str, Any],
+    provider_output: bytes,
+    provider_output_path: Path,
+    launch_receipt_path: Path,
+) -> dict[str, Any]:
+    return {
+        "schema": TERMINAL_RECONCILIATION_RECEIPT_SCHEMA,
+        "status": status,
+        "written_at_utc": _utc_timestamp(),
+        "permit": {
+            "sha256": permit.permit_sha256,
+            "key_id": permit.key_id,
+            "request_id": permit.request_id,
+            "nonce": permit.nonce,
+        },
+        "claim": {
+            "path": str(claim_path.resolve()),
+            "sha256": _sha256_bound_file(claim_path, label="permit claim"),
+        },
+        "allocation": {
+            "name": permit.payload["allocation_name"],
+            "preexisting_exact_name_ids": pre_snapshot["record"]["preexisting_exact_name_ids"],
+        },
+        "pre_snapshot": {
+            "sha256": hashlib.sha256(canonical_json_bytes(pre_snapshot)).hexdigest(),
+            "evidence": dict(pre_snapshot),
+        },
+        "terminal_failure": {
+            "kind": failure_kind or None,
+            "wrapper_exit_code": wrapper_exit_code,
+        },
+        "reconciliation": dict(reconciliation),
+        "retry_control": (
+            _retry_control_record(claim_path, 1) if status == "CLEANUP_UNCONFIRMED" else None
+        ),
+        "artifacts": {
+            "captured_provider_output": {
+                "sha256": hashlib.sha256(provider_output).hexdigest(),
+                "size_bytes": len(provider_output),
+            },
+            "provider_output": _artifact_binding(provider_output_path),
+            "launch_receipt": _artifact_binding(launch_receipt_path),
+        },
+    }
+
+
+def _load_terminal_retry_parent(
+    permit: VerifiedPermit, claim_path: Path
+) -> tuple[Path, dict[str, Any], int]:
+    terminal_path = _terminal_reconciliation_receipt_path(claim_path)
+    parent_path = terminal_path
+    parent = _load_json_object(parent_path, max_bytes=512 * 1024)
+    if (
+        parent.get("schema") != TERMINAL_RECONCILIATION_RECEIPT_SCHEMA
+        or parent.get("permit", {}).get("sha256") != permit.permit_sha256
+        or parent.get("claim", {}).get("path") != str(claim_path.resolve())
+        or parent.get("claim", {}).get("sha256")
+        != _sha256_bound_file(claim_path, label="permit claim")
+    ):
+        raise PermitVerificationError("terminal reconciliation parent binding mismatch")
+    attempt = 1
+    while True:
+        candidate = _terminal_reconciliation_retry_path(claim_path, attempt)
+        if not candidate.exists():
+            break
+        retry = _load_json_object(candidate, max_bytes=512 * 1024)
+        if retry.get("status") == "RESERVED":
+            _validate_terminal_retry_reservation(
+                retry,
+                permit=permit,
+                parent_path=parent_path,
+                attempt=attempt,
+            )
+            break
+        if (
+            retry.get("schema") != TERMINAL_RECONCILIATION_RETRY_SCHEMA
+            or retry.get("attempt") != attempt
+            or retry.get("permit", {}).get("sha256") != permit.permit_sha256
+            or retry.get("parent_receipt", {}).get("path") != str(parent_path.resolve())
+            or retry.get("parent_receipt", {}).get("sha256")
+            != _sha256_bound_file(parent_path, label="terminal retry parent")
+        ):
+            raise PermitVerificationError("terminal reconciliation retry chain mismatch")
+        parent_path = candidate
+        parent = retry
+        attempt += 1
+    if parent.get("status") != "CLEANUP_UNCONFIRMED":
+        raise PermitVerificationError("terminal reconciliation does not require retry")
+    return parent_path, parent, attempt
+
+
+def _validate_terminal_retry_reservation(
+    reservation: Mapping[str, Any],
+    *,
+    permit: VerifiedPermit,
+    parent_path: Path,
+    attempt: int,
+) -> None:
+    expected_fields = {
+        "schema",
+        "status",
+        "attempt",
+        "permit_sha256",
+        "parent_receipt_sha256",
+    }
+    if (
+        set(reservation) != expected_fields
+        or reservation.get("schema") != TERMINAL_RECONCILIATION_RETRY_SCHEMA
+        or reservation.get("status") != "RESERVED"
+        or reservation.get("attempt") != attempt
+        or reservation.get("permit_sha256") != permit.permit_sha256
+        or reservation.get("parent_receipt_sha256")
+        != _sha256_bound_file(parent_path, label="terminal retry parent")
+    ):
+        raise PermitVerificationError("terminal reconciliation retry reservation mismatch")
+
+
+def _reserve_terminal_retry_receipt(
+    permit: VerifiedPermit,
+    *,
+    claim_path: Path,
+    parent_path: Path,
+    attempt: int,
+) -> Path:
+    ledger, ledger_descriptor = _open_private_ledger(GATE0_CONSUMPTION_ROOT)
+    expected_claim_path = _permit_claim_path(permit, ledger)
+    if expected_claim_path != claim_path:
+        os.close(ledger_descriptor)
+        raise PermitVerificationError("terminal reconciliation claim path mismatch")
+    path = _terminal_reconciliation_retry_path(claim_path, attempt)
+    placeholder = {
+        "schema": TERMINAL_RECONCILIATION_RETRY_SCHEMA,
+        "status": "RESERVED",
+        "attempt": attempt,
+        "permit_sha256": permit.permit_sha256,
+        "parent_receipt_sha256": _sha256_bound_file(parent_path, label="terminal retry parent"),
+    }
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path.name, flags, 0o600, dir_fd=ledger_descriptor)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            handle.write(canonical_json_bytes(placeholder) + b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fsync(ledger_descriptor)
+    except FileExistsError:
+        reservation = _load_json_object(path, max_bytes=16 * 1024)
+        _validate_terminal_retry_reservation(
+            reservation,
+            permit=permit,
+            parent_path=parent_path,
+            attempt=attempt,
+        )
+    except OSError as exc:
+        raise PermitVerificationError("terminal retry receipt could not be reserved") from exc
+    finally:
+        os.close(ledger_descriptor)
+    return path
+
+
+def _validate_consumed_claim_for_retry(permit: VerifiedPermit, claim_path: Path) -> None:
+    claim = _load_json_object(claim_path, max_bytes=16 * 1024)
+    expected = {
+        "key_id": permit.key_id,
+        "nonce": permit.nonce,
+        "permit_sha256": permit.permit_sha256,
+        "request_id": permit.request_id,
+    }
+    if set(claim) != {*expected, "consumed_at"} or any(
+        claim.get(field) != value for field, value in expected.items()
+    ):
+        raise PermitVerificationError("terminal reconciliation claim binding mismatch")
+    _parse_utc(claim.get("consumed_at"), "claim consumed_at")
+
+
+def _retry_terminal_reconciliation(
+    permit: VerifiedPermit,
+    *,
+    executable_descriptor: int,
+    interpreter_descriptor: int,
+    provider_environment: Mapping[str, str],
+    credential: bytearray,
+) -> int:
+    ledger = Path(GATE0_CONSUMPTION_ROOT)
+    claim_path = _permit_claim_path(permit, ledger)
+    if not claim_path.is_file():
+        raise PermitVerificationError("terminal reconciliation claim is unavailable")
+    _validate_consumed_claim_for_retry(permit, claim_path)
+    parent_path, parent, attempt = _load_terminal_retry_parent(permit, claim_path)
+    allocation = parent.get("allocation")
+    if not isinstance(allocation, Mapping):
+        raise PermitVerificationError("terminal reconciliation allocation binding is missing")
+    preexisting_ids = allocation.get("preexisting_exact_name_ids")
+    if not isinstance(preexisting_ids, list) or any(
+        not isinstance(pod_id, str) for pod_id in preexisting_ids
+    ):
+        raise PermitVerificationError("terminal reconciliation pre-snapshot is invalid")
+    retry_path = _reserve_terminal_retry_receipt(
+        permit,
+        claim_path=claim_path,
+        parent_path=parent_path,
+        attempt=attempt,
+    )
+    try:
+        reconciliation = _run_provider_control(
+            permit,
+            mode="cleanup",
+            executable_descriptor=executable_descriptor,
+            interpreter_descriptor=interpreter_descriptor,
+            provider_environment=provider_environment,
+            credential=credential,
+            preexisting_ids=preexisting_ids,
+        )
+        record = reconciliation["record"]
+        confirmed = (
+            not reconciliation["timed_out"]
+            and reconciliation["exit_code"] == 0
+            and record.get("status") == "CONFIRMED_ABSENT"
+            and record.get("final_attributable_ids") == []
+        )
+    except PermitError as exc:
+        reconciliation = {"status": "CONTROL_FAILED", "error": type(exc).__name__}
+        confirmed = False
+    receipt = {
+        "schema": TERMINAL_RECONCILIATION_RETRY_SCHEMA,
+        "status": "RETRY_RECONCILED" if confirmed else "CLEANUP_UNCONFIRMED",
+        "attempt": attempt,
+        "written_at_utc": _utc_timestamp(),
+        "permit": {
+            "sha256": permit.permit_sha256,
+            "key_id": permit.key_id,
+            "request_id": permit.request_id,
+            "nonce": permit.nonce,
+        },
+        "claim": {
+            "path": str(claim_path.resolve()),
+            "sha256": _sha256_bound_file(claim_path, label="permit claim"),
+        },
+        "parent_receipt": {
+            "path": str(parent_path.resolve()),
+            "sha256": _sha256_bound_file(parent_path, label="terminal retry parent"),
+        },
+        "allocation": dict(allocation),
+        "reconciliation": reconciliation,
+        "retry_control": (None if confirmed else _retry_control_record(claim_path, attempt + 1)),
+    }
+    _replace_reserved_terminal_reconciliation_receipt(retry_path, receipt)
+    if not confirmed:
+        _print_failure(
+            "TerminalReconciliationUnconfirmed",
+            "attributable allocation cleanup remains unconfirmed",
+        )
+        return 125
+    return 0
+
+
+def _replace_reserved_terminal_reconciliation_receipt(
+    path: Path, receipt: Mapping[str, Any]
+) -> None:
+    try:
+        reserved = _load_json_object(path, max_bytes=16 * 1024)
+        metadata = path.lstat()
+    except (OSError, PermitError) as exc:
+        raise PermitVerificationError(
+            "reserved terminal reconciliation receipt is unavailable"
+        ) from exc
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or reserved.get("schema")
+        not in {
+            TERMINAL_RECONCILIATION_RECEIPT_SCHEMA,
+            TERMINAL_RECONCILIATION_RETRY_SCHEMA,
+        }
+        or reserved.get("status") != "RESERVED"
+        or receipt.get("schema") != reserved.get("schema")
+    ):
+        raise PermitVerificationError("terminal reconciliation receipt reservation changed")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            handle.write(
+                json.dumps(receipt, indent=2, sort_keys=True, allow_nan=False).encode("utf-8")
+                + b"\n"
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    except OSError as exc:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise PermitVerificationError("cannot write terminal reconciliation receipt") from exc
+
+
+def _finish_terminal_reconciliation(
+    permit: VerifiedPermit,
+    *,
+    claim_path: Path,
+    terminal_receipt_path: Path,
+    pre_snapshot: Mapping[str, Any],
+    executable_descriptor: int,
+    interpreter_descriptor: int,
+    provider_environment: Mapping[str, str],
+    credential: bytearray,
+    provider_output: bytes,
+    provider_output_path: Path,
+    launch_receipt_path: Path,
+    failure_kind: str,
+    wrapper_exit_code: int,
+) -> bool:
+    preexisting_ids = pre_snapshot["record"]["preexisting_exact_name_ids"]
+    try:
+        reconciliation = _run_provider_control(
+            permit,
+            mode="cleanup",
+            executable_descriptor=executable_descriptor,
+            interpreter_descriptor=interpreter_descriptor,
+            provider_environment=provider_environment,
+            credential=credential,
+            preexisting_ids=preexisting_ids,
+        )
+        record = reconciliation["record"]
+        confirmed = (
+            not reconciliation["timed_out"]
+            and reconciliation["exit_code"] == 0
+            and record.get("status") == "CONFIRMED_ABSENT"
+            and record.get("final_attributable_ids") == []
+        )
+    except PermitError as exc:
+        reconciliation = {
+            "status": "CONTROL_FAILED",
+            "error": type(exc).__name__,
+        }
+        confirmed = False
+    receipt = _build_terminal_reconciliation_receipt(
+        permit,
+        claim_path=claim_path,
+        pre_snapshot=pre_snapshot,
+        status="FAILURE_RECONCILED" if confirmed else "CLEANUP_UNCONFIRMED",
+        failure_kind=failure_kind,
+        wrapper_exit_code=wrapper_exit_code,
+        reconciliation=reconciliation,
+        provider_output=provider_output,
+        provider_output_path=provider_output_path,
+        launch_receipt_path=launch_receipt_path,
+    )
+    try:
+        _replace_reserved_terminal_reconciliation_receipt(terminal_receipt_path, receipt)
+    except PermitError:
+        return False
+    return confirmed
+
+
 def _build_launch_receipt(
     *,
     permit: VerifiedPermit,
@@ -1271,14 +2221,18 @@ def _build_launch_receipt(
     wrapper_exit_code: int,
     execution_error: bool,
     timed_out: bool,
+    provider_output_valid: bool,
+    terminal_failure_kind: str,
 ) -> dict[str, Any]:
     claim = _load_json_object(claim_path, max_bytes=16 * 1024)
     if timed_out:
         status = "PROVIDER_TIMEOUT"
     elif execution_error:
         status = "PROVIDER_EXECUTION_ERROR"
-    elif exit_code == 0:
+    elif exit_code == 0 and provider_output_valid:
         status = "COMPLETED"
+    elif exit_code == 0:
+        status = "PROVIDER_OUTPUT_INVALID"
     else:
         status = "PROVIDER_NONZERO_EXIT"
     return {
@@ -1354,6 +2308,8 @@ def _build_launch_receipt(
             "wrapper_exit_code": wrapper_exit_code,
             "timed_out": timed_out,
             "provider_timeout_seconds": permit.payload["provider_timeout_seconds"],
+            "provider_output_valid": provider_output_valid,
+            "terminal_failure_kind": terminal_failure_kind or None,
         },
         "budget": {
             "ttl_seconds": permit.payload["ttl_seconds"],
@@ -1589,6 +2545,8 @@ __all__ = [
     "PERMIT_SCHEMA",
     "PUBLIC_KEY_SCHEMA",
     "SIGNATURE_DOMAIN",
+    "TERMINAL_RECONCILIATION_RECEIPT_SCHEMA",
+    "TERMINAL_RECONCILIATION_RETRY_SCHEMA",
     "LoadedPublicKeyDocument",
     "PermitError",
     "PermitFormatError",

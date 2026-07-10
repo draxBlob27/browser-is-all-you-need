@@ -143,7 +143,7 @@ def _write_gate0_chain(
     *,
     now: datetime = TEST_NOW,
 ) -> dict[str, Path]:
-    issued_at = now.astimezone(timezone.utc).replace(microsecond=0) - timedelta(minutes=1)
+    issued_at = now.astimezone(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)
     expires_at = issued_at + timedelta(minutes=10)
     consumed_at = issued_at + timedelta(seconds=30)
     contract_path = Path(__file__).parents[1] / "examples/miles/h100_fastest_acceptance.json"
@@ -170,9 +170,7 @@ def _write_gate0_chain(
         "data": {
             "schema": "h100-booking-data-intent/v1",
             "train_sha256": contract_payload["fixed_workload"]["dataset_sha256"],
-            "manifest_sha256": contract_payload["fixed_workload"][
-                "dataset_manifest_sha256"
-            ],
+            "manifest_sha256": contract_payload["fixed_workload"]["dataset_manifest_sha256"],
             "row_count": contract_payload["fixed_workload"]["dataset_rows"],
         },
         "checkpoint": {
@@ -202,7 +200,7 @@ def _write_gate0_chain(
             "issue_number": 32,
             "allocation_name": "issue-32-dispatcher",
             "provider": "lium",
-            "provider_version": "1.2.0",
+            "provider_version": "1.3.0",
             "profile": "h100-sxm",
             "executor_id": "golden-shark-c6",
             "sentry_principal": security.sentry_principal,
@@ -254,7 +252,7 @@ def _write_gate0_chain(
         "--template-status",
         template["template_status"],
         "--expected-provider-version",
-        "1.2.0",
+        "1.3.0",
         "--expected-interpreter-path",
         str(interpreter),
         "--expected-interpreter-sha256",
@@ -284,7 +282,7 @@ def _write_gate0_chain(
     provider_output = _json(
         root / "gate0/provider_output.json",
         {
-            "schema": "lium-h100-pod-create/v1",
+            "schema": "lium-h100-pod-create/v2",
             "status": "RUNNING",
             "pod": {
                 "id": "pod-h100-001",
@@ -301,8 +299,64 @@ def _write_gate0_chain(
                 "observed_rate_usd_per_hour": 18.0,
                 "observed_rate_usd_per_gpu_hour": 2.25,
                 "max_rate_usd_per_hour": 18.0,
+                "observed_rate_status": "provider_reported_nonzero",
+                "rate_authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
+                "rate_evidence": {
+                    "executor_id": "executor-h100-001",
+                    "gpu_count": 8,
+                    "available_gpu_count": 8,
+                    "price_per_gpu": 2.25,
+                    "price_per_hour": 18.0,
+                    "pending_price_change": False,
+                },
+                "rent_boundary": {
+                    "status": "VERIFIED_PRE_AND_POST",
+                    "endpoint": "/executors/executor-h100-001/rent",
+                    "before_post": {
+                        "authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
+                        "executor_id": "executor-h100-001",
+                        "gpu_count": 8,
+                        "available_gpu_count": 8,
+                        "price_per_gpu": 2.25,
+                        "price_per_hour": 18.0,
+                        "pending_price_change": False,
+                    },
+                    "after_post": {
+                        "authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
+                        "executor_id": "executor-h100-001",
+                        "gpu_count": 8,
+                        "available_gpu_count": 8,
+                        "price_per_gpu": 2.25,
+                        "price_per_hour": 18.0,
+                        "pending_price_change": False,
+                    },
+                },
             },
-            "template": {"id": "template-h100", "name": "Pytorch CUDA"},
+            "template": {
+                "id": template["template_id"],
+                "name": "Pytorch CUDA",
+                "docker_image": template["template_image"],
+                "docker_image_tag": template["template_tag"],
+                "status": template["template_status"],
+            },
+            "runtime_evidence": {
+                "provider_version": "1.3.0",
+                "interpreter": {
+                    "path": str(interpreter),
+                    "sha256": _sha256(interpreter),
+                    "version": platform.python_version(),
+                },
+                "lium_sdk": {
+                    "distribution": "lium.io",
+                    "version": "1.2.3",
+                },
+                "lium_cli": {
+                    "path": str(lium_cli.resolve()),
+                    "sha256": _sha256(lium_cli),
+                    "version": "0.0.3",
+                    "version_source": "wrapper_verified_cli_version",
+                },
+            },
             "access": {
                 "ssh_public_key_path": str(ssh_public_key.resolve()),
                 "ssh_public_key_sha256": _sha256(ssh_public_key),
@@ -350,7 +404,7 @@ def _write_gate0_chain(
         "profile": "h100-sxm",
         "provider_executable": str(provider_executable.resolve()),
         "provider_executable_sha256": _sha256(provider_executable),
-        "provider_version": "1.2.0",
+        "provider_version": "1.3.0",
         "provider_interpreter": str(interpreter),
         "provider_interpreter_sha256": _sha256(interpreter),
         "provider_interpreter_version": platform.python_version(),
@@ -420,7 +474,7 @@ def _write_gate0_chain(
                 "executor_id": "golden-shark-c6",
                 "executable": str(provider_executable.resolve()),
                 "executable_sha256": _sha256(provider_executable),
-                "declared_version": "1.2.0",
+                "declared_version": "1.3.0",
                 "interpreter": str(interpreter),
                 "interpreter_sha256": _sha256(interpreter),
                 "interpreter_version": platform.python_version(),
@@ -428,7 +482,7 @@ def _write_gate0_chain(
                 "execution_boundary": "script-fd-bound-interpreter-path-rechecked",
             },
             "runtime_evidence": {
-                "provider_version": "1.2.0",
+                "provider_version": "1.3.0",
                 "lium_sdk_distribution": "lium.io",
                 "lium_sdk_version": "1.2.3",
                 "lium_cli_path": str(lium_cli.resolve()),
@@ -689,9 +743,7 @@ def _write_preflight_inputs(root: Path) -> tuple[Path, Path, Path, Path]:
                 "source": json.loads(source.read_text(encoding="utf-8")),
                 "runtime": json.loads(immutable["runtime"].read_text(encoding="utf-8")),
                 "data": json.loads(immutable["data"].read_text(encoding="utf-8")),
-                "checkpoint": json.loads(
-                    immutable["checkpoint"].read_text(encoding="utf-8")
-                ),
+                "checkpoint": json.loads(immutable["checkpoint"].read_text(encoding="utf-8")),
                 "setup": setup_bundle,
             },
         },
@@ -720,21 +772,15 @@ def _refresh_prepare_bindings(root: Path) -> None:
         name: json.loads(Path(manifest["artifacts"][name]).read_text(encoding="utf-8"))
         for name in ("source", "runtime", "data", "checkpoint")
     }
-    supporting = {
-        name: Path(path) for name, path in manifest["supporting_artifacts"].items()
-    }
+    supporting = {name: Path(path) for name, path in manifest["supporting_artifacts"].items()}
     request["prepared_evidence"]["setup"] = {
-        "attestation": json.loads(
-            supporting["setup_attestation"].read_text(encoding="utf-8")
-        ),
+        "attestation": json.loads(supporting["setup_attestation"].read_text(encoding="utf-8")),
         "attestation_sha256": manifest["supporting_sha256"]["setup_attestation"],
         "hf_revision_marker_sha256": manifest["supporting_sha256"]["hf_revision_marker"],
         "hf_revision_marker_content": supporting["hf_revision_marker"]
         .read_text(encoding="utf-8")
         .strip(),
-        "container_inspection_sha256": manifest["supporting_sha256"][
-            "container_inspection"
-        ],
+        "container_inspection_sha256": manifest["supporting_sha256"]["container_inspection"],
         "container_inspection": json.loads(
             supporting["container_inspection"].read_text(encoding="utf-8")
         ),
@@ -1009,14 +1055,27 @@ def _write_leg_evidence(summary: Path, leg_id: str) -> dict[str, Any]:
     }
     runner = _runner_module()
     hashes = {name: _sha256(path) for name, path in evidence_paths.items()}
-    manifest = _json(
-        leg_root / "leg_evidence_manifest.json",
+    spec = runner["LEG_SPECS"].get(leg_id)
+    manifest_payload = (
         runner["build_leg_evidence_manifest"](
-            runner["LEG_SPECS"][leg_id],
+            spec,
             evidence_paths=evidence_paths,
             hashes=hashes,
             valid=True,
-        ),
+        )
+        if spec is not None
+        else {
+            "schema_version": 1,
+            "authority": "executor_raw_evidence",
+            "leg": leg_id,
+            "paths": {name: str(path) for name, path in evidence_paths.items()},
+            "sha256": hashes,
+            "valid": True,
+        }
+    )
+    manifest = _json(
+        leg_root / "leg_evidence_manifest.json",
+        manifest_payload,
     )
     return {
         "leg_id": leg_id,
@@ -1030,6 +1089,7 @@ def _write_leg_evidence(summary: Path, leg_id: str) -> dict[str, Any]:
 
 
 def _write_screen_request(root: Path, control: Path, candidate: Path) -> Path:
+    preflight = json.loads((root / "preflight.json").read_text(encoding="utf-8"))
     legs = [
         _write_leg_evidence(control, "a1"),
         _write_leg_evidence(candidate, "b1"),
@@ -1055,6 +1115,8 @@ def _write_screen_request(root: Path, control: Path, candidate: Path) -> Path:
                 "repo_sha": CURRENT_REPO_SHA,
                 "training_base_sha": TRAINING_BASE_SHA,
             },
+            "issued_at": TEST_NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "gate0": preflight["context"]["gate0"],
         },
     )
 
@@ -1072,7 +1134,7 @@ def test_real_runner_manifest_schema_and_process_cleanliness_are_sentry_graded(
     leg = _write_leg_evidence(summary, "a1")
     manifest_path = Path(leg["evidence_manifest"])
 
-    reasons, _ = _validate_runner_evidence_manifest(
+    reasons, _, _ = _validate_runner_evidence_manifest(
         manifest_path,
         leg_id="a1",
         expected_trial=summary,
@@ -1089,7 +1151,7 @@ def test_real_runner_manifest_schema_and_process_cleanliness_are_sentry_graded(
     manifest["sha256"]["process_cleanliness_after"] = _sha256(after_path)
     _json(manifest_path, manifest)
 
-    reasons, _ = _validate_runner_evidence_manifest(
+    reasons, _, _ = _validate_runner_evidence_manifest(
         manifest_path,
         leg_id="a1",
         expected_trial=summary,
@@ -1162,26 +1224,52 @@ def _run_promotion(
     root: Path, *, a2_scale: float = 1.0
 ) -> tuple[Path, list[Path], list[Path], Path, dict[str, Any]]:
     contract, _, a1, b1, screen, _ = _run_screen(root)
+    a2 = _write_trial(
+        root / "A2",
+        name="A2",
+        ratio=a2_scale,
+        candidate=False,
+        tranche="T1",
+    )
+    b2 = _write_trial(
+        root / "B2",
+        name="B2",
+        ratio=a2_scale * 1.04,
+        candidate=True,
+        tranche="T1",
+    )
     controls = [
         a1,
-        _write_trial(
-            root / "A2",
-            name="A2",
-            ratio=a2_scale,
-            candidate=False,
-            tranche="T1",
-        ),
+        a2,
     ]
     candidates = [
         b1,
-        _write_trial(
-            root / "B2",
-            name="B2",
-            ratio=a2_scale * 1.04,
-            candidate=True,
-            tranche="T1",
-        ),
+        b2,
     ]
+    a2_leg = _write_leg_evidence(a2, "a2")
+    b2_leg = _write_leg_evidence(b2, "b2")
+    manifests = [path.parent / "leg_evidence_manifest.json" for path in (*controls, *candidates)]
+    _json(
+        root / "executor_evidence_manifest.json",
+        {
+            "schema_version": 1,
+            "authority": "executor_raw_evidence",
+            "leg_manifest_sha256": {str(path): _sha256(path) for path in sorted(manifests)},
+        },
+    )
+    screen_payload = json.loads(screen.read_text(encoding="utf-8"))
+    _json(
+        root / "second_pair_result.json",
+        {
+            "status": "second_pair_complete",
+            "authority": "executor_evidence",
+            "terminal": False,
+            "repair_required": False,
+            "legs": [b2_leg, a2_leg],
+            "signed_approval_sha256": _sha256(screen),
+            "request_sha256": screen_payload["request_sha256"],
+        },
+    )
     result = evaluate_promotion(
         screen_decision_path=screen,
         control_paths=controls,
@@ -1240,6 +1328,12 @@ def _write_confirmation_request(
         **{f"a{index}": path for index, path in enumerate(controls, 1)},
         **{f"b{index}": path for index, path in enumerate(candidates, 1)},
     }
+    manifests: dict[str, Path] = {}
+    for label, trial in labeled.items():
+        manifest = trial.parent / "leg_evidence_manifest.json"
+        if not manifest.is_file():
+            _write_leg_evidence(trial, label)
+        manifests[label] = manifest
     readbacks = {
         label: next(path.parent.rglob("wandb_readback.json")) for label, path in labeled.items()
     }
@@ -1256,6 +1350,7 @@ def _write_confirmation_request(
             "t2_budget_path": str(budget),
             "t2_budget_sha256": _sha256(budget),
             "trial_summary_hashes": {label: _sha256(path) for label, path in labeled.items()},
+            "evidence_manifest_hashes": {label: _sha256(path) for label, path in manifests.items()},
             "wandb_readback_hashes": {label: _sha256(path) for label, path in readbacks.items()},
         },
     )
@@ -1400,6 +1495,46 @@ def _run_grpo_stage(root: Path, confirmation: Path) -> tuple[Path, Path, dict[st
     return artifact, decision, result
 
 
+def _write_termination_receipt(root: Path, confirmation: Path) -> Path:
+    confirmation_payload = json.loads(confirmation.read_text(encoding="utf-8"))
+    gate0 = confirmation_payload["context"]["gate0"]
+    provider = confirmation.parent / "gate0/provider_output.json"
+    launch = confirmation.parent / "gate0/launch_receipt.json"
+    return _json(
+        root / "termination.json",
+        {
+            "schema": "lium-h100-termination-receipt/v1",
+            "status": "ALREADY_ABSENT",
+            "started_at_utc": "2026-07-10T00:03:00Z",
+            "finished_at_utc": "2026-07-10T00:03:01Z",
+            "allocation": {
+                "id": gate0["allocation_id"],
+                "name": gate0["allocation_name"],
+            },
+            "source": {
+                "provider_output_path": str(provider.resolve()),
+                "provider_output_sha256": _sha256(provider),
+                "launch_receipt_path": str(launch.resolve()),
+                "launch_receipt_sha256": _sha256(launch),
+            },
+            "preflight": {
+                "target_present": False,
+                "identity_conflict": False,
+                "id_conflict_count": 0,
+                "name_conflict_count": 0,
+            },
+            "postflight": {
+                "target_present": False,
+                "identity_conflict": False,
+                "id_conflict_count": 0,
+                "name_conflict_count": 0,
+                "confirmed_absent": True,
+                "poll_attempts": 1,
+            },
+        },
+    )
+
+
 def _write_audit(
     root: Path,
     *,
@@ -1407,12 +1542,14 @@ def _write_audit(
     confirmation: Path,
     grpo: Path,
 ) -> Path:
+    termination = _write_termination_receipt(root, confirmation)
     constituents = [
         {"role": role, "path": str(path), "sha256": _sha256(path)}
         for role, path in (
             ("confirmation_decision", confirmation),
             ("grpo_decision", grpo),
             ("contract", contract),
+            ("termination_receipt", termination),
         )
     ]
     manifest = _json(
@@ -1563,7 +1700,7 @@ def test_gate0_accepts_real_provider_shape_and_requires_server_verified_schedule
     provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
     assert accepted["decision"] == "PROMOTABLE"
     assert accepted["context"]["gate0"]["allocation_id"] == provider["pod"]["id"]
-    assert provider["schema"] == "lium-h100-pod-create/v1"
+    assert provider["schema"] == "lium-h100-pod-create/v2"
     assert "allocation" not in provider
 
     provider["schedule"]["server_removal_scheduled_at"] = "2026-07-10T03:00:00Z"
@@ -1715,6 +1852,129 @@ def test_gate0_accepts_current_provider_v2_runtime_and_template_evidence(
     )
     assert rejected["decision"] == "INVALID"
     assert "gate0_provider_unique_allocation_unproven" in rejected["reasons"]
+
+
+def test_gate0_launch_start_not_current_time_must_be_inside_permit_interval(
+    tmp_path: Path,
+) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    late_security = SentrySecurity(
+        **{
+            **security.__dict__,
+            "now": TEST_NOW + timedelta(days=1),
+        }
+    )
+    accepted = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=late_security,
+    )
+    assert accepted["decision"] == "PROMOTABLE"
+
+    permit = json.loads(gate0["permit"].read_text(encoding="utf-8"))["payload"]
+    expires_at = datetime.fromisoformat(permit["expires_at"].replace("Z", "+00:00"))
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["execution"]["started_at"] = permit["expires_at"]
+    receipt["execution"]["finished_at"] = (expires_at + timedelta(seconds=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    _json(gate0["launch_receipt"], receipt)
+    rejected = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=late_security,
+    )
+    assert rejected["decision"] == "INVALID"
+    assert "gate0_launch_started_outside_permit_interval" in rejected["reasons"]
+
+
+def test_gate0_rejects_provider_v1_unconditionally(tmp_path: Path) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    provider["schema"] = "lium-h100-pod-create/v1"
+    _json(gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    _json(gate0["launch_receipt"], receipt)
+
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+
+    assert result["decision"] == "INVALID"
+    assert "gate0_provider_output_schema_or_hardware_invalid" in result["reasons"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing", "wrong-endpoint", "tampered-raw-rate", "aggregate-mismatch"],
+)
+def test_gate0_requires_exact_pre_and_post_rent_boundary_evidence(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    executor = provider["executor"]
+    if mutation == "missing":
+        executor.pop("rent_boundary")
+    elif mutation == "wrong-endpoint":
+        executor["rent_boundary"]["endpoint"] = "/executors/other/rent"
+    elif mutation == "tampered-raw-rate":
+        executor["rent_boundary"]["after_post"]["price_per_hour"] = 17.0
+    else:
+        executor["rate_evidence"]["available_gpu_count"] = 9
+    _json(gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    _json(gate0["launch_receipt"], receipt)
+
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+
+    assert result["decision"] == "INVALID"
+    assert "gate0_provider_rent_boundary_invalid" in result["reasons"]
 
 
 @pytest.mark.parametrize(
@@ -2076,6 +2336,90 @@ def test_screen_uses_98_percent_guardrail_not_success_threshold(tmp_path: Path) 
     assert stopped["decision"] == "REJECTED"
 
 
+def test_screen_independently_rejects_b1_finishing_at_first_pair_deadline(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "late-b1"
+    _, _, control, candidate, _, _ = _run_screen(root)
+    preflight = json.loads((root / "preflight.json").read_text(encoding="utf-8"))
+    deadline = preflight["context"]["gate0"]["first_pair_deadline_at"]
+    manifest_path = candidate.parent / "leg_evidence_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    receipt_path = Path(manifest["paths"]["run_receipt"])
+    receipt_path.write_text(
+        receipt_path.read_text(encoding="utf-8").replace(
+            "run_finished_at_utc=2026-07-10T00:01:00Z",
+            f"run_finished_at_utc={deadline}",
+        ),
+        encoding="utf-8",
+    )
+    process_after_path = Path(manifest["paths"]["process_cleanliness_after"])
+    process_after = json.loads(process_after_path.read_text(encoding="utf-8"))
+    process_after["checked_at_utc"] = (
+        datetime.fromisoformat(deadline.replace("Z", "+00:00")) - timedelta(seconds=1)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _json(process_after_path, process_after)
+    manifest["sha256"]["run_receipt"] = _sha256(receipt_path)
+    manifest["sha256"]["process_cleanliness_after"] = _sha256(process_after_path)
+    _json(manifest_path, manifest)
+    first_pair_path = root / "first_pair_result.json"
+    first_pair = json.loads(first_pair_path.read_text(encoding="utf-8"))
+    b1 = next(leg for leg in first_pair["legs"] if leg["leg_id"] == "b1")
+    b1["evidence_manifest_sha256"] = _sha256(manifest_path)
+    _json(first_pair_path, first_pair)
+    request_path = root / "screen_request.json"
+    request_payload = json.loads(request_path.read_text(encoding="utf-8"))
+    request_payload["evidence_hashes"]["b1"] = _sha256(manifest_path)
+    _json(request_path, request_payload)
+
+    result = evaluate_screen(
+        preflight_decision_path=root / "preflight.json",
+        control_path=control,
+        candidate_path=candidate,
+        request_path=request_path,
+        security=_test_security(root),
+    )
+
+    assert result["decision"] == "INVALID"
+    assert "screen_b1_finished_at_or_after_first_pair_deadline" in result["reasons"]
+
+
+def test_screen_independently_rejects_late_request_and_evaluation(tmp_path: Path) -> None:
+    root = tmp_path / "late-screen"
+    _, _, control, candidate, _, _ = _run_screen(root)
+    preflight = json.loads((root / "preflight.json").read_text(encoding="utf-8"))
+    deadline_text = preflight["context"]["gate0"]["first_pair_deadline_at"]
+    deadline = datetime.fromisoformat(deadline_text.replace("Z", "+00:00"))
+    request_path = root / "screen_request.json"
+    request_payload = json.loads(request_path.read_text(encoding="utf-8"))
+    request_payload["issued_at"] = deadline_text
+    _json(request_path, request_payload)
+
+    late_request = evaluate_screen(
+        preflight_decision_path=root / "preflight.json",
+        control_path=control,
+        candidate_path=candidate,
+        request_path=request_path,
+        security=_test_security(root),
+    )
+    base_security = _test_security(root)
+    late_security = SentrySecurity(**{**base_security.__dict__, "now": deadline})
+    request_payload["issued_at"] = TEST_NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+    _json(request_path, request_payload)
+    late_evaluation = evaluate_screen(
+        preflight_decision_path=root / "preflight.json",
+        control_path=control,
+        candidate_path=candidate,
+        request_path=request_path,
+        security=late_security,
+    )
+
+    assert late_request["decision"] == "INVALID"
+    assert "screen_request_issued_at_or_after_first_pair_deadline" in late_request["reasons"]
+    assert late_evaluation["decision"] == "INVALID"
+    assert "screen_evaluation_at_or_after_first_pair_deadline" in late_evaluation["reasons"]
+
+
 def test_control_baseline_envelope_is_enforced_at_screen_and_promotion(
     tmp_path: Path,
 ) -> None:
@@ -2133,11 +2477,52 @@ def test_promotion_is_abba_only_and_reports_cycle_diagnostic(tmp_path: Path) -> 
     assert result["promotion_rule"]["final_confidence_claim_allowed"] is False
 
 
+@pytest.mark.parametrize("leg_id", ["a2", "b2"])
+def test_promotion_independently_parses_second_pair_process_receipts(
+    tmp_path: Path,
+    leg_id: str,
+) -> None:
+    root = tmp_path / leg_id
+    _, controls, candidates, _, _ = _run_promotion(root)
+    trial = controls[1] if leg_id == "a2" else candidates[1]
+    manifest_path = trial.parent / "leg_evidence_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    after_path = Path(manifest["paths"]["process_cleanliness_after"])
+    after = json.loads(after_path.read_text(encoding="utf-8"))
+    after["relevant_processes"] = [{"pid": 4321, "args": "python train.py"}]
+    _json(after_path, after)
+    manifest["sha256"]["process_cleanliness_after"] = _sha256(after_path)
+    _json(manifest_path, manifest)
+
+    aggregate_path = root / "executor_evidence_manifest.json"
+    aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    aggregate["leg_manifest_sha256"][str(manifest_path)] = _sha256(manifest_path)
+    _json(aggregate_path, aggregate)
+    second_pair_path = root / "second_pair_result.json"
+    second_pair = json.loads(second_pair_path.read_text(encoding="utf-8"))
+    next(leg for leg in second_pair["legs"] if leg["leg_id"] == leg_id)[
+        "evidence_manifest_sha256"
+    ] = _sha256(manifest_path)
+    _json(second_pair_path, second_pair)
+
+    result = evaluate_promotion(
+        screen_decision_path=root / "screen.json",
+        control_paths=controls,
+        candidate_paths=candidates,
+        security=_test_security(root),
+    )
+
+    assert result["decision"] == "INVALID"
+    assert f"promotion_{leg_id}_process_cleanliness_after_invalid" in result["reasons"]
+
+
 def test_confirmation_uses_four_independent_process_pair_ratios(tmp_path: Path) -> None:
     _, _, result = _run_confirmation(tmp_path)
 
     assert result["decision"] == "PROMOTABLE"
     assert result["next_stage"] == "grpo"
+    request = json.loads((tmp_path / "confirmation_request.json").read_text())
+    assert result["evidence_manifest_hashes"] == request["evidence_manifest_hashes"]
     stats = result["confirmation_statistics"]
     assert stats["sample_size"] == 4
     assert stats["independent_unit"] == "process_pair"
@@ -2219,6 +2604,44 @@ def test_confirmation_requires_t2_authorization_and_every_candidate_hurdle(
     assert weak["decision"] == "NO_WIN"
     assert "P3_candidate_below_historical_throughput_hurdle" in weak["reasons"]
     assert "P4_candidate_below_historical_throughput_hurdle" in weak["reasons"]
+
+
+@pytest.mark.parametrize("leg_id", ["a3", "b3", "a4", "b4"])
+def test_confirmation_independently_parses_every_t2_process_receipt(
+    tmp_path: Path,
+    leg_id: str,
+) -> None:
+    root = tmp_path / leg_id
+    _, _, passing = _run_confirmation(root)
+    assert passing["decision"] == "PROMOTABLE"
+    trial = root / f"{leg_id.upper()}/trial_summary.json"
+    manifest_path = trial.parent / "leg_evidence_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    before_path = Path(manifest["paths"]["process_cleanliness_before"])
+    before = json.loads(before_path.read_text(encoding="utf-8"))
+    before["gpu_process_inventory"] = [
+        {"pid": 1234, "process_name": "python", "used_gpu_memory_mib": "1024"}
+    ]
+    _json(before_path, before)
+    manifest["sha256"]["process_cleanliness_before"] = _sha256(before_path)
+    _json(manifest_path, manifest)
+    request_path = root / "confirmation_request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["evidence_manifest_hashes"][leg_id] = _sha256(manifest_path)
+    _json(request_path, request)
+    controls = [root / f"A{index}/trial_summary.json" for index in range(1, 5)]
+    candidates = [root / f"B{index}/trial_summary.json" for index in range(1, 5)]
+
+    result = evaluate_confirmation(
+        promotion_decision_path=root / "promotion.json",
+        control_paths=controls,
+        candidate_paths=candidates,
+        request_path=request_path,
+        security=_test_security(root),
+    )
+
+    assert result["decision"] == "INVALID"
+    assert f"confirmation_{leg_id}_process_cleanliness_before_invalid" in result["reasons"]
 
 
 def test_grpo_checkpoint_files_must_exist_and_match_manifest(tmp_path: Path) -> None:
@@ -2344,6 +2767,7 @@ def test_grpo_then_independent_audit_is_required_for_verified(tmp_path: Path) ->
         grpo_decision_path=grpo_decision,
         audit_path=audit,
         contract_path=contract,
+        termination_receipt_path=audit.parent / "termination.json",
         security=_test_security(tmp_path),
         command="sentry final",
     )
@@ -2362,6 +2786,173 @@ def test_grpo_then_independent_audit_is_required_for_verified(tmp_path: Path) ->
         decision = json.loads(decision_path.read_text(encoding="utf-8"))
         assert decision["acceptance_contract_sha256"] == expected_contract_sha256
     assert final["acceptance_contract_sha256"] == expected_contract_sha256
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("wrong-allocation", "termination_receipt_gate0_allocation_mismatch"),
+        ("not-confirmed-absent", "termination_receipt_absence_proof_invalid"),
+    ],
+)
+def test_final_rejects_termination_receipt_without_exact_gate0_absence_proof(
+    tmp_path: Path,
+    mutation: str,
+    expected_reason: str,
+) -> None:
+    chain = tmp_path / mutation
+    contract, confirmation, _ = _run_confirmation(chain)
+    _, grpo, _ = _run_grpo_stage(chain / "grpo-stage", confirmation)
+    audit = _write_audit(
+        chain / "audit",
+        contract=contract,
+        confirmation=confirmation,
+        grpo=grpo,
+    )
+    termination = audit.parent / "termination.json"
+    payload = json.loads(termination.read_text(encoding="utf-8"))
+    if mutation == "wrong-allocation":
+        payload["allocation"]["id"] = "pod-from-another-run"
+    else:
+        payload["postflight"]["confirmed_absent"] = False
+    _json(termination, payload)
+
+    result = evaluate_final(
+        confirmation_decision_path=confirmation,
+        grpo_decision_path=grpo,
+        audit_path=audit,
+        contract_path=contract,
+        termination_receipt_path=termination,
+        security=_test_security(chain),
+    )
+
+    assert result["decision"] == "INVALID"
+    assert expected_reason in result["reasons"]
+
+
+def test_final_requires_termination_receipt_in_signed_auditor_constituents(
+    tmp_path: Path,
+) -> None:
+    chain = tmp_path / "chain"
+    contract, confirmation, _ = _run_confirmation(chain)
+    _, grpo, _ = _run_grpo_stage(tmp_path / "grpo-stage", confirmation)
+    audit = _write_audit(
+        tmp_path / "audit",
+        contract=contract,
+        confirmation=confirmation,
+        grpo=grpo,
+    )
+    signed = json.loads(audit.read_text(encoding="utf-8"))
+    unsigned = {
+        key: value
+        for key, value in signed.items()
+        if key not in {"signature_base64", "signed_payload_sha256"}
+    }
+    unsigned["constituent_checksums"] = [
+        item for item in unsigned["constituent_checksums"] if item["role"] != "termination_receipt"
+    ]
+    manifest_path = Path(unsigned["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["constituent_checksums"] = [
+        item for item in manifest["constituent_checksums"] if item["role"] != "termination_receipt"
+    ]
+    _json(manifest_path, manifest)
+    unsigned["manifest_sha256"] = _sha256(manifest_path)
+    security = _test_security(chain)
+    resigned = _json(
+        tmp_path / "audit-without-termination.json",
+        sign_bounded_payload(
+            unsigned,
+            private_key_path=_test_private_key(chain, "auditor"),
+            public_key_path=security.auditor_public_key_path,  # type: ignore[arg-type]
+            domain=AUDIT_DECISION_DOMAIN,
+            signer_principal=security.auditor_principal or "",
+            verifier_principal=security.sentry_principal,
+            request_id="audit-without-termination-0001",
+            nonce="5" * 64,
+            issued_at=TEST_NOW,
+            expires_at=TEST_NOW + timedelta(hours=1),
+        ),
+    )
+
+    result = evaluate_final(
+        confirmation_decision_path=confirmation,
+        grpo_decision_path=grpo,
+        audit_path=resigned,
+        contract_path=contract,
+        termination_receipt_path=audit.parent / "termination.json",
+        security=security,
+    )
+
+    assert result["decision"] == "INVALID"
+    assert "audit_required_constituent_missing:termination_receipt" in result["reasons"]
+    assert "audit_manifest_required_constituent_missing:termination_receipt" in result["reasons"]
+
+
+def test_final_rejects_termination_completed_after_auditor_timestamp(
+    tmp_path: Path,
+) -> None:
+    chain = tmp_path / "chain"
+    contract, confirmation, _ = _run_confirmation(chain)
+    _, grpo, _ = _run_grpo_stage(tmp_path / "grpo-stage", confirmation)
+    audit = _write_audit(
+        tmp_path / "audit",
+        contract=contract,
+        confirmation=confirmation,
+        grpo=grpo,
+    )
+    termination = audit.parent / "termination.json"
+    termination_payload = json.loads(termination.read_text(encoding="utf-8"))
+    termination_payload["finished_at_utc"] = "2026-07-10T00:04:01Z"
+    _json(termination, termination_payload)
+    termination_sha256 = _sha256(termination)
+
+    signed = json.loads(audit.read_text(encoding="utf-8"))
+    unsigned = {
+        key: value
+        for key, value in signed.items()
+        if key not in {"signature_base64", "signed_payload_sha256"}
+    }
+    termination_item = next(
+        item for item in unsigned["constituent_checksums"] if item["role"] == "termination_receipt"
+    )
+    termination_item["sha256"] = termination_sha256
+    manifest_path = Path(unsigned["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_termination = next(
+        item for item in manifest["constituent_checksums"] if item["role"] == "termination_receipt"
+    )
+    manifest_termination["sha256"] = termination_sha256
+    _json(manifest_path, manifest)
+    unsigned["manifest_sha256"] = _sha256(manifest_path)
+    security = _test_security(chain)
+    resigned = _json(
+        tmp_path / "audit-after-premature-review.json",
+        sign_bounded_payload(
+            unsigned,
+            private_key_path=_test_private_key(chain, "auditor"),
+            public_key_path=security.auditor_public_key_path,  # type: ignore[arg-type]
+            domain=AUDIT_DECISION_DOMAIN,
+            signer_principal=security.auditor_principal or "",
+            verifier_principal=security.sentry_principal,
+            request_id="audit-before-termination-0001",
+            nonce="6" * 64,
+            issued_at=TEST_NOW,
+            expires_at=TEST_NOW + timedelta(hours=1),
+        ),
+    )
+
+    result = evaluate_final(
+        confirmation_decision_path=confirmation,
+        grpo_decision_path=grpo,
+        audit_path=resigned,
+        contract_path=contract,
+        termination_receipt_path=termination,
+        security=security,
+    )
+
+    assert result["decision"] == "INVALID"
+    assert "audit_termination_finished_after_auditor_timestamp" in result["reasons"]
 
 
 def test_final_rejects_substituted_contract_with_matching_identifiers(tmp_path: Path) -> None:
@@ -2383,6 +2974,7 @@ def test_final_rejects_substituted_contract_with_matching_identifiers(tmp_path: 
         grpo_decision_path=grpo,
         audit_path=audit,
         contract_path=substituted,
+        termination_receipt_path=audit.parent / "termination.json",
         security=_test_security(tmp_path / "chain"),
     )
     assert result["decision"] == "INVALID"
@@ -2438,6 +3030,7 @@ def test_final_enforces_contract_required_auditor_key_and_parent_fields(
         grpo_decision_path=grpo,
         audit_path=resigned,
         contract_path=contract,
+        termination_receipt_path=valid_audit.parent / "termination.json",
         security=security,
     )
     assert result["decision"] == "INVALID"
@@ -2464,6 +3057,7 @@ def test_final_rejects_cross_run_grpo_and_audit_splices(tmp_path: Path) -> None:
         grpo_decision_path=grpo_b,
         audit_path=mixed_audit,
         contract_path=contract_a,
+        termination_receipt_path=mixed_audit.parent / "termination.json",
         security=_test_security(tmp_path / "chain-a"),
     )
     assert mixed["decision"] == "INVALID"
@@ -2480,6 +3074,7 @@ def test_final_rejects_cross_run_grpo_and_audit_splices(tmp_path: Path) -> None:
         grpo_decision_path=grpo_a,
         audit_path=foreign_audit,
         contract_path=contract_a,
+        termination_receipt_path=foreign_audit.parent / "termination.json",
         security=_test_security(tmp_path / "chain-a"),
     )
     assert foreign["decision"] == "INVALID"
@@ -2530,6 +3125,7 @@ def test_final_rejects_self_audit_and_sentry_auditor_key_reuse(tmp_path: Path) -
         grpo_decision_path=grpo,
         audit_path=self_audit,
         contract_path=contract,
+        termination_receipt_path=valid_audit.parent / "termination.json",
         security=reused_security,
     )
     assert result["decision"] == "INVALID"
