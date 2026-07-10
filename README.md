@@ -86,6 +86,14 @@ bash examples/miles/glm47_cpp_perf_lora_r16_h100_sft.sh
 bash examples/miles/glm47_cpp_perf_lora_r16_h100_grpo.sh
 ```
 
+At stage finalization, the Miles runners resume the deterministic W&B run and
+publish the preserved scalar history plus custom tables for rollout samples,
+eval samples, reward outcomes, the full metric catalog, per-rank weight-sync
+fingerprints, and the latest checkpoint manifest. Model blobs stay local; W&B
+receives their paths, sizes, and SHA-256 digests. Sample tables are bounded to
+5,000 rows per stage by default (`W8_WANDB_MAX_TABLE_ROWS`), while the local
+debug dumps and receipts remain complete.
+
 When `MILES_LORA_ADAPTER_PATH` points at a trainer adapter, the H100 GRPO
 wrapper creates `${MILES_RUN_ROOT}/adapter_hybrid`: Megatron-native shards and
 the MTP-stripped HF serving file are copied, while SFT optimizer, scheduler,

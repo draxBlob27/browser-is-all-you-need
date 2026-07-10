@@ -262,20 +262,32 @@ EOF
 
 finalize_wandb() {
   local status="$1"
-  PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" \
-    "${REPO_ROOT}/scripts/wandb_posttraining.py" finalize-stage \
-    --project "${WANDB_PROJECT}" \
-    --experiment-id "${EXPERIMENT_ID}" \
-    --run-id "${WANDB_RUN_ID}" \
-    --group "${WANDB_GROUP}" \
-    --stage "${WANDB_JOB_TYPE}" \
-    --status "${status}" \
-    --receipt "${RUN_RECEIPT}" \
-    --artifact-path "${LOG_FILE}" \
-    --artifact-path "${VRAM_LOG}" \
-    --artifact-path "${VRAM_PEAK_FILE}" \
-    --timing-status "${W8_TIMING_STATUS:-unverified}" \
+  local rollout_dump_dir
+  local -a finalize_args
+  rollout_dump_dir="$(dirname -- "${ROLLOUT_DUMP_TEMPLATE}")"
+  finalize_args=(
+    finalize-stage
+    --project "${WANDB_PROJECT}"
+    --experiment-id "${EXPERIMENT_ID}"
+    --run-id "${WANDB_RUN_ID}"
+    --group "${WANDB_GROUP}"
+    --stage "${WANDB_JOB_TYPE}"
+    --status "${status}"
+    --receipt "${RUN_RECEIPT}"
+    --artifact-path "${LOG_FILE}"
+    --artifact-path "${VRAM_LOG}"
+    --artifact-path "${VRAM_PEAK_FILE}"
+    --run-log "${LOG_FILE}"
+    --rollout-dump-dir "${rollout_dump_dir}"
+    --checkpoint-dir "${SAVE_DIR}"
+    --timing-status "${W8_TIMING_STATUS:-unverified}"
     --output-dir "${STAGE_ROOT}"
+  )
+  if [ -n "${W8_GLM47_SYNC_FORENSICS:-}" ] && [ -d "${W8_GLM47_SYNC_FORENSICS}" ]; then
+    finalize_args+=(--sync-forensics-dir "${W8_GLM47_SYNC_FORENSICS}")
+  fi
+  PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" "${PYTHON_BIN}" \
+    "${REPO_ROOT}/scripts/wandb_posttraining.py" "${finalize_args[@]}"
 }
 
 pkill -9 sglang >/dev/null 2>&1 || true

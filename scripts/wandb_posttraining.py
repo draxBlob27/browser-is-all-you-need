@@ -64,6 +64,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     finalize.add_argument("--status", choices=("success", "failed"), required=True)
     finalize.add_argument("--receipt", required=True)
     finalize.add_argument("--artifact-path", action="append", default=[])
+    finalize.add_argument("--run-log", default="")
+    finalize.add_argument("--rollout-dump-dir", default="")
+    finalize.add_argument("--sync-forensics-dir", default="")
+    finalize.add_argument("--checkpoint-dir", default="")
+    finalize.add_argument(
+        "--max-table-rows",
+        type=int,
+        default=int(os.environ.get("W8_WANDB_MAX_TABLE_ROWS", "5000")),
+    )
     finalize.add_argument("--timing-status", default=os.environ.get("W8_TIMING_STATUS", "unverified"))
     finalize.add_argument("--output-dir", required=True)
 
@@ -223,6 +232,11 @@ def _finalize_stage(wandb: Any, args: argparse.Namespace) -> dict[str, str]:
         receipt=args.receipt,
         artifact_paths=args.artifact_path,
         manifest_dir=args.output_dir,
+        run_log=args.run_log or None,
+        rollout_dump_dir=args.rollout_dump_dir or None,
+        sync_forensics_dir=args.sync_forensics_dir or None,
+        checkpoint_dir=args.checkpoint_dir or None,
+        max_table_rows=args.max_table_rows,
     )
 
 

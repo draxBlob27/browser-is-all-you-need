@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
 import re
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -108,6 +109,85 @@ PIPELINE_TABLE_COLUMNS = (
     "error",
 )
 
+MILES_SAMPLE_TABLE_COLUMNS = (
+    "experiment_id",
+    "timing_status",
+    "stage",
+    "rollout_id",
+    "group_index",
+    "sample_index",
+    "task_id",
+    "problem_id",
+    "split",
+    "label",
+    "status",
+    "reason",
+    "reward",
+    "all_tests_pass",
+    "format_valid",
+    "compile_error",
+    "sanitizer_error",
+    "timeout",
+    "tests_passed",
+    "tests_total",
+    "runtime_cpu_ns",
+    "reference_runtime_cpu_ns",
+    "runtime_speedup",
+    "response_length",
+    "truncated",
+    "cached_tokens",
+    "prompt_tokens",
+    "prompt_preview",
+    "response_preview",
+)
+
+MILES_REWARD_OUTCOME_TABLE_COLUMNS = (
+    "experiment_id",
+    "stage",
+    "reason",
+    "count",
+    "rate",
+    "mean_reward",
+    "all_tests_pass_rate",
+    "compile_error_rate",
+    "sanitizer_error_rate",
+    "timeout_rate",
+)
+
+MILES_METRIC_TABLE_COLUMNS = (
+    "experiment_id",
+    "timing_status",
+    "family",
+    "source_step",
+    "metric",
+    "value",
+)
+
+MILES_SYNC_TABLE_COLUMNS = (
+    "experiment_id",
+    "sync",
+    "rank",
+    "n_tensors",
+    "sha256",
+    "total_sum_abs",
+    "matches_sync_rank0",
+    "changed_from_previous_sync",
+)
+
+MILES_CHECKPOINT_TABLE_COLUMNS = (
+    "experiment_id",
+    "checkpoint_root",
+    "path",
+    "size_bytes",
+    "sha256",
+)
+
+MILES_METRIC_LINE_RE = re.compile(
+    r"\s-\s(?P<family>rollout|passrate|eval|step|perf)\s+"
+    r"(?P<step>\d+):\s+(?P<payload>\{.*\})\s*$"
+)
+NUMPY_SCALAR_RE = re.compile(r"np\.float(?:16|32|64)\(([^()]*)\)")
+
 CURATED_STAGE_METRIC_TERMS = (
     "accuracy",
     "correct_and_faster",
@@ -196,10 +276,7 @@ def build_eval_table_rows(
     experiment_id: str,
     timing_status: str,
 ) -> list[list[Any]]:
-    generation_by_key = {
-        _sample_key(row): row
-        for row in generations
-    }
+    generation_by_key = {_sample_key(row): row for row in generations}
     rows: list[list[Any]] = []
     for record in records:
         generation = generation_by_key.get(_sample_key(record), {})
@@ -287,6 +364,295 @@ def build_comparison_table_rows(
         ]
         for summary in summaries
     ]
+
+
+def parse_miles_metric_events(path: str | Path) -> list[dict[str, Any]]:
+    """Recover numeric Miles metric events from a preserved console log."""
+
+    source = Path(path)
+    if not source.is_file():
+        return []
+    events: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, tuple[tuple[str, int | float], ...]]] = set()
+    with source.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            match = MILES_METRIC_LINE_RE.search(line.rstrip())
+            if not match:
+                continue
+            payload_text = NUMPY_SCALAR_RE.sub(r"\1", match.group("payload"))
+            try:
+                raw_payload = ast.literal_eval(payload_text)
+            except (SyntaxError, ValueError):
+                continue
+            if not isinstance(raw_payload, dict):
+                continue
+            metrics = {
+                str(key): value
+                for key, value in raw_payload.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            }
+            if not metrics:
+                continue
+            family = match.group("family")
+            step = int(match.group("step"))
+            fingerprint = (family, step, tuple(sorted(metrics.items())))
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            events.append({"family": family, "step": step, "metrics": metrics})
+    return events
+
+
+def build_miles_metric_table_rows(
+    events: Iterable[dict[str, Any]],
+    *,
+    experiment_id: str,
+    timing_status: str,
+) -> list[list[Any]]:
+    return [
+        [experiment_id, timing_status, event["family"], event["step"], metric, value]
+        for event in events
+        for metric, value in sorted(event["metrics"].items())
+    ]
+
+
+def load_miles_sample_evidence(
+    dump_dir: str | Path,
+    *,
+    experiment_id: str,
+    timing_status: str,
+    receipt: dict[str, Any],
+    max_rows_per_table: int,
+) -> tuple[dict[str, list[list[Any]]], dict[str, int]]:
+    """Load repo-generated Miles debug dumps into bounded public table rows."""
+
+    root = Path(dump_dir)
+    rows: dict[str, list[list[Any]]] = {"rollout": [], "eval": []}
+    totals = {"rollout": 0, "eval": 0}
+    if not root.is_dir():
+        return rows, totals
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError("torch is required to read Miles rollout evidence") from exc
+
+    for path in sorted(root.glob("*.pt")):
+        stage = "eval" if "_eval_" in path.name else "rollout"
+        try:
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError:
+            payload = torch.load(path, map_location="cpu")
+        if not isinstance(payload, dict) or not isinstance(payload.get("samples"), list):
+            continue
+        samples = payload["samples"]
+        totals[stage] += len(samples)
+        remaining = max(0, max_rows_per_table - len(rows[stage]))
+        if not remaining:
+            continue
+        response_limit_key = (
+            "eval_max_response_len" if stage == "eval" else "rollout_max_response_len"
+        )
+        rows[stage].extend(
+            build_miles_sample_table_rows(
+                samples[:remaining],
+                experiment_id=experiment_id,
+                timing_status=timing_status,
+                stage=stage,
+                rollout_id=_int_or_none(payload.get("rollout_id")),
+                response_limit=_int_or_none(receipt.get(response_limit_key)),
+            )
+        )
+    return rows, totals
+
+
+def build_miles_sample_table_rows(
+    samples: Iterable[dict[str, Any]],
+    *,
+    experiment_id: str,
+    timing_status: str,
+    stage: str,
+    rollout_id: int | None,
+    response_limit: int | None,
+) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    for sample in samples:
+        reward_value = sample.get("reward")
+        reward = reward_value if isinstance(reward_value, dict) else {"reward": reward_value}
+        metadata_value = sample.get("metadata")
+        metadata = metadata_value if isinstance(metadata_value, dict) else {}
+        prefix_value = sample.get("prefix_cache_info")
+        prefix = prefix_value if isinstance(prefix_value, dict) else {}
+        response_length = _int_or_none(sample.get("response_length"))
+        rows.append(
+            [
+                experiment_id,
+                timing_status,
+                stage,
+                rollout_id,
+                _int_or_none(sample.get("group_index")),
+                _int_or_none(sample.get("index")),
+                reward.get("task_id") or metadata.get("task_id"),
+                reward.get("problem_id") or metadata.get("problem_id"),
+                reward.get("split") or metadata.get("split"),
+                sample.get("label"),
+                sample.get("status"),
+                reward.get("reason"),
+                _number_or_none(reward.get("reward", reward.get("score"))),
+                reward.get("all_tests_pass"),
+                reward.get("format_valid"),
+                bool(reward.get("compile_error", False)),
+                bool(reward.get("sanitizer_error", False)),
+                bool(reward.get("timeout", False)),
+                _int_or_none(reward.get("tests_passed")),
+                _int_or_none(reward.get("tests_total")),
+                _int_or_none(reward.get("runtime_cpu_ns")),
+                _int_or_none(reward.get("reference_runtime_cpu_ns")),
+                _number_or_none(reward.get("runtime_speedup")),
+                response_length,
+                response_length >= response_limit
+                if response_length is not None and response_limit
+                else None,
+                _int_or_none(prefix.get("cached_tokens")),
+                _int_or_none(prefix.get("total_prompt_tokens")),
+                _preview(sample.get("prompt"), limit=1000),
+                _preview(sample.get("response"), limit=2000),
+            ]
+        )
+    return rows
+
+
+def build_miles_reward_outcome_rows(
+    sample_rows: Iterable[list[Any]],
+    *,
+    experiment_id: str,
+) -> list[list[Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in sample_rows:
+        record = dict(zip(MILES_SAMPLE_TABLE_COLUMNS, row, strict=True))
+        grouped[(str(record["stage"]), str(record["reason"] or "unknown"))].append(record)
+
+    result: list[list[Any]] = []
+    for (stage, reason), records in sorted(grouped.items()):
+        stage_total = sum(
+            len(items) for (item_stage, _), items in grouped.items() if item_stage == stage
+        )
+        rewards = [
+            value for record in records if (value := _number_or_none(record["reward"])) is not None
+        ]
+        result.append(
+            [
+                experiment_id,
+                stage,
+                reason,
+                len(records),
+                len(records) / stage_total if stage_total else 0.0,
+                sum(rewards) / len(rewards) if rewards else None,
+                _boolean_rate(records, "all_tests_pass"),
+                _boolean_rate(records, "compile_error"),
+                _boolean_rate(records, "sanitizer_error"),
+                _boolean_rate(records, "timeout"),
+            ]
+        )
+    return result
+
+
+def build_miles_sync_evidence_rows(
+    sync_dir: str | Path,
+    *,
+    experiment_id: str,
+) -> tuple[list[list[Any]], dict[str, Any]]:
+    root = Path(sync_dir)
+    payloads: list[dict[str, Any]] = []
+    if root.is_dir():
+        for path in sorted(root.glob("sync*_rank*.json")):
+            payload = read_json(path)
+            if all(
+                key in payload for key in ("sync", "rank", "n_tensors", "sha256", "total_sum_abs")
+            ):
+                payloads.append(payload)
+    rank0_hashes = {
+        int(payload["sync"]): str(payload["sha256"])
+        for payload in payloads
+        if int(payload["rank"]) == 0
+    }
+    sorted_syncs = sorted(rank0_hashes)
+    previous_hash = {
+        sync: rank0_hashes[sorted_syncs[index - 1]] if index else None
+        for index, sync in enumerate(sorted_syncs)
+    }
+    rows = [
+        [
+            experiment_id,
+            int(payload["sync"]),
+            int(payload["rank"]),
+            int(payload["n_tensors"]),
+            str(payload["sha256"]),
+            float(payload["total_sum_abs"]),
+            str(payload["sha256"]) == rank0_hashes.get(int(payload["sync"])),
+            (
+                str(payload["sha256"]) != previous_hash[int(payload["sync"])]
+                if previous_hash.get(int(payload["sync"])) is not None
+                else None
+            ),
+        ]
+        for payload in sorted(payloads, key=lambda item: (int(item["sync"]), int(item["rank"])))
+    ]
+    per_sync_hashes = {
+        sync: {str(payload["sha256"]) for payload in payloads if int(payload["sync"]) == sync}
+        for sync in sorted_syncs
+    }
+    summary: dict[str, Any] = {
+        "sync/records": len(rows),
+        "sync/all_ranks_match": bool(rows)
+        and all(len(hashes) == 1 for hashes in per_sync_hashes.values()),
+    }
+    if sorted_syncs:
+        summary["sync/hash_before"] = rank0_hashes[sorted_syncs[0]]
+        summary["sync/hash_after"] = rank0_hashes[sorted_syncs[-1]]
+        summary["sync/updated_after_train"] = (
+            len(sorted_syncs) > 1
+            and rank0_hashes[sorted_syncs[0]] != rank0_hashes[sorted_syncs[-1]]
+        )
+    return rows, summary
+
+
+def write_miles_checkpoint_manifest(
+    output_path: str | Path,
+    checkpoint_dir: str | Path,
+    *,
+    experiment_id: str,
+) -> tuple[Path, list[list[Any]]]:
+    root = Path(checkpoint_dir)
+    files = _latest_checkpoint_files(root)
+    entries = [
+        {
+            "path": path.relative_to(root).as_posix(),
+            "size_bytes": path.stat().st_size,
+            "sha256": _sha256(path),
+        }
+        for path in files
+    ]
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "checkpoint_root": str(root),
+                "latest_iteration": _latest_iteration_name(root),
+                "files": entries,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rows = [
+        [experiment_id, str(root), entry["path"], entry["size_bytes"], entry["sha256"]]
+        for entry in entries
+    ]
+    return output, rows
 
 
 def select_artifact_paths(paths: Iterable[str | Path]) -> tuple[list[Path], list[dict[str, str]]]:
@@ -377,7 +743,7 @@ def log_eval_run(
     scalar_metrics = {
         key: value
         for key, value in summary.items()
-        if isinstance(value, int | float) and not isinstance(value, bool)
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
     }
     payload: dict[str, Any] = {
         "eval/index": 0,
@@ -452,7 +818,9 @@ def log_comparison_run(
     comparison["timing_status"] = timing_status
     output_path = Path(output_dir) / f"{safe_run}.comparison.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(comparison, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_text(
+        json.dumps(comparison, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
     run = wandb_module.init(
         project=project,
@@ -484,7 +852,7 @@ def log_comparison_run(
     for summary in summaries:
         label = safe_identifier(str(summary.get("label") or "unknown"))
         for key, value in summary.items():
-            if isinstance(value, int | float) and not isinstance(value, bool):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
                 payload[f"comparison/{label}/{key}"] = value
     run.log(payload)
     _set_summary(
@@ -529,12 +897,81 @@ def log_stage_finalization(
     receipt: str | Path,
     artifact_paths: Iterable[str | Path],
     manifest_dir: str | Path,
+    run_log: str | Path | None = None,
+    rollout_dump_dir: str | Path | None = None,
+    sync_forensics_dir: str | Path | None = None,
+    checkpoint_dir: str | Path | None = None,
+    max_table_rows: int = 5000,
 ) -> dict[str, str]:
     safe_experiment = resolve_experiment_id(explicit=experiment_id, run_id=run_id)
     safe_run = safe_identifier(run_id, fallback=f"{safe_experiment}-{stage}")
     safe_stage = safe_identifier(stage, fallback="stage")
     receipt_path = Path(receipt)
     receipt_values = read_key_value(receipt_path)
+    output_dir = Path(manifest_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    max_table_rows = max(1, max_table_rows)
+
+    log_path = Path(run_log) if run_log else Path(str(receipt_values.get("log_file") or ""))
+    metric_events = parse_miles_metric_events(log_path) if str(log_path) else []
+    latest_metrics: dict[str, int | float] = {}
+    for event in metric_events:
+        latest_metrics.update(event["metrics"])
+
+    sample_rows = {"rollout": [], "eval": []}
+    sample_totals = {"rollout": 0, "eval": 0}
+    if rollout_dump_dir:
+        sample_rows, sample_totals = load_miles_sample_evidence(
+            rollout_dump_dir,
+            experiment_id=safe_experiment,
+            timing_status=timing_status,
+            receipt=receipt_values,
+            max_rows_per_table=max_table_rows,
+        )
+    reward_rows = build_miles_reward_outcome_rows(
+        [*sample_rows["rollout"], *sample_rows["eval"]],
+        experiment_id=safe_experiment,
+    )
+    sync_rows, sync_summary = (
+        build_miles_sync_evidence_rows(sync_forensics_dir, experiment_id=safe_experiment)
+        if sync_forensics_dir
+        else ([], {})
+    )
+
+    generated_artifacts: list[Path] = []
+    checkpoint_rows: list[list[Any]] = []
+    resolved_checkpoint_dir = checkpoint_dir or receipt_values.get("save_dir")
+    if resolved_checkpoint_dir and Path(str(resolved_checkpoint_dir)).is_dir():
+        checkpoint_manifest, checkpoint_rows = write_miles_checkpoint_manifest(
+            output_dir / f"{safe_run}.checkpoint_manifest.json",
+            str(resolved_checkpoint_dir),
+            experiment_id=safe_experiment,
+        )
+        generated_artifacts.append(checkpoint_manifest)
+
+    evidence_summary_path = output_dir / f"{safe_run}.evidence_summary.json"
+    evidence_summary_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "experiment_id": safe_experiment,
+                "timing_status": timing_status,
+                "metric_event_count": len(metric_events),
+                "metric_count": sum(len(event["metrics"]) for event in metric_events),
+                "sample_rows_logged": {key: len(value) for key, value in sample_rows.items()},
+                "sample_rows_total": sample_totals,
+                "reward_outcome_count": len(reward_rows),
+                "sync_summary": sync_summary,
+                "sync_record_count": len(sync_rows),
+                "checkpoint_file_count": len(checkpoint_rows),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    generated_artifacts.append(evidence_summary_path)
     run = wandb_module.init(
         project=project,
         entity=entity or None,
@@ -549,13 +986,65 @@ def log_stage_finalization(
             {
                 "experiment_id": safe_experiment,
                 "timing_status": timing_status,
-                "proof_surface_schema": 1,
+                "proof_surface_schema": 2,
                 "stage_receipt": receipt_values,
+                "evidence": {
+                    "metric_events": len(metric_events),
+                    "rollout_rows_logged": len(sample_rows["rollout"]),
+                    "rollout_rows_total": sample_totals["rollout"],
+                    "eval_rows_logged": len(sample_rows["eval"]),
+                    "eval_rows_total": sample_totals["eval"],
+                    "sync_records": len(sync_rows),
+                    "checkpoint_files": len(checkpoint_rows),
+                },
             }
         ),
     )
     existing_summary = dict(getattr(run, "summary", {}))
-    curated_metrics = _curate_stage_metrics(existing_summary)
+    for event_index, event in enumerate(metric_events):
+        run.log(
+            {
+                "evidence/event_index": event_index,
+                "evidence/source_family": event["family"],
+                "evidence/source_step": event["step"],
+                **event["metrics"],
+            }
+        )
+    table_payload: dict[str, Any] = {}
+    if metric_events:
+        table_payload["tables/stage_metrics"] = wandb_module.Table(
+            columns=list(MILES_METRIC_TABLE_COLUMNS),
+            data=build_miles_metric_table_rows(
+                metric_events,
+                experiment_id=safe_experiment,
+                timing_status=timing_status,
+            ),
+        )
+    for sample_stage in ("rollout", "eval"):
+        if sample_rows[sample_stage]:
+            table_payload[f"tables/{sample_stage}_samples"] = wandb_module.Table(
+                columns=list(MILES_SAMPLE_TABLE_COLUMNS),
+                data=sample_rows[sample_stage],
+            )
+    if reward_rows:
+        table_payload["tables/reward_outcomes"] = wandb_module.Table(
+            columns=list(MILES_REWARD_OUTCOME_TABLE_COLUMNS),
+            data=reward_rows,
+        )
+    if sync_rows:
+        table_payload["tables/sync_forensics"] = wandb_module.Table(
+            columns=list(MILES_SYNC_TABLE_COLUMNS),
+            data=sync_rows,
+        )
+    if checkpoint_rows:
+        table_payload["tables/checkpoint_manifest"] = wandb_module.Table(
+            columns=list(MILES_CHECKPOINT_TABLE_COLUMNS),
+            data=checkpoint_rows,
+        )
+    if table_payload:
+        run.log(table_payload)
+
+    curated_metrics = _curate_stage_metrics({**existing_summary, **latest_metrics})
     wall_s = _number_or_none(receipt_values.get("wall_s"))
     peak_vram = _number_or_none(receipt_values.get("max_memory_used_mib"))
     checkpoint = str(receipt_values.get("save_dir") or "")
@@ -571,7 +1060,7 @@ def log_stage_finalization(
         run,
         {
             "observability/experiment_id": safe_experiment,
-            "observability/schema_version": 1,
+            "observability/schema_version": 2,
             "observability/timing_status": timing_status,
             "stage/job_type": safe_stage,
             "stage/status": status,
@@ -579,12 +1068,21 @@ def log_stage_finalization(
             "stage/max_memory_used_mib": peak_vram,
             "stage/checkpoint_or_adapter": checkpoint,
             "stage/receipt": receipt_path.name,
+            "evidence/metric_event_count": len(metric_events),
+            "evidence/rollout_rows_logged": len(sample_rows["rollout"]),
+            "evidence/rollout_rows_total": sample_totals["rollout"],
+            "evidence/eval_rows_logged": len(sample_rows["eval"]),
+            "evidence/eval_rows_total": sample_totals["eval"],
+            "evidence/reward_outcome_count": len(reward_rows),
+            "evidence/checkpoint_file_count": len(checkpoint_rows),
+            **latest_metrics,
+            **sync_summary,
             **curated_metrics,
         },
     )
     manifest_path, selected = write_artifact_manifest(
-        Path(manifest_dir) / f"{safe_run}.artifact_manifest.json",
-        [receipt_path, *artifact_paths],
+        output_dir / f"{safe_run}.artifact_manifest.json",
+        [receipt_path, *artifact_paths, *generated_artifacts],
     )
     artifact = wandb_module.Artifact(
         safe_identifier(f"{safe_experiment}-{safe_stage}-run"),
@@ -738,7 +1236,7 @@ def _preview(value: Any, *, limit: int = 4000) -> str:
 def _number_or_none(value: Any) -> int | float | None:
     if isinstance(value, bool) or value is None:
         return None
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         return value
     try:
         return float(value)
@@ -770,13 +1268,47 @@ def _coerce_scalar(value: str) -> Any:
 def _curate_stage_metrics(summary: dict[str, Any]) -> dict[str, int | float]:
     curated: dict[str, int | float] = {}
     for key, value in sorted(summary.items()):
-        if key.startswith("_") or isinstance(value, bool) or not isinstance(value, int | float):
+        if key.startswith("_") or isinstance(value, bool) or not isinstance(value, (int, float)):
             continue
         if any(term in key.lower() for term in CURATED_STAGE_METRIC_TERMS):
             curated[f"stage/final_metrics/{safe_identifier(key)}"] = value
         if len(curated) >= 32:
             break
     return curated
+
+
+def _boolean_rate(records: Iterable[dict[str, Any]], key: str) -> float:
+    values = list(records)
+    return sum(value.get(key) is True for value in values) / len(values) if values else 0.0
+
+
+def _latest_iteration_name(root: Path) -> str:
+    iterations = sorted(path.name for path in root.glob("iter_*") if path.is_dir())
+    return iterations[-1] if iterations else ""
+
+
+def _latest_checkpoint_files(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    iterations = sorted(path for path in root.glob("iter_*") if path.is_dir())
+    selected: set[Path] = set()
+    if iterations:
+        selected.update(
+            path for path in iterations[-1].rglob("*") if path.is_file() and not path.is_symlink()
+        )
+        selected.update(path for path in root.iterdir() if path.is_file() and not path.is_symlink())
+        rollout_dir = root / "rollout"
+        if rollout_dir.is_dir():
+            rollout_files = sorted(
+                path for path in rollout_dir.rglob("*") if path.is_file() and not path.is_symlink()
+            )
+            if rollout_files:
+                selected.add(rollout_files[-1])
+    else:
+        selected.update(
+            path for path in root.rglob("*") if path.is_file() and not path.is_symlink()
+        )
+    return sorted(selected, key=lambda path: path.relative_to(root).as_posix())
 
 
 def _artifact_skip_reason(path: Path) -> str:

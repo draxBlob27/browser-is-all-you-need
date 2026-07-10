@@ -219,7 +219,12 @@ def test_miles_h100_wandb_lineage_reaches_ray_workers_and_receipts() -> None:
         assert "WANDB_JOB_TYPE" in text
         assert "WANDB_RUN_GROUP" in text
         assert "WANDB_TAGS" in text
-        assert '"${REPO_ROOT}/scripts/wandb_posttraining.py" finalize-stage' in text
+        assert '"${REPO_ROOT}/scripts/wandb_posttraining.py" "${finalize_args[@]}"' in text
+        assert "finalize_args=(\n    finalize-stage" in text
+        assert '--run-log "${LOG_FILE}"' in text
+        assert '--rollout-dump-dir "${rollout_dump_dir}"' in text
+        assert '--checkpoint-dir "${SAVE_DIR}"' in text
+        assert '--sync-forensics-dir "${W8_GLM47_SYNC_FORENSICS}"' in text
         assert '--timing-status "${W8_TIMING_STATUS:-unverified}"' in text
         assert "wall_s=$((SECONDS - STAGE_STARTED_AT))" in text
         assert 'finalize_wandb "${STAGE_STATUS}"' in text

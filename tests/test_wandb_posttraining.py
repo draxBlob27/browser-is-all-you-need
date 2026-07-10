@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +10,11 @@ from w8_biayn.integrations.wandb_posttraining import (
     COMPARISON_TABLE_COLUMNS,
     EVAL_TABLE_COLUMNS,
     FAILURE_TABLE_COLUMNS,
+    MILES_CHECKPOINT_TABLE_COLUMNS,
+    MILES_METRIC_TABLE_COLUMNS,
+    MILES_REWARD_OUTCOME_TABLE_COLUMNS,
+    MILES_SAMPLE_TABLE_COLUMNS,
+    MILES_SYNC_TABLE_COLUMNS,
     PIPELINE_TABLE_COLUMNS,
     build_eval_table_rows,
     build_failure_bucket_rows,
@@ -158,7 +165,9 @@ def test_eval_and_failure_tables_have_stable_public_schemas() -> None:
 
     failure_rows = build_failure_bucket_rows(_records(), experiment_id="experiment-1")
     assert all(len(row) == len(FAILURE_TABLE_COLUMNS) for row in failure_rows)
-    by_bucket = {dict(zip(FAILURE_TABLE_COLUMNS, row, strict=True))["bucket"]: row for row in failure_rows}
+    by_bucket = {
+        dict(zip(FAILURE_TABLE_COLUMNS, row, strict=True))["bucket"]: row for row in failure_rows
+    }
     assert set(by_bucket) == {"compile_error", "correct_and_faster"}
 
 
@@ -337,6 +346,138 @@ def test_stage_finalizer_resumes_miles_run_and_curates_receipt(tmp_path: Path) -
         "vram_usage.csv",
         "experiment-1-sft.artifact_manifest.json",
     }
+
+
+def test_stage_finalizer_publishes_native_miles_evidence_tables(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    checkpoint = tmp_path / "checkpoints" / "grpo_lora_r16"
+    adapter = checkpoint / "iter_0000000" / "adapter"
+    rollout_state = checkpoint / "rollout"
+    adapter.mkdir(parents=True)
+    rollout_state.mkdir()
+    (adapter / "adapter_model.bin").write_bytes(b"adapter")
+    (adapter / "training_state_rank0.pt").write_bytes(b"state")
+    (rollout_state / "global_dataset_state_dict_0.pt").write_bytes(b"cursor")
+
+    receipt = tmp_path / "run_receipt.txt"
+    receipt.write_text(
+        "status=success\n"
+        "wall_s=653\n"
+        "max_memory_used_mib=75957\n"
+        "rollout_max_response_len=1536\n"
+        "eval_max_response_len=1536\n"
+        f"save_dir={checkpoint}\n",
+        encoding="utf-8",
+    )
+    run_log = tmp_path / "run.log"
+    run_log.write_text(
+        "metrics.py:67 - perf 0: {'perf/rollout_time': 55.3, 'perf/tokens_per_gpu_per_sec': 400.8}\n"
+        "log_utils.py:54 - passrate 0: {'passrate/pass@1': np.float64(0.25)}\n"
+        "log_utils.py:54 - step 0: {'train/loss': -1e-9, 'train/grad_norm': 0.21}\n"
+        "metrics.py:46 - eval 0: {'eval/pie_cpp': -0.41, 'eval/pie_cpp/truncated_ratio': 0.5}\n",
+        encoding="utf-8",
+    )
+
+    dump_dir = tmp_path / "rollout_dumps"
+    dump_dir.mkdir()
+    (dump_dir / "grpo_0.pt").write_bytes(b"rollout")
+    (dump_dir / "grpo_eval_0.pt").write_bytes(b"eval")
+
+    def fake_load(path: Path, **_: Any) -> dict[str, Any]:
+        is_eval = "_eval_" in Path(path).name
+        response_length = 1536 if is_eval else 128
+        return {
+            "rollout_id": 0,
+            "samples": [
+                {
+                    "group_index": 0,
+                    "index": 0,
+                    "prompt": "optimize this program",
+                    "response": "```cpp\nint main(){}\n```",
+                    "response_length": response_length,
+                    "label": "pie-task",
+                    "status": "completed",
+                    "metadata": {"task_id": "task-1", "problem_id": "p1", "split": "validation"},
+                    "prefix_cache_info": {"cached_tokens": 10, "total_prompt_tokens": 100},
+                    "reward": {
+                        "reward": 1.0,
+                        "reason": "correct",
+                        "all_tests_pass": True,
+                        "format_valid": True,
+                        "compile_error": False,
+                        "sanitizer_error": False,
+                        "timeout": False,
+                        "tests_passed": 2,
+                        "tests_total": 2,
+                        "runtime_cpu_ns": 100,
+                        "reference_runtime_cpu_ns": 120,
+                        "runtime_speedup": 1.2,
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(load=fake_load))
+
+    sync_dir = tmp_path / "sync_forensics"
+    sync_dir.mkdir()
+    for sync, digest, total in ((1, "before", 10.0), (2, "after", 9.5)):
+        for rank in range(2):
+            (sync_dir / f"sync{sync:02d}_rank{rank}.json").write_text(
+                json.dumps(
+                    {
+                        "sync": sync,
+                        "rank": rank,
+                        "n_tensors": 9741,
+                        "sha256": digest,
+                        "total_sum_abs": total,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    wandb = FakeWandb()
+    log_stage_finalization(
+        wandb,
+        project="glm47-pie-cpp-posttraining",
+        entity=None,
+        experiment_id="experiment-1",
+        run_id="experiment-1-grpo",
+        group="experiment-1",
+        stage="grpo",
+        status="success",
+        mode="offline",
+        timing_status="verified",
+        receipt=receipt,
+        artifact_paths=[run_log],
+        manifest_dir=tmp_path,
+        run_log=run_log,
+        rollout_dump_dir=dump_dir,
+        sync_forensics_dir=sync_dir,
+        checkpoint_dir=checkpoint,
+    )
+
+    run = wandb.runs[0]
+    table_log = next(payload for payload in run.logs if "tables/stage_metrics" in payload)
+    assert table_log["tables/stage_metrics"].columns == list(MILES_METRIC_TABLE_COLUMNS)
+    assert table_log["tables/rollout_samples"].columns == list(MILES_SAMPLE_TABLE_COLUMNS)
+    assert table_log["tables/eval_samples"].columns == list(MILES_SAMPLE_TABLE_COLUMNS)
+    assert table_log["tables/reward_outcomes"].columns == list(MILES_REWARD_OUTCOME_TABLE_COLUMNS)
+    assert table_log["tables/sync_forensics"].columns == list(MILES_SYNC_TABLE_COLUMNS)
+    assert table_log["tables/checkpoint_manifest"].columns == list(MILES_CHECKPOINT_TABLE_COLUMNS)
+    assert run.summary["passrate/pass@1"] == 0.25
+    assert run.summary["eval/pie_cpp"] == -0.41
+    assert run.summary["sync/all_ranks_match"] is True
+    assert run.summary["sync/updated_after_train"] is True
+    assert run.summary["evidence/rollout_rows_total"] == 1
+    assert run.summary["evidence/eval_rows_total"] == 1
+    assert run.summary["evidence/checkpoint_file_count"] == 3
+    assert wandb.init_calls[0]["config"]["proof_surface_schema"] == 2
+    artifact_names = {name for _, name in run.artifacts[0].files}
+    assert "experiment-1-grpo.checkpoint_manifest.json" in artifact_names
+    assert "experiment-1-grpo.evidence_summary.json" in artifact_names
 
 
 def test_comparison_logger_publishes_uplift_gate_and_table(tmp_path: Path) -> None:
