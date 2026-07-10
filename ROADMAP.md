@@ -295,10 +295,12 @@ speed reward and not the official Multi-SWE evaluator. The canonical operator
 flow is `examples/slime/moonlight_multi_swe_cpp/README.md`; this roadmap keeps
 only the decision point.
 
-Decision gate: inspect `eval/base.records.jsonl`, `eval/base.summary.json`, and
-`stages/base-eval/run_receipt.txt`. Keep Multi-SWE C++ results separate from
-PIE uplift claims, Polyglot C++ results, and official Multi-SWE leaderboard
-numbers.
+Decision gate: inspect `eval/base.records.jsonl`,
+`eval/base.oracle.records.jsonl`, `eval/base.summary.json`, and
+`stages/base-eval/run_receipt.txt`. Require
+`base.summary.json.oracle_setup_check.all_passed` before treating model failures
+as setup-clean. Keep Multi-SWE C++ results separate from PIE uplift claims,
+Polyglot C++ results, and official Multi-SWE leaderboard numbers.
 
 ## Stage 4: Run SFT
 

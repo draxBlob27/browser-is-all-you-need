@@ -79,6 +79,7 @@ COLOCATE="${SLIME_COLOCATE:-1}"
 OPTIMIZER_CPU_OFFLOAD="${SLIME_OPTIMIZER_CPU_OFFLOAD:-0}"
 MULTI_SWE_SANDBOX_IMAGE="${W8_SLIME_MULTI_SWE_SANDBOX_IMAGE:-w8-biayn-multi-swe-cpp:latest}"
 MULTI_SWE_TEST_TIMEOUT_SECONDS="${W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS:-600}"
+MULTI_SWE_ORACLE_SETUP_CHECK="${W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK:-1}"
 
 absolute_path() {
   "${PYTHON_BIN}" - "$1" <<'PY'
@@ -505,6 +506,7 @@ env = {
     "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE": os.environ.get("W8_SLIME_MULTI_SWE_SANDBOX_IMAGE", "${MULTI_SWE_SANDBOX_IMAGE}"),
     "W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS": os.environ.get("W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS", "${MULTI_SWE_TEST_TIMEOUT_SECONDS}"),
     "W8_SLIME_MULTI_SWE_INCLUDE_LOGS": os.environ.get("W8_SLIME_MULTI_SWE_INCLUDE_LOGS", "0"),
+    "W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK": os.environ.get("W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK", "${MULTI_SWE_ORACLE_SETUP_CHECK}"),
     "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "${SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK}",
     "SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK": "${SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK}",
     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "${SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK}",
@@ -587,6 +589,7 @@ eval_temperature=${EVAL_TEMPERATURE}
 eval_top_p=${EVAL_TOP_P}
 multi_swe_sandbox_image=${MULTI_SWE_SANDBOX_IMAGE}
 multi_swe_test_timeout_seconds=${MULTI_SWE_TEST_TIMEOUT_SECONDS}
+multi_swe_oracle_setup_check=${MULTI_SWE_ORACLE_SETUP_CHECK}
 wandb_project=${SLIME_WANDB_PROJECT:-slime-moonlight-multi-swe-cpp}
 wandb_group=${SLIME_WANDB_GROUP:-${RUN_ID}}
 wandb_run_id=${SLIME_WANDB_RUN_ID:-${RUN_ID}-${STAGE}}
@@ -594,6 +597,7 @@ rollout_dump_template=${ROLLOUT_DUMP_TEMPLATE}
 eval_dump_path=${EVAL_DUMP_PATH}
 summary_path=${RUN_ROOT}/eval/base.summary.json
 records_path=${RUN_ROOT}/eval/base.records.jsonl
+oracle_records_path=${RUN_ROOT}/eval/base.oracle.records.jsonl
 EOF
 }
 
@@ -602,10 +606,17 @@ aggregate_eval() {
     echo "Missing eval debug rollout dump: ${EVAL_DUMP_PATH}" >&2
     exit 2
   fi
-  run_repo_python -m w8_biayn.integrations.slime_multi_swe_cpp aggregate-debug \
-    --label "${STAGE_LABEL}" \
-    --debug-rollout "${EVAL_DUMP_PATH}" \
+  AGGREGATE_ARGS=(
+    -m w8_biayn.integrations.slime_multi_swe_cpp aggregate-debug
+    --label "${STAGE_LABEL}"
+    --debug-rollout "${EVAL_DUMP_PATH}"
     --out "${RUN_ROOT}/eval"
+    --data-root "${DATA_DIR}"
+  )
+  if [ "${SLIME_MULTI_SWE_SKIP_ORACLE_CHECK:-0}" = "1" ]; then
+    AGGREGATE_ARGS+=(--skip-oracle-check)
+  fi
+  run_repo_python "${AGGREGATE_ARGS[@]}"
 }
 
 submit_slime_job() {

@@ -49,6 +49,13 @@ patch, then runs the repository-specific C++ harness in Docker:
 w8_biayn.integrations.slime_multi_swe_cpp.reward_func
 ```
 
+After rollout succeeds, aggregation runs an oracle setup check by default. For
+each prepared eval task, it applies the dataset `test_patch`, then applies that
+task's grading-only `fix_patch`, and runs the same repository harness. This
+check does not affect model reward; it proves whether the correct answer passes
+under the local checkout, Docker image, timeout, and harness settings used by
+the eval.
+
 ## Setup
 
 From the repo root on the GPU host:
@@ -88,6 +95,8 @@ export SLIME_RUN_ID="moonlight_multi_swe_cpp_$(date -u +%Y%m%d%H%M%S)"
 export SLIME_MULTI_SWE_SOURCE=/workspace/browser-is-all-you-need/.w8-biayn/data/multi-swe-bench-mini
 export SLIME_MULTI_SWE_EVAL_LIMIT=3
 export SLIME_EVAL_MAX_RESPONSE_LEN=16384
+export W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK=1
+# Set SLIME_MULTI_SWE_SKIP_ORACLE_CHECK=1 to skip the aggregation proof.
 export SLIME_NUM_GPUS=4
 export SLIME_TENSOR_MODEL_PARALLEL_SIZE=2
 export SLIME_EXPERT_MODEL_PARALLEL_SIZE=4
@@ -120,6 +129,7 @@ The lane writes:
     base_eval_0.pt
   eval/
     base.records.jsonl
+    base.oracle.records.jsonl
     base.summary.json
 ```
 
@@ -129,6 +139,15 @@ rate, timeout rate, tests-failed rate, and `repo_summary`. It also reports
 diagnostic `recovered_*` rates for invalid-format responses that can be
 best-effort parsed and tested. Those recovered fields do not change strict
 `score`, `pass_rate`, or `all_tests_pass`.
+
+`base.summary.json` also includes `oracle_setup_check`, backed by
+`base.oracle.records.jsonl`. It uses `correct_answer_source: "fix_patch"` and
+reports task counts, pass counts, reason counts, and per-repo pass status for
+the dataset's known-correct patches under the same local harness. Treat
+`oracle_setup_check.all_passed: true` as the setup-side proof that the prepared
+tasks, sandbox image, repository checkouts, and test commands can accept the
+dataset's correct answers. If this section fails, fix the setup before reading
+model pass rates.
 
 The lane deliberately omits PIE speed metrics such as
 `correct_and_faster_rate`, runtime speedup, and child-process CPU nanoseconds.
@@ -161,9 +180,14 @@ diagnostics, but that path never changes strict reward or pass fields.
 - Missing sandbox image: run the `sandbox-image` command above or set
   `W8_SLIME_MULTI_SWE_SANDBOX_IMAGE` to a compatible CMake-capable image.
 - Response truncation: raise `SLIME_EVAL_MAX_RESPONSE_LEN`.
+- `oracle_setup_check.all_passed` is false: inspect
+  `base.oracle.records.jsonl` first. A failing oracle means the dataset
+  `fix_patch` does not pass under this local checkout, sandbox image, timeout,
+  or repo harness, so model failures are not setup-clean evidence yet.
 - Many patch-apply errors: inspect `base.records.jsonl` for path policy
   rejections and malformed diffs.
-- Many timeouts: inspect `base.records.jsonl` and the sandbox logs. The default
-  test timeout is `W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS=600`.
+- Many timeouts: inspect `base.records.jsonl`, `base.oracle.records.jsonl`,
+  and the sandbox logs. The default test timeout is
+  `W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS=600`.
 - Official Multi-SWE results differ: expected. This lane is a repo-owned
   SLIME-style eval, not the official Multi-SWE evaluator.

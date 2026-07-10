@@ -135,6 +135,8 @@ SLIME_MULTI_SWE_PROFILE
 W8_SLIME_MULTI_SWE_SANDBOX_IMAGE
 W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS
 W8_SLIME_MULTI_SWE_INCLUDE_LOGS
+W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK
+SLIME_MULTI_SWE_SKIP_ORACLE_CHECK
 ```
 
 Default source path:
@@ -454,8 +456,15 @@ Expected run layout:
     base_eval_0.pt
   eval/
     base.records.jsonl
+    base.oracle.records.jsonl
     base.summary.json
 ```
+
+`base.oracle.records.jsonl` and `base.summary.json.oracle_setup_check` are
+written by default during aggregation. They apply each task's grading-only
+`fix_patch` after the dataset `test_patch` and run the same repository harness
+used for model patches. This is the setup-side proof that the local checkout,
+Docker image, timeout, and harness can pass the known correct answer.
 
 `base.summary.json` should include:
 
@@ -470,6 +479,8 @@ Expected run layout:
 - `timeout_rate`
 - `tests_failed_rate`
 - `repo_summary`
+- `oracle_setup_check` with `correct_answer_source: "fix_patch"`, pass counts,
+  reason counts, `all_passed`, and repo summaries
 - diagnostic `recovered_*` rates, if a recovery parser is implemented
 
 ## Tests To Add
@@ -491,6 +502,8 @@ Add focused unit tests before live GPU work:
 - Reward can be tested with a fake harness that returns pass, fail, compile
   error, timeout, and harness error.
 - Aggregation writes records and summary without PIE speed metrics.
+- Aggregation runs the default oracle setup check with a fake harness and writes
+  `base.oracle.records.jsonl`.
 - Example scripts exist and pass `bash -n`.
 - Lane runner is base-eval only; no SFT or GRPO wrappers.
 - README documents setup, response contract, artifacts, and failure checks.
@@ -518,6 +531,7 @@ data/manifest.json
 data/calibration.summary.json
 rollout_dumps/base_eval_0.pt
 eval/base.records.jsonl
+eval/base.oracle.records.jsonl
 eval/base.summary.json
 stages/base-eval/run.log
 stages/base-eval/run_receipt.txt

@@ -296,12 +296,107 @@ def test_score_debug_dump_writes_multi_swe_summary_without_speed_metrics(tmp_pat
 
     assert paths["records"].exists()
     assert paths["summary"].exists()
+    assert paths["oracle_records"].exists()
     assert summary["pass_rate"] == 1.0
     assert summary["repo_summary"]["fmtlib/fmt"]["pass_rate"] == 1.0
     assert summary["mean_reward"] == 1.0
+    assert summary["oracle_setup_check"]["enabled"] is True
+    assert summary["oracle_setup_check"]["correct_answer_source"] == "fix_patch"
+    assert summary["oracle_setup_check"]["task_count"] == 0
+    assert summary["oracle_setup_check"]["all_passed"] is False
     assert "correct_and_faster_rate" not in summary
     assert "missing_runtime_rate" not in summary
     assert "runtime_speedup" not in summary
+
+
+def test_score_debug_dump_runs_oracle_setup_check_with_fix_patch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = make_dataset(tmp_path)
+    out = tmp_path / "out"
+    paths = multi_swe.build_slime_multi_swe_cpp_dataset(source, out, eval_limit=1, force=True)
+    row = json.loads(paths["eval"].read_text(encoding="utf-8").splitlines()[0])
+    metadata = {
+        **row["metadata"],
+        "task_id": row["task_id"],
+        "problem_id": row["problem_id"],
+        "split": row["split"],
+    }
+    debug_jsonl = tmp_path / "debug.jsonl"
+    debug_jsonl.write_text(
+        json.dumps(
+            {
+                "index": 0,
+                "metadata": metadata,
+                "response": valid_diff_response(),
+                "reward": {
+                    "score": 0.0,
+                    "reward": 0.0,
+                    "reason": "tests_failed",
+                    "task_id": row["task_id"],
+                    "problem_id": row["problem_id"],
+                    "split": row["split"],
+                    "org": row["metadata"]["org"],
+                    "repo": row["metadata"]["repo"],
+                    "repo_full_name": row["metadata"]["repo_full_name"],
+                    "all_tests_pass": False,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[dict[str, object], str]] = []
+
+    def fake_runner(task: dict[str, object], patch: str) -> multi_swe.MultiSweTestResult:
+        calls.append((task, patch))
+        assert patch == task["fix_patch"]
+        return multi_swe.MultiSweTestResult(returncode=0, logs="oracle passed")
+
+    monkeypatch.setattr(multi_swe, "run_multi_swe_tests", fake_runner)
+
+    _records, summary, aggregate_paths = multi_swe.score_debug_dump(
+        label="base",
+        debug_samples_path=debug_jsonl,
+        output_dir=tmp_path / "eval",
+        data_root=out,
+    )
+
+    assert calls
+    assert aggregate_paths["oracle_records"].exists()
+    assert summary["oracle_setup_check"] == {
+        "enabled": True,
+        "correct_answer_source": "fix_patch",
+        "records_file": "base.oracle.records.jsonl",
+        "task_count": 1,
+        "passed_count": 1,
+        "failed_count": 0,
+        "pass_rate": 1.0,
+        "all_passed": True,
+        "reason_counts": {"passed": 1},
+        "repo_summary": {
+            row["metadata"]["repo_full_name"]: {
+                "task_count": 1,
+                "passed_count": 1,
+                "failed_count": 0,
+                "pass_rate": 1.0,
+                "all_passed": True,
+                "reason_counts": {"passed": 1},
+            }
+        },
+    }
+    oracle_rows = [
+        json.loads(line)
+        for line in aggregate_paths["oracle_records"].read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(oracle_rows) == 1
+    oracle = oracle_rows[0]
+    assert oracle["correct_answer_source"] == "fix_patch"
+    assert oracle["setup_valid"] is True
+    assert oracle["reason"] == "passed"
+    assert oracle["fix_patch_bytes"] > 0
+    assert oracle["log_excerpt"] == "oracle passed"
 
 
 def test_multi_swe_sandbox_image_plan_installs_cmake_git_and_make() -> None:
@@ -337,7 +432,12 @@ def test_moonlight_multi_swe_cpp_runner_is_base_eval_only() -> None:
     assert "--eval-prompt-data multi_swe_cpp" in text
     assert "--custom-rm-path w8_biayn.integrations.slime_multi_swe_cpp.reward_func" in text
     assert "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE" in text
+    assert "W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK" in text
+    assert '--data-root "${DATA_DIR}"' in text
+    assert "SLIME_MULTI_SWE_SKIP_ORACLE_CHECK" in text
     assert "base.records.jsonl" in text
+    assert "base.oracle.records.jsonl" in text
+    assert "multi_swe_oracle_setup_check" in text
     assert "correct_and_faster_rate" not in text
 
 
@@ -351,7 +451,10 @@ def test_moonlight_multi_swe_cpp_readme_documents_operator_flow() -> None:
     assert "bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh" in text
     assert "bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh" in text
     assert "base.records.jsonl" in text
+    assert "base.oracle.records.jsonl" in text
     assert "base.summary.json" in text
+    assert "oracle_setup_check" in text
+    assert "fix_patch" in text
     assert "recovered_*" in text
     assert "correct_and_faster_rate" in text
 

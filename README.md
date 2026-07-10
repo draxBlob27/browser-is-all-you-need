@@ -393,11 +393,13 @@ bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh
 
 Artifacts are written under
 `.w8-biayn/slime/moonlight-multi-swe-cpp/runs/${SLIME_RUN_ID}/`, including
-`eval/base.records.jsonl`, `eval/base.summary.json`, and
-`stages/base-eval/run_receipt.txt`. The summary includes strict pass/fail
-rates, repo-level breakdowns, patch/harness failure rates, and `recovered_*`
-diagnostics for format-teachable failures; it deliberately omits PIE speed
-metrics such as `correct_and_faster_rate`.
+`eval/base.records.jsonl`, `eval/base.oracle.records.jsonl`,
+`eval/base.summary.json`, and `stages/base-eval/run_receipt.txt`. The summary
+includes strict pass/fail rates, repo-level breakdowns, patch/harness failure
+rates, `recovered_*` diagnostics for format-teachable failures, and the default
+`oracle_setup_check` showing whether each task's dataset `fix_patch` passes
+through the same local harness. It deliberately omits PIE speed metrics such as
+`correct_and_faster_rate`.
 
 For the lighter Moonlight MoE smoke, use:
 

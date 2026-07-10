@@ -202,8 +202,11 @@ bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned
 SLIME rollout-only eval of base Moonlight on C++ issue-resolution tasks from
-`ByteDance-Seed/Multi-SWE-bench_mini`. Keep detailed setup, response contract,
-artifact fields, repo summaries, and `recovered_*` diagnostics in
+`ByteDance-Seed/Multi-SWE-bench_mini`. Aggregation runs the dataset
+`fix_patch` as a default oracle setup check and stores the proof in
+`eval/base.oracle.records.jsonl` plus `oracle_setup_check` in
+`eval/base.summary.json`. Keep detailed setup, response contract, artifact
+fields, repo summaries, oracle setup proof, and `recovered_*` diagnostics in
 `examples/slime/moonlight_multi_swe_cpp/README.md` instead of duplicating them
 across repo-wide docs:
 

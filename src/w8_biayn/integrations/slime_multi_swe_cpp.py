@@ -30,6 +30,7 @@ SANDBOX_IMAGE_ENV = "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE"
 INCLUDE_LOGS_ENV = "W8_SLIME_MULTI_SWE_INCLUDE_LOGS"
 TEST_TIMEOUT_ENV = "W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS"
 REPO_CACHE_ENV = "W8_SLIME_MULTI_SWE_REPO_CACHE"
+ORACLE_SETUP_CHECK_ENV = "W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK"
 DEFAULT_MULTI_SWE_SANDBOX_IMAGE = "w8-biayn-multi-swe-cpp:latest"
 DEFAULT_TEST_TIMEOUT_SECONDS = 600
 DEFAULT_EVAL_LIMIT = 4
@@ -1008,11 +1009,186 @@ def _sample_index(sample: Any) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
+def _oracle_setup_check_enabled() -> bool:
+    value = os.environ.get(ORACLE_SETUP_CHECK_ENV, "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "skip"}
+
+
+def oracle_setup_records_from_debug_samples(
+    samples: Iterable[dict[str, Any]],
+    *,
+    data_root: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    records = []
+    seen: set[str] = set()
+    for sample in samples:
+        metadata = dict(_sample_metadata(sample))
+        task_path = str(metadata.get("task_path") or "")
+        if not task_path:
+            continue
+        task_key = task_path or str(
+            metadata.get("task_id") or metadata.get("problem_id") or metadata.get("instance_id") or ""
+        )
+        if not task_key or task_key in seen:
+            continue
+        seen.add(task_key)
+        if data_root is not None:
+            metadata.setdefault("task_root", str(data_root))
+        records.append(oracle_setup_record_from_metadata(metadata))
+    return records
+
+
+def oracle_setup_record_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    record = _oracle_setup_base_record(metadata)
+    try:
+        task = load_task_from_metadata(metadata)
+    except Exception as exc:  # noqa: BLE001 - summary should show data bugs, not hide them
+        record.update({"reason": "task_load_error", "exception": str(exc)})
+        return record
+
+    record.update(_oracle_setup_task_fields(task))
+    fix_patch = str(task.get("fix_patch") or "")
+    record["fix_patch_bytes"] = len(fix_patch.encode())
+    if not fix_patch.strip():
+        record["reason"] = "missing_fix_patch"
+        return record
+
+    try:
+        result = run_multi_swe_tests(task, fix_patch)
+    except MultiSweResponseError as exc:
+        record.update({"reason": exc.reason, "exception": str(exc), "harness_error": True})
+        return record
+    except Exception as exc:  # noqa: BLE001 - setup proof should be recorded as data
+        record.update({"reason": "oracle_exception", "exception": str(exc), "harness_error": True})
+        return record
+
+    record.update(_oracle_setup_fields_from_test_result(result))
+    return record
+
+
+def _oracle_setup_base_record(metadata: dict[str, Any]) -> dict[str, Any]:
+    instance_id = metadata.get("instance_id") or metadata.get("task_id") or metadata.get("problem_id")
+    return {
+        "benchmark": BENCHMARK,
+        "data_source": DATA_SOURCE,
+        "language": LANGUAGE,
+        "task_id": metadata.get("task_id") or instance_id,
+        "problem_id": metadata.get("problem_id") or instance_id,
+        "instance_id": instance_id,
+        "org": metadata.get("org"),
+        "repo": metadata.get("repo"),
+        "repo_full_name": metadata.get("repo_full_name"),
+        "task_path": metadata.get("task_path"),
+        "correct_answer_source": "fix_patch",
+        "setup_valid": False,
+        "passed": False,
+        "all_tests_pass": False,
+        "reason": "not_run",
+        "returncode": None,
+        "timeout": False,
+        "harness_error": False,
+        "patch_apply_error": False,
+        "compile_error": False,
+        "tests_failed": False,
+        "fix_patch_bytes": 0,
+    }
+
+
+def _oracle_setup_task_fields(task: dict[str, Any]) -> dict[str, Any]:
+    instance_id = task.get("instance_id")
+    return {
+        "task_id": instance_id,
+        "problem_id": instance_id,
+        "instance_id": instance_id,
+        "org": task.get("org"),
+        "repo": task.get("repo"),
+        "repo_full_name": task.get("repo_full_name"),
+    }
+
+
+def _oracle_setup_fields_from_test_result(result: MultiSweTestResult) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "setup_valid": result.passed,
+        "passed": result.passed,
+        "all_tests_pass": result.passed,
+        "returncode": result.returncode,
+        "timeout": result.timeout,
+        "harness_error": result.harness_error,
+        "patch_apply_error": result.patch_apply_error,
+        "compile_error": False,
+        "tests_failed": False,
+    }
+    if result.passed:
+        fields["reason"] = "passed"
+    elif result.patch_apply_error:
+        fields["reason"] = "patch_apply_error"
+    elif result.harness_error:
+        fields["reason"] = "harness_error"
+    elif result.timeout:
+        fields["reason"] = "timeout"
+    elif _looks_like_compile_error(result.logs):
+        fields["reason"] = "compile_error"
+        fields["compile_error"] = True
+    else:
+        fields["reason"] = "tests_failed"
+        fields["tests_failed"] = True
+    if _include_logs() and result.logs:
+        fields["logs"] = result.logs
+    elif result.logs:
+        fields["log_excerpt"] = result.logs[-2000:]
+    return fields
+
+
+def aggregate_oracle_setup_records(
+    records: Iterable[dict[str, Any]],
+    *,
+    records_file: str | None = None,
+) -> dict[str, Any]:
+    rows = list(records)
+    passed = [row for row in rows if row.get("setup_valid") is True]
+    reason_counts = Counter(str(row.get("reason", "unknown")) for row in rows)
+    return {
+        "enabled": True,
+        "correct_answer_source": "fix_patch",
+        "records_file": records_file,
+        "task_count": len(rows),
+        "passed_count": len(passed),
+        "failed_count": len(rows) - len(passed),
+        "pass_rate": len(passed) / len(rows) if rows else 0.0,
+        "all_passed": bool(rows) and len(passed) == len(rows),
+        "reason_counts": dict(sorted(reason_counts.items())),
+        "repo_summary": _oracle_repo_summary(rows),
+    }
+
+
+def _oracle_repo_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    by_repo: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_repo[_row_repo(row)].append(row)
+
+    summary: dict[str, dict[str, Any]] = {}
+    for repo in sorted(by_repo):
+        repo_rows = by_repo[repo]
+        passed = [row for row in repo_rows if row.get("setup_valid") is True]
+        reason_counts = Counter(str(row.get("reason", "unknown")) for row in repo_rows)
+        summary[repo] = {
+            "task_count": len(repo_rows),
+            "passed_count": len(passed),
+            "failed_count": len(repo_rows) - len(passed),
+            "pass_rate": len(passed) / len(repo_rows) if repo_rows else 0.0,
+            "all_passed": bool(repo_rows) and len(passed) == len(repo_rows),
+            "reason_counts": dict(sorted(reason_counts.items())),
+        }
+    return summary
+
+
 def score_debug_dump(
     *,
     label: str,
     debug_samples_path: str | Path,
     output_dir: str | Path,
+    data_root: str | Path | None = None,
+    run_oracle_check: bool | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Path]]:
     samples = load_slime_debug_samples(debug_samples_path)
     records = [record_from_debug_sample(sample, label=label) for sample in samples]
@@ -1020,9 +1196,25 @@ def score_debug_dump(
     output = Path(output_dir)
     records_path = output / f"{label}.records.jsonl"
     summary_path = output / f"{label}.summary.json"
+    paths = {"records": records_path, "summary": summary_path}
+    should_run_oracle_check = _oracle_setup_check_enabled() if run_oracle_check is None else run_oracle_check
+    if should_run_oracle_check:
+        oracle_records = oracle_setup_records_from_debug_samples(samples, data_root=data_root)
+        oracle_records_path = output / f"{label}.oracle.records.jsonl"
+        _write_jsonl(oracle_records_path, oracle_records)
+        paths["oracle_records"] = oracle_records_path
+        summary["oracle_setup_check"] = aggregate_oracle_setup_records(
+            oracle_records,
+            records_file=oracle_records_path.name,
+        )
+    else:
+        summary["oracle_setup_check"] = {
+            "enabled": False,
+            "correct_answer_source": "fix_patch",
+        }
     _write_jsonl(records_path, records)
     write_json(summary_path, summary)
-    return records, summary, {"records": records_path, "summary": summary_path}
+    return records, summary, paths
 
 
 def record_from_debug_sample(sample: dict[str, Any], *, label: str | None = None) -> dict[str, Any]:
@@ -1242,6 +1434,8 @@ def _aggregate_command(args: argparse.Namespace) -> None:
         label=args.label,
         debug_samples_path=args.debug_rollout,
         output_dir=args.out,
+        data_root=args.data_root,
+        run_oracle_check=False if args.skip_oracle_check else None,
     )
     print(json.dumps({key: str(path) for key, path in paths.items()}, indent=2, sort_keys=True))
 
@@ -1276,6 +1470,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--label", required=True, choices=("base",))
     aggregate.add_argument("--debug-rollout", required=True)
     aggregate.add_argument("--out", required=True)
+    aggregate.add_argument("--data-root", default=None)
+    aggregate.add_argument("--skip-oracle-check", action="store_true")
     aggregate.set_defaults(func=_aggregate_command)
 
     sandbox_image = subparsers.add_parser("sandbox-image", help="Build or render the Multi-SWE C++ sandbox image")
