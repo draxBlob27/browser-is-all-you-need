@@ -67,17 +67,15 @@ TRIAL_SPECS = (
     ),
     TrialSpec(
         6,
-        "ddp_overlap",
-        "Overlap both required distributed-optimizer collectives with compute.",
-        {},
-        "--overlap-grad-reduce --overlap-param-gather",
+        "nccl_nvls",
+        "Force NVLink SHARP collectives on the fully connected H100 NVSwitch fabric.",
+        {"NCCL_ALGO": "NVLS"},
     ),
     TrialSpec(
         7,
-        "ddp_tp_overlap",
-        "Test whether DP and TP communication overlap compose on one NVSwitch node.",
-        {},
-        "--overlap-grad-reduce --overlap-param-gather --tp-comm-overlap",
+        "selective_14k",
+        "Reduce the dynamic token cap to trade extra microbatches for less rank imbalance.",
+        {"MILES_MAX_TOKENS_PER_GPU": "14336"},
     ),
     TrialSpec(
         8,

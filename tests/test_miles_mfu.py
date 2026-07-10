@@ -101,8 +101,8 @@ def test_mfu_sweep_has_exactly_sixteen_diverse_rounds() -> None:
     assert [spec.round for spec in specs] == list(range(1, 17))
     assert len({spec.name for spec in specs}) == 16
     assert any("overlap-grad-reduce" in spec.extra_args for spec in specs)
-    param_gather = next(spec for spec in specs if "--overlap-param-gather" in spec.extra_args)
-    assert "--overlap-grad-reduce" in param_gather.extra_args
+    assert any(spec.env.get("NCCL_ALGO") == "NVLS" for spec in specs)
+    assert any(spec.env.get("MILES_MAX_TOKENS_PER_GPU") == "14336" for spec in specs)
     ep_overlap = next(
         spec for spec in specs if "--overlap-moe-expert-parallel-comm" in spec.extra_args
     )
