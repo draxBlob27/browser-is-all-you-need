@@ -72,9 +72,6 @@ export MILES_SGLANG_LORA_USE_VIRTUAL_EXPERTS="${MILES_SGLANG_LORA_USE_VIRTUAL_EX
 export MILES_EXTRA_ARGS="--no-offload-train${MILES_EXTRA_ARGS:+ ${MILES_EXTRA_ARGS}}"
 export MILES_TRAIN_MODULE="${MILES_TRAIN_MODULE:-w8_biayn.integrations.miles_train_with_glm47_bridge}"
 export W8_REGISTER_GLM47_BRIDGE="${W8_REGISTER_GLM47_BRIDGE:-1}"
-# The stock clear path scans every Python object in each 15 GB actor. Keep the
-# CUDA cache release, but skip that full-process GC in resident train-only SFT.
-export W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR="${W8_GLM47_LIGHTWEIGHT_TRAIN_ONLY_CLEAR:-1}"
 # Modal 8x H100 has no docker daemon (gVisor). Default the local in-process
 # sandbox; override with W8_CPP_SANDBOX_BACKEND=docker only on hosts that mount it.
 export W8_CPP_SANDBOX_BACKEND="${W8_CPP_SANDBOX_BACKEND:-local}"
