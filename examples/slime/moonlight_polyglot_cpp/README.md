@@ -9,6 +9,10 @@ should still be produced with Aider's benchmark harness. This lane measures the
 model under a repo-owned whole-file prompt/parser/reward loop and writes the
 same kind of local receipts as the active Moonlight PIE lane.
 
+This README is the canonical operator runbook for the lane. Repo-wide docs
+should link here instead of repeating setup knobs, response-contract details, or
+artifact field descriptions.
+
 ## What It Does
 
 `prepare_data.sh` converts Polyglot C++ exercises into one eval JSONL file:

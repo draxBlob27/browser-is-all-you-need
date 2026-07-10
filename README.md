@@ -67,14 +67,12 @@ The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt
 builder, Docker C++ sandbox, reward function, and eval aggregation through
 `src/w8_biayn/integrations/slime_cpp_perf.py`.
 
-The Moonlight Polyglot C++ lane is an optional base-eval benchmark lane for the
-C++ subset of `Aider-AI/polyglot-benchmark`. It is not an official Aider
-leaderboard run and is not part of the PIE training proof. It uses
-`src/w8_biayn/integrations/slime_polyglot_cpp.py` to build whole-file C++
-exercise prompts, run SLIME rollout-only eval, and grade replacements with
-Exercism C++ tests in a dedicated Docker sandbox. Invalid-format outputs can
-be parsed and tested as `recovered_*` diagnostics, but strict pass/rate fields
-remain failed.
+The Moonlight Polyglot C++ lane is an optional rollout-only base-eval benchmark
+for the C++ subset of `Aider-AI/polyglot-benchmark`. It uses
+`src/w8_biayn/integrations/slime_polyglot_cpp.py` for whole-file replacement
+prompts and Exercism C++ tests in Docker. It is not part of the PIE training
+proof and is not an official Aider leaderboard run; keep detailed setup and
+artifact semantics in `examples/slime/moonlight_polyglot_cpp/README.md`.
 
 The Moonlight Multi-SWE C++ lane is an optional rollout-only base-eval
 benchmark for the C++ subset of `ByteDance-Seed/Multi-SWE-bench_mini`. It uses
@@ -332,8 +330,8 @@ subset of `Aider-AI/polyglot-benchmark` using SLIME rollout-only eval. It is a
 repo-owned whole-file prompt/parser/reward loop, not an official Aider
 leaderboard run.
 
-From the repo root, clone the benchmark and build the CMake-capable sandbox
-image:
+Detailed setup, runtime knobs, response contract, artifacts, and failure checks
+live in `examples/slime/moonlight_polyglot_cpp/README.md`. Quick smoke:
 
 ```bash
 git clone https://github.com/Aider-AI/polyglot-benchmark \
@@ -356,11 +354,11 @@ bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 Artifacts are written under
 `.w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/`, including
 `eval/base.records.jsonl`, `eval/base.summary.json`, and
-`stages/base-eval/run_receipt.txt`. Eval rows and reward records include a
-primary `category` plus multi-label `categories`; `base.summary.json` includes
-`category_summary` for heatmaps of pass/error rates by exercise concept, plus
-`recovered_*` diagnostic rates for invalid-format responses that were
-best-effort parsed and tested without changing strict scores.
+`stages/base-eval/run_receipt.txt`. The summary includes strict pass/fail
+rates, repo-owned category breakdowns, and `recovered_*` diagnostics for
+format-teachable failures; it deliberately omits PIE speed metrics such as
+`correct_and_faster_rate`.
+
 
 ## Moonlight Multi-SWE C++ Base Eval
 
@@ -811,6 +809,7 @@ scripts/bootstrap.sh                         fresh-machine bootstrap
 scripts/prepare_dapo_math_dataset.py         optional SLIME text-smoke data prep
 scripts/wandb_milestone.py                   standalone pipeline-milestone logger (elapsed curve + timeline table)
 examples/slime/moonlight_cpp_perf/           active Moonlight C++ lane
+examples/slime/moonlight_polyglot_cpp/      optional Moonlight base eval on Aider Polyglot C++
 examples/slime/moonlight_multi_swe_cpp/     optional Moonlight base eval on Multi-SWE C++
 examples/slime/moonlight_lora_cpp_perf/      rank-16 LoRA Moonlight C++ lane
 examples/slime/glm47_cpp_perf/               active GLM C++ lane when present
@@ -833,6 +832,8 @@ src/w8_biayn/cpp_perf/judge.py               contest-style stdout comparison
 src/w8_biayn/cpp_perf/sandbox.py             Docker compile/test/runtime harness
 src/w8_biayn/cpp_perf/reward.py              correctness-gated efficiency reward
 src/w8_biayn/integrations/slime_cpp_perf.py  SLIME C++ data/reward/eval bridge
+src/w8_biayn/integrations/slime_polyglot_cpp.py
+                                             SLIME Polyglot C++ data/reward/eval bridge
 src/w8_biayn/integrations/slime_multi_swe_cpp.py
                                              SLIME Multi-SWE C++ data/reward/eval bridge
 src/w8_biayn/integrations/slime_swe_agent_cpp_perf.py

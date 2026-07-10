@@ -261,25 +261,13 @@ Question:
 
 This benchmark is separate from the active PIE optimization training proof. It
 uses whole-file solution replacement prompts and Exercism C++ tests, not PIE
-`v0 -> v1` speed reward and not the official Aider edit harness.
+`v0 -> v1` speed reward and not the official Aider edit harness. The canonical
+operator flow is `examples/slime/moonlight_polyglot_cpp/README.md`; this
+roadmap keeps only the decision point.
 
-```bash
-git clone https://github.com/Aider-AI/polyglot-benchmark \
-  .w8-biayn/data/polyglot-benchmark
-uv run python -m w8_biayn.integrations.slime_polyglot_cpp sandbox-image
-
-bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
-bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
-```
-
-Inspect `eval/base.records.jsonl`, `eval/base.summary.json`, and
-`stages/base-eval/run_receipt.txt`. The eval rows and reward records include a
-primary `category` plus multi-label `categories`; `base.summary.json` includes
-`category_summary` for heatmaps of pass/error rates by exercise concept and
-`recovered_*` diagnostic rates for invalid-format responses that were
-best-effort parsed and tested without changing strict scores. Do not compare
-these results directly with Aider leaderboard numbers; use Aider's benchmark
-harness for that.
+Decision gate: inspect `eval/base.records.jsonl`, `eval/base.summary.json`, and
+`stages/base-eval/run_receipt.txt`. Keep Polyglot C++ results separate from
+both PIE uplift claims and Aider leaderboard numbers.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
