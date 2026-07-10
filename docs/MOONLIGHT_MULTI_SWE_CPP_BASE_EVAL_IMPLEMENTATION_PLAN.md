@@ -18,7 +18,7 @@ Completed for the setup-side failure found on Catch2 PR 1608:
       per-instance `mswebench/<org>_m_<repo>:pr-<number>` images.
 - [x] Resolve and record an immutable image digest/ID for each prepared task.
 - [x] Move the full `fix_patch` oracle run into blocking data preparation.
-- [x] Keep schema-v2 manifests provisional until every oracle passes.
+- [x] Keep schema-v3 manifests provisional until every oracle passes.
 - [x] Run CTest from `build/` for compatibility with CMake 3.13.
 - [x] Require a positive parsed CTest count; classify zero-test exit-0 runs as
       `no_tests_collected`, never `passed`.
@@ -29,6 +29,33 @@ Completed for the setup-side failure found on Catch2 PR 1608:
       admission blocking, CTest working directory, and zero-test false passes.
 - [x] Update the canonical runbook, README, roadmap, repository guide, skill,
       and this implementation record.
+
+## Nonredundant Official-Image Setup Checklist
+
+Completed for the full-run timeout and offline nlohmann test-data failures:
+
+- [x] Use the repository, exact base revision, prepared build directory, trusted
+      patches, and offline test assets already bundled in each official image.
+- [x] Remove per-task GitHub clones from the standard official-image path.
+- [x] Mount only the candidate patch read-only and keep container networking
+      disabled.
+- [x] Verify the image base revision and trusted test-patch digest before
+      executing `/home/fix-run.sh`.
+- [x] Give build/test execution its full independent 1200-second default budget.
+- [x] Keep clone/cache setup only for the explicit generic-image debug override.
+- [x] Fingerprint task patches, base revision, image identity, and harness
+      protocol before reusing an oracle pass.
+- [x] Persist records, summary, and manifest after each task so interruption is
+      resumable.
+- [x] Retry failed, missing, and stale records while reusing matching passes.
+- [x] Add repeatable `--task-id` targeting and merge selected image receipts.
+- [x] Make `prepare_data.sh` reuse prepared JSON, warm images, and matching
+      passes by default; keep an explicit one-time schema rebuild knob.
+- [x] Add regressions for direct nlohmann image grading, no-clone Docker args,
+      contract/patch classification, resume, retry, targeting, and incremental
+      persistence.
+- [x] Document first-run, migration, targeted retry, full resume, verification,
+      and nonredundant operator commands.
 
 ## Source Dataset Facts
 
@@ -201,7 +228,7 @@ Required behavior:
    ${RUN_ROOT}/data/tasks/<instance_id>/task.json
    ```
 
-6. Write a provisional schema-v2 manifest with `admitted: false`.
+6. Write a provisional schema-v3 manifest with `admitted: false`.
 7. Pull and inspect each official per-task image and stamp its immutable
    digest/ID in task JSON plus `sandbox-images.json`.
 8. Run every task's `fix_patch` through the real harness, writing
@@ -390,14 +417,14 @@ short error excerpts to avoid huge JSONL records.
 1. Derive the official image tag from `org`, `repo`, and PR number. Repository
    names are lowercased; Catch2 PR 1608 is
    `mswebench/catchorg_m_catch2:pr-1608`.
-2. Pull the image (unless the operator explicitly requests a cache-only run),
-   inspect it, and record its digest/ID.
-3. Apply `test_patch`, then the dataset `fix_patch`.
-4. Run the repository harness and require return code zero plus
-   `tests_collected > 0`.
-5. Write task-level proof to `data/oracle.records.jsonl`, aggregate proof to
-   `data/oracle.summary.json`, and image proof to `data/sandbox-images.json`.
-6. Admit the schema-v2 manifest only if every selected task passes.
+2. Pull the image only when needed, inspect it, and record its digest/ID.
+3. Verify the image's exact checkout and trusted `test.patch`; mount only the
+   candidate or dataset `fix_patch` read-only.
+4. Run `/home/fix-run.sh` against the image-prepared build/offline test assets
+   and require return code zero plus `tests_collected > 0`.
+5. Write task proof, aggregate proof, image proof, and manifest after every task.
+6. Reuse only fingerprint-matching passes; retry failed, missing, or stale rows.
+7. Admit the schema-v3 manifest only when all expected tasks pass.
 
 The base-eval entrypoint runs `verify-data` before checkpoint download and Ray.
 A missing, stale, failed, mismatched, or override-incompatible proof is fatal.
@@ -544,6 +571,11 @@ Add focused unit tests before live GPU work:
 - Official image selection lowercases Catch2 and uses the PR-specific tag.
 - Image preparation pulls/inspects each selected image and stamps immutable IDs.
 - Blocking preflight admits only all-passing `fix_patch` records.
+- Standard grading uses the official image-prepared checkout and assets with no
+  per-task GitHub clone.
+- Build/test receives the full timeout independently of image/setup work.
+- Resume reuses matching passes, retries failures, supports task targeting, and
+  keeps proof after interruption.
 - All harnesses run CTest from `build/` for old-CMake compatibility.
 - Exit-zero `No tests were found!!!` is `no_tests_collected`, not a pass.
 - Aggregation copies the prepared oracle proof into

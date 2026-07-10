@@ -83,8 +83,10 @@ benchmark for the C++ subset of `ByteDance-Seed/Multi-SWE-bench_mini`. It uses
 forbidden-path preflight, dataset `test_patch` application, and
 repo-specific C++ tests in Docker. Data preparation is blocking: it selects
 the official lowercase per-instance `mswebench` image, pins its immutable
-identity, runs every dataset `fix_patch`, and requires CTest to report a
-positive test count before admitting the manifest. It is not part of the PIE
+identity, and grades directly in that image's exact checkout, prepared build
+tree, and offline test assets. It runs every dataset `fix_patch`, requires
+CTest to report a positive test count, persists proof after each task, and
+resumes only fingerprint-matching passes before admitting the manifest. It is not part of the PIE
 training proof, does not report speed metrics, and is not an official Multi-SWE
 leaderboard run; keep detailed setup and artifact semantics in
 `examples/slime/moonlight_multi_swe_cpp/README.md`.
@@ -401,9 +403,13 @@ bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh
 
 Artifacts are written under
 `.w8-biayn/slime/moonlight-multi-swe-cpp/runs/${SLIME_RUN_ID}/`. Blocking data
-admission is recorded in `data/oracle.records.jsonl`,
+admission is recorded incrementally in `data/oracle.records.jsonl`,
 `data/oracle.summary.json`, `data/sandbox-images.json`, and
 `data/manifest.json`; the latter must say `admitted: true` before evaluation.
+Standard setup performs no per-task GitHub clones: the official image supplies
+the exact repository and required offline test data. Re-running
+`prepare_data.sh` reuses prepared data, cached images, and matching passing
+oracle records by default.
 Eval artifacts include `eval/base.records.jsonl`,
 `eval/base.oracle.records.jsonl`, `eval/base.summary.json`, and
 `stages/base-eval/run_receipt.txt`. The summary includes strict pass/fail rates,

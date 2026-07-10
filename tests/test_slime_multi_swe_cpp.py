@@ -101,7 +101,7 @@ def test_build_slime_multi_swe_cpp_dataset_filters_cpp_rows_and_hides_oracles(
     manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
     assert [row["task_id"] for row in rows] == ["catchorg__Catch2__44", "fmtlib__fmt__123"]
     assert manifest["kind"] == "slime-multi-swe-cpp-dataset"
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["admitted"] is False
     assert manifest["counts"] == {
         "eval": 2,
@@ -179,7 +179,9 @@ def test_patch_preflight_rejects_forbidden_paths_and_test_patch_paths() -> None:
             task,
         )
 
-    assert multi_swe.preflight_patch_paths(multi_swe.parse_patch_response(valid_diff_response()), task)
+    assert multi_swe.preflight_patch_paths(
+        multi_swe.parse_patch_response(valid_diff_response()), task
+    )
 
 
 def test_reward_func_scores_invalid_format_without_running_harness(
@@ -496,6 +498,132 @@ def test_run_repository_tests_requires_and_records_positive_ctest_count(
     assert result.tests_collected == 12
 
 
+def _fake_image_details(image: str, digest: str = "abc") -> dict[str, object]:
+    resolved = f"{image.rsplit(':', 1)[0]}@sha256:{digest}"
+    return {
+        "image": image,
+        "resolved_image": resolved,
+        "image_id": f"sha256:{digest}",
+        "repo_digests": [resolved],
+    }
+
+
+def _fake_oracle_record(
+    metadata: dict[str, object],
+    *,
+    setup_valid: bool = True,
+    reason: str = "passed",
+) -> dict[str, object]:
+    task = multi_swe.load_task_from_metadata(metadata)
+    record = multi_swe._oracle_setup_base_record(metadata)
+    record.update(multi_swe._oracle_setup_task_fields(task))
+    record.update(
+        {
+            "oracle_cache_key": multi_swe.oracle_setup_cache_key(task),
+            "harness_mode": multi_swe.OFFICIAL_IMAGE_HARNESS_MODE,
+            "setup_valid": setup_valid,
+            "passed": setup_valid,
+            "all_tests_pass": setup_valid,
+            "reason": reason,
+            "returncode": 0 if setup_valid else 8,
+            "tests_collected": 12,
+            "tests_failed": not setup_valid,
+        }
+    )
+    return record
+
+
+def test_standard_harness_uses_prepared_official_image_without_cloning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {
+        **cpp_row("nlohmann__json-1323"),
+        "org": "nlohmann",
+        "repo": "json",
+        "number": 1323,
+    }
+    harness = multi_swe.REPO_HARNESSES[("nlohmann", "json")]
+    task = multi_swe.normalized_task(
+        row,
+        harness=harness,
+        instance_id="nlohmann__json-1323",
+    )
+    task.update(
+        {
+            "sandbox_image_digest": "mswebench/nlohmann_m_json@sha256:abc",
+            "sandbox_image_id": "sha256:abc",
+        }
+    )
+    captured: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "100% tests passed, 0 tests failed out of 88\n",
+            "",
+        )
+
+    monkeypatch.delenv(multi_swe.SANDBOX_IMAGE_ENV, raising=False)
+    monkeypatch.setattr(multi_swe.subprocess, "run", fake_run)
+
+    result = multi_swe.run_multi_swe_tests(task, str(task["fix_patch"]))
+
+    assert result.passed is True
+    assert result.tests_collected == 88
+    command, kwargs = captured[0]
+    command_text = " ".join(command)
+    script = command[-1]
+    assert "mswebench/nlohmann_m_json@sha256:abc" in command
+    assert "--network none" in command_text
+    assert "--read-only" not in command
+    assert "--user" not in command
+    assert "/home/fix.patch:ro" in command_text
+    assert "/home/json" in script
+    assert "/home/fix-run.sh" in script
+    assert "sha256sum /home/test.patch" in script
+    assert "timeout 1200s" in script
+    assert "git clone" not in command_text
+    assert "/work" not in command_text
+    assert kwargs["timeout"] == 1230
+
+
+@pytest.mark.parametrize(
+    ("returncode", "harness_error", "patch_apply_error"),
+    [
+        (multi_swe._OFFICIAL_CONTRACT_ERROR, True, False),
+        (multi_swe._TRUSTED_PATCH_ERROR, True, False),
+        (multi_swe._CANDIDATE_PATCH_ERROR, False, True),
+    ],
+)
+def test_official_image_contract_and_patch_failures_are_classified(
+    returncode: int,
+    harness_error: bool,
+    patch_apply_error: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = multi_swe.REPO_HARNESSES[("fmtlib", "fmt")]
+    task = multi_swe.normalized_task(
+        cpp_row(),
+        harness=harness,
+        instance_id="fmtlib__fmt__123",
+    )
+    task["sandbox_image_digest"] = "mswebench/fmtlib_m_fmt@sha256:abc"
+
+    monkeypatch.setattr(
+        multi_swe.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, returncode, "marker", ""),
+    )
+
+    result = multi_swe.run_official_instance_tests(task, str(task["fix_patch"]))
+
+    assert result.harness_error is harness_error
+    assert result.patch_apply_error is patch_apply_error
+    assert result.passed is False
+
+
 def test_preflight_stamps_image_digests_and_admits_only_passing_oracles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -507,33 +635,17 @@ def test_preflight_stamps_image_digests_and_admits_only_passing_oracles(
 
     monkeypatch.delenv(multi_swe.SANDBOX_IMAGE_ENV, raising=False)
     monkeypatch.setattr(multi_swe, "_pull_docker_image", pulled.append)
+    monkeypatch.setattr(multi_swe, "_inspect_docker_image", _fake_image_details)
     monkeypatch.setattr(
         multi_swe,
-        "_inspect_docker_image",
-        lambda image: {
-            "image": image,
-            "resolved_image": f"{image.rsplit(':', 1)[0]}@sha256:abc",
-            "image_id": "sha256:abc",
-            "repo_digests": [f"{image.rsplit(':', 1)[0]}@sha256:abc"],
-        },
+        "oracle_setup_record_from_metadata",
+        _fake_oracle_record,
     )
-
-    def fake_oracles(data_root: str | Path) -> list[dict[str, object]]:
-        return [
-            {
-                "setup_valid": True,
-                "passed": True,
-                "reason": "passed",
-                "repo_full_name": task["repo_full_name"],
-                "instance_id": task["instance_id"],
-            }
-            for _path, task in multi_swe.load_prepared_multi_swe_tasks(data_root)
-        ]
-
-    monkeypatch.setattr(multi_swe, "oracle_setup_records_from_prepared_tasks", fake_oracles)
     paths, summary = multi_swe.run_multi_swe_oracle_preflight(out)
 
     assert summary["all_passed"] is True
+    assert summary["complete"] is True
+    assert summary["executed_count"] == 2
     assert summary["blocking"] is True
     assert len(pulled) == 2
     assert paths["sandbox_images"].exists()
@@ -557,31 +669,143 @@ def test_preflight_failure_remains_blocking(
     monkeypatch.setattr(
         multi_swe,
         "_inspect_docker_image",
-        lambda image: {
-            "image": image,
-            "resolved_image": f"{image.rsplit(':', 1)[0]}@sha256:def",
-            "image_id": "sha256:def",
-            "repo_digests": [],
-        },
+        lambda image: _fake_image_details(image, "def"),
     )
     monkeypatch.setattr(
         multi_swe,
-        "oracle_setup_records_from_prepared_tasks",
-        lambda _root: [
-            {
-                "setup_valid": False,
-                "passed": False,
-                "reason": "no_tests_collected",
-                "repo_full_name": "catchorg/Catch2",
-            }
-        ],
+        "oracle_setup_record_from_metadata",
+        lambda metadata: _fake_oracle_record(
+            metadata,
+            setup_valid=False,
+            reason="no_tests_collected",
+        ),
     )
 
     _paths, summary = multi_swe.run_multi_swe_oracle_preflight(out)
 
     assert summary["all_passed"] is False
+    assert summary["complete"] is True
     with pytest.raises(ValueError, match="has not passed blocking admission"):
         multi_swe.verify_multi_swe_dataset(out)
+
+
+def test_preflight_resume_reuses_only_matching_passes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = make_dataset(tmp_path)
+    out = tmp_path / "out"
+    multi_swe.build_slime_multi_swe_cpp_dataset(source, out, eval_limit=2, force=True)
+    monkeypatch.setattr(multi_swe, "_pull_docker_image", lambda _image: None)
+    monkeypatch.setattr(multi_swe, "_inspect_docker_image", _fake_image_details)
+    calls: list[str] = []
+
+    def first_run(metadata: dict[str, object]) -> dict[str, object]:
+        instance_id = str(metadata["instance_id"])
+        calls.append(instance_id)
+        return _fake_oracle_record(
+            metadata,
+            setup_valid=not instance_id.endswith("__44"),
+            reason="passed" if not instance_id.endswith("__44") else "timeout",
+        )
+
+    monkeypatch.setattr(multi_swe, "oracle_setup_record_from_metadata", first_run)
+    _paths, first_summary = multi_swe.run_multi_swe_oracle_preflight(out)
+    assert first_summary["passed_count"] == 1
+    assert len(calls) == 2
+
+    calls.clear()
+    monkeypatch.setattr(
+        multi_swe,
+        "oracle_setup_record_from_metadata",
+        lambda metadata: (
+            calls.append(str(metadata["instance_id"])) or _fake_oracle_record(metadata)
+        ),
+    )
+    _paths, resumed = multi_swe.run_multi_swe_oracle_preflight(
+        out,
+        pull_images=False,
+        resume=True,
+    )
+
+    assert calls == ["catchorg__Catch2__44"]
+    assert resumed["reused_count"] == 1
+    assert resumed["executed_count"] == 1
+    assert resumed["all_passed"] is True
+
+
+def test_targeted_preflight_refreshes_one_record_and_preserves_the_rest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = make_dataset(tmp_path)
+    out = tmp_path / "out"
+    multi_swe.build_slime_multi_swe_cpp_dataset(source, out, eval_limit=2, force=True)
+    monkeypatch.setattr(multi_swe, "_pull_docker_image", lambda _image: None)
+    monkeypatch.setattr(multi_swe, "_inspect_docker_image", _fake_image_details)
+    monkeypatch.setattr(
+        multi_swe,
+        "oracle_setup_record_from_metadata",
+        _fake_oracle_record,
+    )
+    multi_swe.run_multi_swe_oracle_preflight(out)
+
+    selected_id = "fmtlib__fmt__123"
+    task_path, task = next(
+        item
+        for item in multi_swe.load_prepared_multi_swe_tasks(out)
+        if item[1]["instance_id"] == selected_id
+    )
+    task["fix_patch"] = str(task["fix_patch"]) + "\nchanged"
+    task_path.write_text(json.dumps(task), encoding="utf-8")
+    calls: list[str] = []
+
+    def refresh(metadata: dict[str, object]) -> dict[str, object]:
+        calls.append(str(metadata["instance_id"]))
+        return _fake_oracle_record(metadata)
+
+    monkeypatch.setattr(multi_swe, "oracle_setup_record_from_metadata", refresh)
+    _paths, summary = multi_swe.run_multi_swe_oracle_preflight(
+        out,
+        pull_images=False,
+        resume=True,
+        task_ids=[selected_id],
+    )
+
+    assert calls == [selected_id]
+    assert summary["task_count"] == 2
+    assert summary["selected_task_count"] == 1
+    assert summary["all_passed"] is True
+
+
+def test_preflight_persists_completed_records_before_a_later_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = make_dataset(tmp_path)
+    out = tmp_path / "out"
+    multi_swe.build_slime_multi_swe_cpp_dataset(source, out, eval_limit=2, force=True)
+    monkeypatch.setattr(multi_swe, "_pull_docker_image", lambda _image: None)
+    monkeypatch.setattr(multi_swe, "_inspect_docker_image", _fake_image_details)
+    calls = 0
+
+    def interrupted(metadata: dict[str, object]) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("simulated interruption")
+        return _fake_oracle_record(metadata)
+
+    monkeypatch.setattr(multi_swe, "oracle_setup_record_from_metadata", interrupted)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        multi_swe.run_multi_swe_oracle_preflight(out)
+
+    rows = [
+        json.loads(line)
+        for line in (out / multi_swe.ORACLE_RECORDS_FILENAME).read_text().splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["setup_valid"] is True
 
 
 def test_multi_swe_sandbox_image_plan_installs_cmake_git_and_make() -> None:
@@ -615,6 +839,9 @@ def test_moonlight_multi_swe_cpp_runner_is_base_eval_only() -> None:
     assert 'EVAL_MAX_RESPONSE_LEN="${SLIME_EVAL_MAX_RESPONSE_LEN:-16384}"' in text
     assert "w8_biayn.integrations.slime_multi_swe_cpp build-data" in text
     assert "w8_biayn.integrations.slime_multi_swe_cpp preflight" in text
+    assert "PREFLIGHT_ARGS+=(--resume)" in text
+    assert "SLIME_MULTI_SWE_PULL_IMAGES:-auto" in text
+    assert "SLIME_MULTI_SWE_REBUILD_DATA" in text
     assert "w8_biayn.integrations.slime_multi_swe_cpp verify-data" in text
     assert "--eval-prompt-data multi_swe_cpp" in text
     assert "--custom-rm-path w8_biayn.integrations.slime_multi_swe_cpp.reward_func" in text

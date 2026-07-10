@@ -78,8 +78,10 @@ RAY_MEMORY_MONITOR_REFRESH_MS="${SLIME_RAY_MEMORY_MONITOR_REFRESH_MS:-}"
 COLOCATE="${SLIME_COLOCATE:-1}"
 OPTIMIZER_CPU_OFFLOAD="${SLIME_OPTIMIZER_CPU_OFFLOAD:-0}"
 MULTI_SWE_SANDBOX_IMAGE_OVERRIDE="${W8_SLIME_MULTI_SWE_SANDBOX_IMAGE:-}"
-MULTI_SWE_PULL_IMAGES="${SLIME_MULTI_SWE_PULL_IMAGES:-1}"
-MULTI_SWE_TEST_TIMEOUT_SECONDS="${W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS:-600}"
+MULTI_SWE_PULL_IMAGES="${SLIME_MULTI_SWE_PULL_IMAGES:-auto}"
+MULTI_SWE_REBUILD_DATA="${SLIME_MULTI_SWE_REBUILD_DATA:-0}"
+MULTI_SWE_RESUME="${SLIME_MULTI_SWE_RESUME:-1}"
+MULTI_SWE_TEST_TIMEOUT_SECONDS="${W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS:-1200}"
 MULTI_SWE_ORACLE_SETUP_CHECK="${W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK:-1}"
 
 absolute_path() {
@@ -129,27 +131,40 @@ prepare_data() {
     echo "  git clone https://huggingface.co/datasets/ByteDance-Seed/Multi-SWE-bench_mini .w8-biayn/data/multi-swe-bench-mini" >&2
     exit 2
   fi
-  BUILD_DATA_ARGS=(
-    -m w8_biayn.integrations.slime_multi_swe_cpp build-data
-    --source-root "${MULTI_SWE_SOURCE}"
-    --out "${DATA_DIR}"
-    --profile "${SLIME_MULTI_SWE_PROFILE:-moonlight-multi-swe-cpp}"
-    --run-id "${RUN_ID}"
-    --force
-  )
-  if [ -n "${MULTI_SWE_JSONL}" ]; then
-    BUILD_DATA_ARGS+=(--jsonl "${MULTI_SWE_JSONL}")
+  local data_was_built=0
+  if [ "${MULTI_SWE_REBUILD_DATA}" = "1" ] || [ ! -f "${DATA_DIR}/manifest.json" ]; then
+    BUILD_DATA_ARGS=(
+      -m w8_biayn.integrations.slime_multi_swe_cpp build-data
+      --source-root "${MULTI_SWE_SOURCE}"
+      --out "${DATA_DIR}"
+      --profile "${SLIME_MULTI_SWE_PROFILE:-moonlight-multi-swe-cpp}"
+      --run-id "${RUN_ID}"
+      --force
+    )
+    if [ -n "${MULTI_SWE_JSONL}" ]; then
+      BUILD_DATA_ARGS+=(--jsonl "${MULTI_SWE_JSONL}")
+    fi
+    if [ -n "${EVAL_LIMIT}" ]; then
+      BUILD_DATA_ARGS+=(--eval-limit "${EVAL_LIMIT}")
+    fi
+    run_repo_python "${BUILD_DATA_ARGS[@]}"
+    data_was_built=1
+  else
+    echo "Reusing prepared Multi-SWE data: ${DATA_DIR}"
   fi
-  if [ -n "${EVAL_LIMIT}" ]; then
-    BUILD_DATA_ARGS+=(--eval-limit "${EVAL_LIMIT}")
-  fi
-  run_repo_python "${BUILD_DATA_ARGS[@]}"
 
   PREFLIGHT_ARGS=(
     -m w8_biayn.integrations.slime_multi_swe_cpp preflight
     --data-root "${DATA_DIR}"
   )
-  if [ "${MULTI_SWE_PULL_IMAGES}" != "1" ]; then
+  if [ "${MULTI_SWE_RESUME}" = "1" ]; then
+    PREFLIGHT_ARGS+=(--resume)
+  fi
+  if [ "${MULTI_SWE_PULL_IMAGES}" = "0" ] || {
+    [ "${MULTI_SWE_PULL_IMAGES}" = "auto" ] &&
+    [ "${data_was_built}" = "0" ] &&
+    [ -f "${DATA_DIR}/sandbox-images.json" ]
+  }; then
     PREFLIGHT_ARGS+=(--no-pull)
   fi
   run_repo_python "${PREFLIGHT_ARGS[@]}"
@@ -617,6 +632,9 @@ multi_swe_sandbox_image_override=${MULTI_SWE_SANDBOX_IMAGE_OVERRIDE}
 multi_swe_sandbox_images_file=${DATA_DIR}/sandbox-images.json
 multi_swe_oracle_preflight_summary=${DATA_DIR}/oracle.summary.json
 multi_swe_pull_images=${MULTI_SWE_PULL_IMAGES}
+multi_swe_rebuild_data=${MULTI_SWE_REBUILD_DATA}
+multi_swe_resume=${MULTI_SWE_RESUME}
+multi_swe_harness_mode=official-instance-image
 multi_swe_test_timeout_seconds=${MULTI_SWE_TEST_TIMEOUT_SECONDS}
 multi_swe_oracle_setup_check=${MULTI_SWE_ORACLE_SETUP_CHECK}
 wandb_project=${SLIME_WANDB_PROJECT:-slime-moonlight-multi-swe-cpp}

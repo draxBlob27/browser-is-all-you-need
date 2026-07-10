@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
-import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -25,18 +25,25 @@ BENCHMARK = "multi-swe-bench-mini"
 LANGUAGE = "cpp"
 DATASET_KIND = "slime-multi-swe-cpp-dataset"
 SANDBOX_IMAGE_RECEIPT_KIND = "multi-swe-sandbox-images"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+ORACLE_PROTOCOL_VERSION = 2
 DEFAULT_DATA_ROOT_ENV = "W8_BIAYN_DATA_DIR"
 SANDBOX_IMAGE_ENV = "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE"
 INCLUDE_LOGS_ENV = "W8_SLIME_MULTI_SWE_INCLUDE_LOGS"
 TEST_TIMEOUT_ENV = "W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS"
+CLONE_TIMEOUT_ENV = "W8_SLIME_MULTI_SWE_CLONE_TIMEOUT_SECONDS"
 REPO_CACHE_ENV = "W8_SLIME_MULTI_SWE_REPO_CACHE"
 ORACLE_SETUP_CHECK_ENV = "W8_SLIME_MULTI_SWE_ORACLE_SETUP_CHECK"
 DEFAULT_MULTI_SWE_SANDBOX_IMAGE = "w8-biayn-multi-swe-cpp:latest"
-DEFAULT_TEST_TIMEOUT_SECONDS = 600
+DEFAULT_TEST_TIMEOUT_SECONDS = 1200
+DEFAULT_CLONE_TIMEOUT_SECONDS = 600
 DEFAULT_EVAL_LIMIT = 4
 OFFICIAL_SANDBOX_NAMESPACE = "mswebench"
 ORACLE_RECORDS_FILENAME = "oracle.records.jsonl"
+OFFICIAL_IMAGE_HARNESS_MODE = "official-instance-image"
+_OFFICIAL_CONTRACT_ERROR = 86
+_TRUSTED_PATCH_ERROR = 87
+_CANDIDATE_PATCH_ERROR = 88
 ORACLE_SUMMARY_FILENAME = "oracle.summary.json"
 SANDBOX_IMAGES_FILENAME = "sandbox-images.json"
 ALLOWED_DIFF_FENCE_LANGS = {"diff", "patch"}
@@ -243,7 +250,9 @@ def build_slime_multi_swe_cpp_dataset(
     """Write SLIME eval JSONL files from Multi-SWE-bench mini C++ rows."""
 
     source = Path(source_root)
-    data_path = Path(jsonl_path) if jsonl_path is not None else source / "multi_swe_bench_mini.jsonl"
+    data_path = (
+        Path(jsonl_path) if jsonl_path is not None else source / "multi_swe_bench_mini.jsonl"
+    )
     output = Path(output_dir)
     if output.exists() and any(output.iterdir()):
         if not force:
@@ -272,7 +281,9 @@ def build_slime_multi_swe_cpp_dataset(
         write_json(task_path, task)
         sandbox_images.add(str(task["sandbox_image"]))
         task_rel = task_path.relative_to(output).as_posix()
-        eval_rows.append(_eval_row(row, harness=harness, instance_id=instance_id, task_path=task_rel))
+        eval_rows.append(
+            _eval_row(row, harness=harness, instance_id=instance_id, task_path=task_rel)
+        )
         task_paths.append(task_rel)
 
     paths = {
@@ -297,6 +308,8 @@ def build_slime_multi_swe_cpp_dataset(
             "jsonl_path": str(data_path),
             "output_dir": str(output),
             "admitted": False,
+            "harness_mode": OFFICIAL_IMAGE_HARNESS_MODE,
+            "oracle_protocol_version": ORACLE_PROTOCOL_VERSION,
             "sandbox_image_mode": "official-per-task",
             "sandbox_images": sorted(sandbox_images),
             "allowed_repos": sorted(harness.repo_full_name for harness in REPO_HARNESSES.values()),
@@ -483,13 +496,36 @@ def sandbox_image_reference_for_task(task: dict[str, Any]) -> str:
     return sandbox_image_tag_for_task(task)
 
 
-def selected_multi_swe_sandbox_images(data_root: str | Path) -> list[str]:
-    return sorted(
-        {
-            sandbox_image_tag_for_task(task)
-            for _task_path, task in load_prepared_multi_swe_tasks(data_root)
-        }
+def _select_prepared_multi_swe_tasks(
+    prepared_tasks: list[tuple[Path, dict[str, Any]]],
+    task_ids: Sequence[str] | None,
+) -> list[tuple[Path, dict[str, Any]]]:
+    requested = {str(value).strip() for value in task_ids or () if str(value).strip()}
+    if not requested:
+        return prepared_tasks
+    available = {
+        str(task.get("instance_id") or task_path.parent.name) for task_path, task in prepared_tasks
+    }
+    unknown = sorted(requested - available)
+    if unknown:
+        raise ValueError(f"unknown Multi-SWE task id(s): {', '.join(unknown)}")
+    return [
+        (task_path, task)
+        for task_path, task in prepared_tasks
+        if str(task.get("instance_id") or task_path.parent.name) in requested
+    ]
+
+
+def selected_multi_swe_sandbox_images(
+    data_root: str | Path,
+    *,
+    task_ids: Sequence[str] | None = None,
+) -> list[str]:
+    prepared_tasks = _select_prepared_multi_swe_tasks(
+        load_prepared_multi_swe_tasks(data_root),
+        task_ids,
     )
+    return sorted({sandbox_image_tag_for_task(task) for _task_path, task in prepared_tasks})
 
 
 def _pull_docker_image(image: str) -> None:
@@ -541,28 +577,68 @@ def _inspect_docker_image(image: str) -> dict[str, Any]:
     }
 
 
+def _compatible_image_receipt(
+    receipt_path: Path,
+    *,
+    mode: str,
+    override: str | None,
+) -> dict[str, Any]:
+    if not receipt_path.is_file():
+        return {}
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("kind") != SANDBOX_IMAGE_RECEIPT_KIND
+        or receipt.get("mode") != mode
+        or receipt.get("override") != override
+    ):
+        return {}
+    return receipt
+
+
 def prepare_multi_swe_sandbox_images(
     data_root: str | Path,
     *,
     pull: bool = True,
+    task_ids: Sequence[str] | None = None,
 ) -> tuple[dict[str, Any], Path]:
-    """Pull selected task images, resolve immutable identities, and stamp tasks."""
+    """Resolve selected task images and merge their immutable receipt."""
 
     root = Path(data_root)
     prepared_tasks = load_prepared_multi_swe_tasks(root)
+    selected_tasks = _select_prepared_multi_swe_tasks(prepared_tasks, task_ids)
     override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
+    mode = "override" if override else "official-per-task"
+    receipt_path = root / SANDBOX_IMAGES_FILENAME
+    previous = _compatible_image_receipt(
+        receipt_path,
+        mode=mode,
+        override=override or None,
+    )
+    image_details = {
+        str(item["image"]): dict(item)
+        for item in previous.get("images") or []
+        if isinstance(item, dict) and item.get("image")
+    }
+    task_receipts = {
+        str(instance_id): dict(value)
+        for instance_id, value in (previous.get("tasks") or {}).items()
+        if isinstance(value, dict)
+    }
+
     selected_by_task = {
         str(task.get("instance_id") or task_path.parent.name): sandbox_image_tag_for_task(task)
-        for task_path, task in prepared_tasks
+        for task_path, task in selected_tasks
     }
-    image_details: dict[str, dict[str, Any]] = {}
     for image in sorted(set(selected_by_task.values())):
         if pull:
             _pull_docker_image(image)
         image_details[image] = _inspect_docker_image(image)
 
-    task_receipts: dict[str, dict[str, Any]] = {}
-    for task_path, task in prepared_tasks:
+    for task_path, task in selected_tasks:
         instance_id = str(task.get("instance_id") or task_path.parent.name)
         selected_image = selected_by_task[instance_id]
         details = image_details[selected_image]
@@ -570,73 +646,112 @@ def prepare_multi_swe_sandbox_images(
             "image": selected_image,
             "resolved_image": details["resolved_image"],
             "image_id": details["image_id"],
-            "source": "override" if override else "official-per-task",
+            "source": mode,
         }
-        if not override:
-            task["sandbox_image"] = selected_image
-            task["sandbox_image_digest"] = details["resolved_image"]
-            task["sandbox_image_id"] = details["image_id"]
-            write_json(task_path, task)
+        task["sandbox_image"] = selected_image
+        task["sandbox_image_digest"] = details["resolved_image"]
+        task["sandbox_image_id"] = details["image_id"]
+        task["sandbox_image_source"] = mode
+        write_json(task_path, task)
 
     receipt = {
         "kind": SANDBOX_IMAGE_RECEIPT_KIND,
-        "schema_version": 1,
+        "schema_version": 2,
         "benchmark": BENCHMARK,
-        "mode": "override" if override else "official-per-task",
+        "mode": mode,
         "override": override or None,
         "pull_performed": pull,
         "images": [image_details[image] for image in sorted(image_details)],
-        "tasks": task_receipts,
+        "tasks": dict(sorted(task_receipts.items())),
     }
-    receipt_path = root / SANDBOX_IMAGES_FILENAME
     write_json(receipt_path, receipt)
     return receipt, receipt_path
+
+
+def _sha256_text(value: object) -> str:
+    return hashlib.sha256(str(value or "").encode()).hexdigest()
+
+
+def oracle_setup_cache_key(task: dict[str, Any]) -> str:
+    """Fingerprint every input that can change the trusted oracle result."""
+
+    payload = {
+        "protocol_version": ORACLE_PROTOCOL_VERSION,
+        "harness_mode": OFFICIAL_IMAGE_HARNESS_MODE,
+        "instance_id": task.get("instance_id"),
+        "repo_full_name": task.get("repo_full_name"),
+        "base_ref": task.get("base_ref"),
+        "test_patch_sha256": _sha256_text(task.get("test_patch")),
+        "fix_patch_sha256": _sha256_text(task.get("fix_patch")),
+        "sandbox_image": task.get("sandbox_image"),
+        "sandbox_image_digest": task.get("sandbox_image_digest"),
+        "sandbox_image_id": task.get("sandbox_image_id"),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _oracle_metadata(
+    root: Path,
+    task_path: Path,
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    instance_id = task.get("instance_id")
+    return {
+        "task_id": instance_id,
+        "problem_id": instance_id,
+        "instance_id": instance_id,
+        "org": task.get("org"),
+        "repo": task.get("repo"),
+        "repo_full_name": task.get("repo_full_name"),
+        "task_path": task_path.relative_to(root).as_posix(),
+        "task_root": str(root),
+    }
 
 
 def oracle_setup_records_from_prepared_tasks(
     data_root: str | Path,
 ) -> list[dict[str, Any]]:
     root = Path(data_root)
-    records = []
-    for task_path, task in load_prepared_multi_swe_tasks(root):
-        metadata = {
-            "task_id": task.get("instance_id"),
-            "problem_id": task.get("instance_id"),
-            "instance_id": task.get("instance_id"),
-            "org": task.get("org"),
-            "repo": task.get("repo"),
-            "repo_full_name": task.get("repo_full_name"),
-            "task_path": task_path.relative_to(root).as_posix(),
-            "task_root": str(root),
-        }
-        records.append(oracle_setup_record_from_metadata(metadata))
-    return records
+    return [
+        oracle_setup_record_from_metadata(_oracle_metadata(root, task_path, task))
+        for task_path, task in load_prepared_multi_swe_tasks(root)
+    ]
 
 
-def run_multi_swe_oracle_preflight(
-    data_root: str | Path,
+def _persist_oracle_preflight(
+    root: Path,
     *,
-    pull_images: bool = True,
+    prepared_tasks: list[tuple[Path, dict[str, Any]]],
+    records_by_id: dict[str, dict[str, Any]],
+    image_receipt: dict[str, Any],
+    image_receipt_path: Path,
+    reused_count: int,
+    executed_count: int,
+    selected_task_count: int,
 ) -> tuple[dict[str, Path], dict[str, Any]]:
-    """Resolve task images and block admission unless every fix patch passes."""
-
-    root = Path(data_root)
-    image_receipt, image_receipt_path = prepare_multi_swe_sandbox_images(
-        root,
-        pull=pull_images,
-    )
-    records = oracle_setup_records_from_prepared_tasks(root)
+    records = [
+        records_by_id[instance_id]
+        for task_path, task in prepared_tasks
+        if (instance_id := str(task.get("instance_id") or task_path.parent.name)) in records_by_id
+    ]
     records_path = root / ORACLE_RECORDS_FILENAME
     summary_path = root / ORACLE_SUMMARY_FILENAME
     summary = aggregate_oracle_setup_records(
         records,
         records_file=records_path.name,
+        expected_task_count=len(prepared_tasks),
+        reused_count=reused_count,
+        executed_count=executed_count,
     )
     summary.update(
         {
             "summary_file": summary_path.name,
             "sandbox_images_file": image_receipt_path.name,
             "sandbox_image_mode": image_receipt["mode"],
+            "harness_mode": OFFICIAL_IMAGE_HARNESS_MODE,
+            "oracle_protocol_version": ORACLE_PROTOCOL_VERSION,
+            "selected_task_count": selected_task_count,
         }
     )
     _write_jsonl(records_path, records)
@@ -645,10 +760,10 @@ def run_multi_swe_oracle_preflight(
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["admitted"] = summary["all_passed"]
+    manifest["harness_mode"] = OFFICIAL_IMAGE_HARNESS_MODE
+    manifest["oracle_protocol_version"] = ORACLE_PROTOCOL_VERSION
     manifest["sandbox_image_mode"] = image_receipt["mode"]
-    manifest["sandbox_images"] = [
-        str(item["image"]) for item in image_receipt["images"]
-    ]
+    manifest["sandbox_images"] = [str(item["image"]) for item in image_receipt["images"]]
     counts = manifest.setdefault("counts", {})
     counts["oracle_checked"] = summary["task_count"]
     counts["oracle_passed"] = summary["passed_count"]
@@ -658,13 +773,103 @@ def run_multi_swe_oracle_preflight(
     files["sandbox_images"] = image_receipt_path.relative_to(root).as_posix()
     manifest["oracle_setup_check"] = summary
     write_json(manifest_path, manifest)
-
-    paths = {
+    return {
         "manifest": manifest_path,
         "oracle_records": records_path,
         "oracle_summary": summary_path,
         "sandbox_images": image_receipt_path,
+    }, summary
+
+
+def run_multi_swe_oracle_preflight(
+    data_root: str | Path,
+    *,
+    pull_images: bool = True,
+    resume: bool = False,
+    task_ids: Sequence[str] | None = None,
+) -> tuple[dict[str, Path], dict[str, Any]]:
+    """Resolve images and persist a resumable blocking fix-patch proof."""
+
+    root = Path(data_root)
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(
+            f"unsupported Multi-SWE dataset schema in {root / 'manifest.json'}; "
+            "rebuild the prepared data"
+        )
+    prepared_tasks = load_prepared_multi_swe_tasks(root)
+    selected_tasks = _select_prepared_multi_swe_tasks(prepared_tasks, task_ids)
+    selected_ids = {
+        str(task.get("instance_id") or task_path.parent.name) for task_path, task in selected_tasks
     }
+    image_receipt, image_receipt_path = prepare_multi_swe_sandbox_images(
+        root,
+        pull=pull_images,
+        task_ids=tuple(sorted(selected_ids)),
+    )
+    prepared_tasks = load_prepared_multi_swe_tasks(root)
+
+    records_path = root / ORACLE_RECORDS_FILENAME
+    existing_rows = _read_jsonl(records_path) if records_path.is_file() else []
+    existing_by_id = {
+        str(row.get("instance_id") or row.get("task_id")): row
+        for row in existing_rows
+        if isinstance(row, dict) and (row.get("instance_id") or row.get("task_id"))
+    }
+    preserve_existing = resume or bool(task_ids)
+    records_by_id: dict[str, dict[str, Any]] = {}
+    if preserve_existing:
+        for _task_path, task in prepared_tasks:
+            instance_id = str(task.get("instance_id"))
+            row = existing_by_id.get(instance_id)
+            if (
+                row is not None
+                and row.get("oracle_cache_key") == oracle_setup_cache_key(task)
+                and row.get("harness_mode") == OFFICIAL_IMAGE_HARNESS_MODE
+            ):
+                records_by_id[instance_id] = row
+
+    reused_count = 0
+    executed_count = 0
+    selected_total = len(selected_ids)
+    selected_index = 0
+    paths: dict[str, Path] = {}
+    summary: dict[str, Any] = {}
+    for task_path, task in prepared_tasks:
+        instance_id = str(task.get("instance_id") or task_path.parent.name)
+        if instance_id not in selected_ids:
+            continue
+        selected_index += 1
+        cached = records_by_id.get(instance_id)
+        if resume and cached is not None and cached.get("setup_valid") is True:
+            reused_count += 1
+            action = "reused"
+            record = cached
+        else:
+            record = oracle_setup_record_from_metadata(_oracle_metadata(root, task_path, task))
+            record["oracle_cache_key"] = oracle_setup_cache_key(task)
+            record["harness_mode"] = OFFICIAL_IMAGE_HARNESS_MODE
+            records_by_id[instance_id] = record
+            executed_count += 1
+            action = "executed"
+        print(
+            f"[{selected_index}/{selected_total}] {action} {instance_id}: "
+            f"{record.get('reason', 'unknown')}",
+            flush=True,
+        )
+        paths, summary = _persist_oracle_preflight(
+            root,
+            prepared_tasks=prepared_tasks,
+            records_by_id=records_by_id,
+            image_receipt=image_receipt,
+            image_receipt_path=image_receipt_path,
+            reused_count=reused_count,
+            executed_count=executed_count,
+            selected_task_count=selected_total,
+        )
+
+    if not selected_tasks:  # pragma: no cover - selection rejects this earlier
+        raise ValueError("no Multi-SWE tasks selected")
     return paths, summary
 
 
@@ -684,7 +889,13 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
         raise ValueError(f"Multi-SWE dataset has not passed blocking admission: {manifest_path}")
 
     oracle_check = manifest.get("oracle_setup_check")
-    if not isinstance(oracle_check, dict) or oracle_check.get("all_passed") is not True:
+    if (
+        not isinstance(oracle_check, dict)
+        or oracle_check.get("all_passed") is not True
+        or oracle_check.get("complete") is not True
+        or oracle_check.get("harness_mode") != OFFICIAL_IMAGE_HARNESS_MODE
+        or oracle_check.get("oracle_protocol_version") != ORACLE_PROTOCOL_VERSION
+    ):
         raise ValueError(f"Multi-SWE dataset is missing a passing oracle proof: {manifest_path}")
     if oracle_check.get("correct_answer_source") != "fix_patch":
         raise ValueError(f"unexpected Multi-SWE correct-answer source in {manifest_path}")
@@ -696,7 +907,16 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
             raise ValueError(f"missing Multi-SWE dataset artifact {key!r} under {root}")
 
     oracle_summary = json.loads((root / files["oracle_summary"]).read_text(encoding="utf-8"))
-    for key in ("all_passed", "task_count", "passed_count", "correct_answer_source"):
+    for key in (
+        "all_passed",
+        "complete",
+        "expected_task_count",
+        "task_count",
+        "passed_count",
+        "correct_answer_source",
+        "harness_mode",
+        "oracle_protocol_version",
+    ):
         if oracle_summary.get(key) != oracle_check.get(key):
             raise ValueError(f"Multi-SWE oracle summary mismatch for {key!r} in {manifest_path}")
     oracle_records = _read_jsonl(root / files["oracle_records"])
@@ -704,6 +924,9 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
         record.get("setup_valid") is True for record in oracle_records
     ):
         raise ValueError(f"Multi-SWE oracle records do not prove admission in {manifest_path}")
+    records_by_id = {
+        str(record.get("instance_id") or record.get("task_id")): record for record in oracle_records
+    }
 
     image_receipt = json.loads((root / files["sandbox_images"]).read_text(encoding="utf-8"))
     if image_receipt.get("kind") != SANDBOX_IMAGE_RECEIPT_KIND:
@@ -715,10 +938,14 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
     override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
     if override:
         if image_receipt.get("mode") != "override" or image_receipt.get("override") != override:
-            raise ValueError(f"Multi-SWE sandbox-image override does not match admission in {manifest_path}")
+            raise ValueError(
+                f"Multi-SWE sandbox-image override does not match admission in {manifest_path}"
+            )
     else:
         if image_receipt.get("mode") != "official-per-task":
-            raise ValueError(f"Multi-SWE data was admitted with a debug image override: {manifest_path}")
+            raise ValueError(
+                f"Multi-SWE data was admitted with a debug image override: {manifest_path}"
+            )
         for task_path, task in tasks:
             expected_image = official_multi_swe_sandbox_image(
                 task.get("org"), task.get("repo"), task.get("number")
@@ -727,6 +954,12 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
                 raise ValueError(f"unsupported Multi-SWE task schema in {task_path}")
             if task.get("sandbox_image") != expected_image:
                 raise ValueError(f"unexpected Multi-SWE sandbox image in {task_path}")
+            instance_id = str(task.get("instance_id"))
+            record = records_by_id.get(instance_id)
+            if record is None or record.get("oracle_cache_key") != oracle_setup_cache_key(task):
+                raise ValueError(
+                    f"stale Multi-SWE oracle record for {instance_id} in {manifest_path}"
+                )
             resolved_image = task.get("sandbox_image_digest")
             if not isinstance(resolved_image, str) or not (
                 "@sha256:" in resolved_image or resolved_image.startswith("sha256:")
@@ -947,7 +1180,9 @@ def _iter_fenced_blocks(text: str) -> Iterable[dict[str, Any]]:
         cursor = end + 4
 
 
-async def reward_func(args: Any, sample: Any, **_kwargs: Any) -> dict[str, Any] | list[dict[str, Any]]:
+async def reward_func(
+    args: Any, sample: Any, **_kwargs: Any
+) -> dict[str, Any] | list[dict[str, Any]]:
     """SLIME custom reward hook for one Multi-SWE sample or a batch."""
 
     if isinstance(sample, list):
@@ -996,11 +1231,17 @@ def _score_sample(sample: Any) -> dict[str, Any]:
 
     try:
         result = run_multi_swe_tests(task, patch)
-        return _record_from_test_result(sample, metadata, task, result, patch_bytes=len(patch.encode()))
+        return _record_from_test_result(
+            sample, metadata, task, result, patch_bytes=len(patch.encode())
+        )
     except MultiSweResponseError as exc:
-        return _record(sample, metadata, score=-1.0, reason=exc.reason, exception=str(exc), task=task)
+        return _record(
+            sample, metadata, score=-1.0, reason=exc.reason, exception=str(exc), task=task
+        )
     except Exception as exc:  # pragma: no cover - guards real rollout workers
-        return _record(sample, metadata, score=-0.5, reason="harness_error", exception=str(exc), task=task)
+        return _record(
+            sample, metadata, score=-0.5, reason="harness_error", exception=str(exc), task=task
+        )
 
 
 def _attach_recovery_diagnostics(
@@ -1063,46 +1304,195 @@ def _resolve_task_path(task_path: str, *, metadata: dict[str, Any]) -> Path:
 
 
 def run_multi_swe_tests(task: dict[str, Any], patch: str) -> MultiSweTestResult:
-    """Apply test/model patches and run the repository harness in Docker."""
+    """Run standard tasks in their prepared official instance image."""
+
+    repo_harness_for_task(task)
+    timeout_s = int(os.environ.get(TEST_TIMEOUT_ENV, str(DEFAULT_TEST_TIMEOUT_SECONDS)))
+    if not os.environ.get(SANDBOX_IMAGE_ENV, "").strip():
+        return run_official_instance_tests(task, patch, timeout_s=timeout_s)
+    return _run_multi_swe_tests_from_checkout(task, patch, timeout_s=timeout_s)
+
+
+def _official_instance_script(
+    task: dict[str, Any],
+    harness: MultiSweRepoHarness,
+    *,
+    timeout_s: int,
+) -> str:
+    repo_dir = f"/home/{harness.repo}"
+    base_ref = str(task.get("base_ref") or "").strip()
+    expected_test_patch_sha = _sha256_text(task.get("test_patch"))
+    quoted_repo = shlex.quote(repo_dir)
+    quoted_base = shlex.quote(base_ref)
+    return f"""
+set -euo pipefail
+repo_dir={quoted_repo}
+if [ ! -d "$repo_dir/.git" ] || [ ! -f /home/test.patch ] || [ ! -f /home/fix-run.sh ]; then
+  echo W8_OFFICIAL_IMAGE_CONTRACT_ERROR
+  exit {_OFFICIAL_CONTRACT_ERROR}
+fi
+actual_head="$(git -C "$repo_dir" rev-parse HEAD)"
+expected_head="$(git -C "$repo_dir" rev-parse {quoted_base}^{{commit}} 2>/dev/null || true)"
+if [ -z "$expected_head" ] || [ "$actual_head" != "$expected_head" ]; then
+  echo "W8_OFFICIAL_IMAGE_BASE_MISMATCH expected=$expected_head actual=$actual_head"
+  exit {_OFFICIAL_CONTRACT_ERROR}
+fi
+actual_test_patch_sha="$(sha256sum /home/test.patch | awk '{{print $1}}')"
+if [ "$actual_test_patch_sha" != "{expected_test_patch_sha}" ]; then
+  echo W8_OFFICIAL_IMAGE_TEST_PATCH_MISMATCH
+  exit {_TRUSTED_PATCH_ERROR}
+fi
+if [ -s /home/test.patch ]; then
+  if ! git -C "$repo_dir" apply --check --whitespace=nowarn /home/test.patch; then
+    echo W8_TRUSTED_TEST_PATCH_APPLY_ERROR
+    exit {_TRUSTED_PATCH_ERROR}
+  fi
+  if ! git -C "$repo_dir" apply --check --whitespace=nowarn /home/test.patch /home/fix.patch; then
+    echo W8_CANDIDATE_PATCH_APPLY_ERROR
+    exit {_CANDIDATE_PATCH_ERROR}
+  fi
+elif ! git -C "$repo_dir" apply --check --whitespace=nowarn /home/fix.patch; then
+  echo W8_CANDIDATE_PATCH_APPLY_ERROR
+  exit {_CANDIDATE_PATCH_ERROR}
+fi
+timeout {timeout_s}s bash /home/fix-run.sh
+""".strip()
+
+
+def _official_multi_swe_docker_args(
+    patch_path: Path,
+    *,
+    image: str,
+    memory: str = DEFAULT_MEMORY,
+) -> list[str]:
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--cpus",
+        "2",
+        "--memory",
+        memory,
+        "--pids-limit",
+        "256",
+        "--tmpfs",
+        "/tmp:rw,nosuid,size=512m,mode=1777",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "-v",
+        f"{patch_path.resolve()}:/home/fix.patch:ro",
+        image,
+    ]
+
+
+def run_official_instance_tests(
+    task: dict[str, Any],
+    patch: str,
+    *,
+    timeout_s: int | None = None,
+) -> MultiSweTestResult:
+    """Grade in the image-prepared checkout, build tree, and offline assets."""
 
     harness = repo_harness_for_task(task)
-    timeout_s = int(os.environ.get(TEST_TIMEOUT_ENV, str(DEFAULT_TEST_TIMEOUT_SECONDS)))
-    started = time.monotonic()
+    timeout = timeout_s or int(os.environ.get(TEST_TIMEOUT_ENV, str(DEFAULT_TEST_TIMEOUT_SECONDS)))
+    image = sandbox_image_reference_for_task(task)
+    image_id = str(task.get("sandbox_image_id") or "").strip() or None
+    with TemporaryDirectory(prefix="w8-multi-swe-patch-") as scratch_dir:
+        patch_path = Path(scratch_dir) / "fix.patch"
+        patch_path.write_text(patch, encoding="utf-8")
+        command = _official_multi_swe_docker_args(patch_path, image=image) + [
+            "bash",
+            "-lc",
+            _official_instance_script(task, harness, timeout_s=timeout),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 30,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logs = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()
+            return MultiSweTestResult(
+                returncode=None,
+                logs=logs,
+                timeout=True,
+                sandbox_image=image,
+                sandbox_image_id=image_id,
+            )
+
+    logs = _logs(result)
+    tests_collected = _ctest_tests_collected(logs)
+    no_tests_collected = _ctest_collected_no_tests(
+        logs,
+        returncode=result.returncode,
+        tests_collected=tests_collected,
+    )
+    contract_error = result.returncode in {_OFFICIAL_CONTRACT_ERROR, _TRUSTED_PATCH_ERROR}
+    patch_apply_error = result.returncode == _CANDIDATE_PATCH_ERROR
+    return MultiSweTestResult(
+        returncode=result.returncode,
+        logs=logs,
+        timeout=result.returncode == 124,
+        harness_error=contract_error or no_tests_collected,
+        patch_apply_error=patch_apply_error,
+        no_tests_collected=no_tests_collected,
+        tests_collected=tests_collected,
+        sandbox_image=image,
+        sandbox_image_id=image_id,
+    )
+
+
+def _run_multi_swe_tests_from_checkout(
+    task: dict[str, Any],
+    patch: str,
+    *,
+    timeout_s: int,
+) -> MultiSweTestResult:
+    """Legacy generic-image debugging path; standard evaluation never uses it."""
+
+    harness = repo_harness_for_task(task)
+    clone_timeout_s = int(os.environ.get(CLONE_TIMEOUT_ENV, str(DEFAULT_CLONE_TIMEOUT_SECONDS)))
     with TemporaryDirectory(prefix="w8-multi-swe-cpp-") as scratch_dir:
-        scratch = Path(scratch_dir)
-        repo_dir = scratch / "repo"
-        clone = clone_repository(task, harness, repo_dir, timeout_s=timeout_s)
+        repo_dir = Path(scratch_dir) / "repo"
+        clone = clone_repository(task, harness, repo_dir, timeout_s=clone_timeout_s)
         if clone.returncode != 0:
-            return MultiSweTestResult(returncode=clone.returncode, logs=_logs(clone), harness_error=True)
-        checkout = checkout_base_ref(task, repo_dir, timeout_s=timeout_s)
+            return MultiSweTestResult(
+                returncode=clone.returncode, logs=_logs(clone), harness_error=True
+            )
+        checkout = checkout_base_ref(task, repo_dir, timeout_s=clone_timeout_s)
         if checkout.returncode != 0:
-            return MultiSweTestResult(returncode=checkout.returncode, logs=_logs(checkout), harness_error=True)
+            return MultiSweTestResult(
+                returncode=checkout.returncode, logs=_logs(checkout), harness_error=True
+            )
         test_patch = str(task.get("test_patch") or "")
         if test_patch.strip():
-            applied = apply_patch_to_repo(repo_dir, test_patch, timeout_s=timeout_s)
+            applied = apply_patch_to_repo(repo_dir, test_patch, timeout_s=clone_timeout_s)
             if applied.returncode != 0:
-                return MultiSweTestResult(returncode=applied.returncode, logs=_logs(applied), harness_error=True)
-        checked = check_patch_in_repo(repo_dir, patch, timeout_s=timeout_s)
+                return MultiSweTestResult(
+                    returncode=applied.returncode, logs=_logs(applied), harness_error=True
+                )
+        checked = check_patch_in_repo(repo_dir, patch, timeout_s=clone_timeout_s)
         if checked.returncode != 0:
             return MultiSweTestResult(
                 returncode=checked.returncode,
                 logs=_logs(checked),
                 patch_apply_error=True,
             )
-        applied = apply_patch_to_repo(repo_dir, patch, timeout_s=timeout_s)
+        applied = apply_patch_to_repo(repo_dir, patch, timeout_s=clone_timeout_s)
         if applied.returncode != 0:
             return MultiSweTestResult(
                 returncode=applied.returncode,
                 logs=_logs(applied),
                 patch_apply_error=True,
             )
-        remaining_timeout = max(30, int(timeout_s - (time.monotonic() - started)))
-        return run_repository_tests(
-            repo_dir,
-            harness,
-            task=task,
-            timeout_s=remaining_timeout,
-        )
+        return run_repository_tests(repo_dir, harness, task=task, timeout_s=timeout_s)
 
 
 def clone_repository(
@@ -1142,7 +1532,9 @@ def check_patch_in_repo(
     timeout_s: int,
 ) -> subprocess.CompletedProcess[str]:
     command = ["git", "-C", str(repo_dir), "apply", "--check", "--whitespace=nowarn", "-"]
-    return subprocess.run(command, input=patch, capture_output=True, text=True, timeout=timeout_s, check=False)
+    return subprocess.run(
+        command, input=patch, capture_output=True, text=True, timeout=timeout_s, check=False
+    )
 
 
 def apply_patch_to_repo(
@@ -1152,7 +1544,9 @@ def apply_patch_to_repo(
     timeout_s: int,
 ) -> subprocess.CompletedProcess[str]:
     command = ["git", "-C", str(repo_dir), "apply", "--whitespace=nowarn", "-"]
-    return subprocess.run(command, input=patch, capture_output=True, text=True, timeout=timeout_s, check=False)
+    return subprocess.run(
+        command, input=patch, capture_output=True, text=True, timeout=timeout_s, check=False
+    )
 
 
 def run_repository_tests(
@@ -1173,7 +1567,9 @@ def run_repository_tests(
         f"timeout {timeout}s bash -lc {shlex.quote(harness.test_command)}",
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout + 30, check=False)
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout + 30, check=False
+        )
     except subprocess.TimeoutExpired as exc:
         logs = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()
         return MultiSweTestResult(
@@ -1183,7 +1579,7 @@ def run_repository_tests(
             sandbox_image=image,
             sandbox_image_id=image_id,
         )
-    logs = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    logs = _logs(result)
     tests_collected = _ctest_tests_collected(logs)
     no_tests_collected = _ctest_collected_no_tests(
         logs,
@@ -1286,7 +1682,9 @@ def _record_from_test_result(
     elif result.timeout:
         record = _record(sample, metadata, task=task, score=-0.5, reason="timeout", timeout=True)
     elif _looks_like_compile_error(result.logs):
-        record = _record(sample, metadata, task=task, score=-0.5, reason="compile_error", compile_error=True)
+        record = _record(
+            sample, metadata, task=task, score=-0.5, reason="compile_error", compile_error=True
+        )
     else:
         record = _record(
             sample,
@@ -1313,7 +1711,9 @@ def _record_from_test_result(
     return record
 
 
-def _recovered_fields_from_test_result(result: MultiSweTestResult, *, patch_bytes: int) -> dict[str, Any]:
+def _recovered_fields_from_test_result(
+    result: MultiSweTestResult, *, patch_bytes: int
+) -> dict[str, Any]:
     if result.passed:
         fields = {
             "recovered_reason": "passed",
@@ -1460,7 +1860,10 @@ def oracle_setup_records_from_debug_samples(
         if not task_path:
             continue
         task_key = task_path or str(
-            metadata.get("task_id") or metadata.get("problem_id") or metadata.get("instance_id") or ""
+            metadata.get("task_id")
+            or metadata.get("problem_id")
+            or metadata.get("instance_id")
+            or ""
         )
         if not task_key or task_key in seen:
             continue
@@ -1480,6 +1883,8 @@ def oracle_setup_record_from_metadata(metadata: dict[str, Any]) -> dict[str, Any
         return record
 
     record.update(_oracle_setup_task_fields(task))
+    record["oracle_cache_key"] = oracle_setup_cache_key(task)
+    record["harness_mode"] = OFFICIAL_IMAGE_HARNESS_MODE
     fix_patch = str(task.get("fix_patch") or "")
     record["fix_patch_bytes"] = len(fix_patch.encode())
     if not fix_patch.strip():
@@ -1500,7 +1905,9 @@ def oracle_setup_record_from_metadata(metadata: dict[str, Any]) -> dict[str, Any
 
 
 def _oracle_setup_base_record(metadata: dict[str, Any]) -> dict[str, Any]:
-    instance_id = metadata.get("instance_id") or metadata.get("task_id") or metadata.get("problem_id")
+    instance_id = (
+        metadata.get("instance_id") or metadata.get("task_id") or metadata.get("problem_id")
+    )
     return {
         "benchmark": BENCHMARK,
         "data_source": DATA_SOURCE,
@@ -1527,6 +1934,8 @@ def _oracle_setup_base_record(metadata: dict[str, Any]) -> dict[str, Any]:
         "tests_failed": False,
         "sandbox_image": metadata.get("sandbox_image"),
         "sandbox_image_id": None,
+        "harness_mode": OFFICIAL_IMAGE_HARNESS_MODE,
+        "oracle_cache_key": None,
         "fix_patch_bytes": 0,
     }
 
@@ -1591,11 +2000,14 @@ def aggregate_oracle_setup_records(
     records: Iterable[dict[str, Any]],
     *,
     records_file: str | None = None,
+    expected_task_count: int | None = None,
+    reused_count: int = 0,
+    executed_count: int = 0,
 ) -> dict[str, Any]:
     rows = list(records)
     passed = [row for row in rows if row.get("setup_valid") is True]
     reason_counts = Counter(str(row.get("reason", "unknown")) for row in rows)
-    return {
+    summary = {
         "enabled": True,
         "blocking": True,
         "phase": "data_preflight",
@@ -1609,6 +2021,20 @@ def aggregate_oracle_setup_records(
         "reason_counts": dict(sorted(reason_counts.items())),
         "repo_summary": _oracle_repo_summary(rows),
     }
+    if expected_task_count is not None:
+        missing_count = max(0, expected_task_count - len(rows))
+        complete = expected_task_count > 0 and missing_count == 0
+        summary.update(
+            {
+                "expected_task_count": expected_task_count,
+                "missing_count": missing_count,
+                "complete": complete,
+                "reused_count": reused_count,
+                "executed_count": executed_count,
+                "all_passed": complete and len(passed) == expected_task_count,
+            }
+        )
+    return summary
 
 
 def _oracle_repo_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -1647,7 +2073,9 @@ def score_debug_dump(
     records_path = output / f"{label}.records.jsonl"
     summary_path = output / f"{label}.summary.json"
     paths = {"records": records_path, "summary": summary_path}
-    should_run_oracle_check = _oracle_setup_check_enabled() if run_oracle_check is None else run_oracle_check
+    should_run_oracle_check = (
+        _oracle_setup_check_enabled() if run_oracle_check is None else run_oracle_check
+    )
     if should_run_oracle_check:
         prepared_records_path = Path(data_root) / ORACLE_RECORDS_FILENAME if data_root else None
         if prepared_records_path is not None and prepared_records_path.is_file():
@@ -1769,7 +2197,9 @@ def aggregate_multi_swe_records(records: Iterable[dict[str, Any]], *, label: str
     }
 
 
-def _repo_summary(rows: list[dict[str, Any]], best_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _repo_summary(
+    rows: list[dict[str, Any]], best_rows: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     sample_by_repo: dict[str, list[dict[str, Any]]] = defaultdict(list)
     best_by_repo: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -1819,7 +2249,9 @@ def _rate(rows: list[dict[str, Any]], key: str) -> float:
 def _task_any_rate(by_task: dict[str, list[dict[str, Any]]], key: str) -> float:
     if not by_task:
         return 0.0
-    return sum(1 for task_rows in by_task.values() if any(row.get(key) is True for row in task_rows)) / len(by_task)
+    return sum(
+        1 for task_rows in by_task.values() if any(row.get(key) is True for row in task_rows)
+    ) / len(by_task)
 
 
 def _reason_rate(rows: list[dict[str, Any]], reason: str) -> float:
@@ -1913,8 +2345,13 @@ def _preflight_command(args: argparse.Namespace) -> None:
                 {
                     "data_root": str(Path(args.data_root).resolve()),
                     "task_count": len(tasks),
-                    "sandbox_images": selected_multi_swe_sandbox_images(args.data_root),
+                    "sandbox_images": selected_multi_swe_sandbox_images(
+                        args.data_root,
+                        task_ids=args.task_id,
+                    ),
                     "pull_images": not args.no_pull,
+                    "resume": args.resume,
+                    "task_ids": args.task_id or [],
                     "correct_answer_source": "fix_patch",
                 },
                 indent=2,
@@ -1925,6 +2362,8 @@ def _preflight_command(args: argparse.Namespace) -> None:
     paths, summary = run_multi_swe_oracle_preflight(
         args.data_root,
         pull_images=not args.no_pull,
+        resume=args.resume,
+        task_ids=args.task_id,
     )
     print(
         json.dumps(
@@ -1972,7 +2411,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    build_data = subparsers.add_parser("build-data", help="Convert Multi-SWE C++ rows into SLIME JSONL")
+    build_data = subparsers.add_parser(
+        "build-data", help="Convert Multi-SWE C++ rows into SLIME JSONL"
+    )
     build_data.add_argument("--source-root", required=True)
     build_data.add_argument("--jsonl", default=None)
     build_data.add_argument("--out", required=True)
@@ -1988,6 +2429,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     preflight.add_argument("--data-root", required=True)
     preflight.add_argument("--no-pull", action="store_true")
+    preflight.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reuse only passing records whose task/image fingerprint still matches",
+    )
+    preflight.add_argument(
+        "--task-id",
+        action="append",
+        default=None,
+        help="Run or refresh one task; repeat for multiple tasks",
+    )
     preflight.add_argument("--dry-run", action="store_true")
     preflight.set_defaults(func=_preflight_command)
 
@@ -1998,7 +2450,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     verify_data.add_argument("--data-root", required=True)
     verify_data.set_defaults(func=_verify_data_command)
 
-    aggregate = subparsers.add_parser("aggregate-debug", help="Aggregate SLIME debug rollout samples")
+    aggregate = subparsers.add_parser(
+        "aggregate-debug", help="Aggregate SLIME debug rollout samples"
+    )
     aggregate.add_argument("--label", required=True, choices=("base",))
     aggregate.add_argument("--debug-rollout", required=True)
     aggregate.add_argument("--out", required=True)

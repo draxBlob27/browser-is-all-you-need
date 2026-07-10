@@ -15,24 +15,36 @@ or artifact field descriptions.
 
 ## What It Does
 
-`prepare_data.sh` now performs blocking data admission before any model download,
-Ray startup, or GPU rollout:
+`prepare_data.sh` performs blocking data admission before model download, Ray,
+or GPU rollout:
 
-1. Convert supported C++ rows from `multi_swe_bench_mini.jsonl` into schema-v2
+1. Convert supported C++ rows from `multi_swe_bench_mini.jsonl` into schema-v3
    task JSON and `eval/cpp.jsonl`.
-2. Select the official per-instance image
-   `mswebench/<org>_m_<lowercase-repo>:pr-<number>` for every task.
-3. Pull each selected image, resolve its immutable digest/image ID, and stamp the
-   task plus `sandbox-images.json`.
-4. Apply each grading-only dataset `fix_patch` and run the same repository
-   harness used for model answers.
-5. Admit the manifest only if every oracle returns zero and CTest reports a
-   positive test count.
+2. Select the official lowercase per-instance image
+   `mswebench/<org>_m_<repo>:pr-<number>`, then pin its digest and image ID.
+3. Grade directly in that image's repository at the task's exact base revision,
+   prepared build directory, and bundled offline test assets. The standard path
+   does not clone GitHub repositories.
+4. Verify that the image's trusted `test.patch` matches the dataset, mount only
+   the candidate or `fix_patch` read-only, and run `/home/fix-run.sh` with
+   container networking disabled.
+5. Require a successful result and a positive parsed CTest count. Exit zero with
+   no discovered tests remains `no_tests_collected`, never a pass.
+6. Write `oracle.records.jsonl`, `oracle.summary.json`, and the manifest after
+   every task. `--resume` reuses only passing records whose task patches, base
+   revision, image digest/ID, and harness protocol fingerprint still match.
+
+This directly fixes two misleading setup failures:
+
+- Slow fresh repository clones no longer consume the build/test timeout. The
+  default 1200-second budget applies to the image's build/test command alone.
+- `nlohmann/json` uses the official image's preloaded `json_test_data`, so
+  `download_test_data` does not need network access inside the offline grader.
 
 For example, Catch2 PR 1608 uses
 `mswebench/catchorg_m_catch2:pr-1608` (all repository components must be
-lowercase). This preserves the task's intended GCC/glibc/CMake environment;
-the generic GCC 13 image is not the evaluation default.
+lowercase). This preserves the intended GCC/glibc/CMake environment; the
+generic GCC 13 image is not the evaluation default.
 
 The bridge is:
 
@@ -49,28 +61,20 @@ It supports these C++ repositories:
 - `yhirose/cpp-httplib`
 
 Each eval row keeps grading-only fields such as `fix_patch`, `test_patch`, and
-test buckets in task JSON under the run data directory. The prompt does not
-include those oracle fields.
+test buckets in task JSON. The prompt never includes those oracle fields.
 
-`eval_base.sh` first runs `verify-data`, so stale, provisional, failed, or
-missing admission artifacts stop the lane before model loading. SLIME then runs
-debug rollout-only eval against the base Moonlight checkpoint. The reward hook
-parses one unified diff, rejects forbidden edits, applies the dataset
-`test_patch`, applies the candidate patch, and runs the repository-specific C++
-harness in the task's digest-pinned image:
+`eval_base.sh` first runs `verify-data`, so stale, provisional, failed,
+incomplete, or fingerprint-mismatched proof stops the lane before model
+loading. SLIME then runs rollout-only eval; the reward hook parses one unified
+diff, rejects forbidden edits, and grades it through the same digest-pinned
+official-image path:
 
 ```text
 w8_biayn.integrations.slime_multi_swe_cpp.reward_func
 ```
 
-All harnesses run `cd build && ctest --output-on-failure`, which works with the
-official images' older CMake versions. Exit code 0 is insufficient: zero or
-unreported collected tests is `no_tests_collected`, a harness error and a failed
-oracle/model result. This prevents `No tests were found!!!` from becoming a
-false pass.
-
-Aggregation copies the prepared oracle proof into
-`eval/base.oracle.records.jsonl`; it does not need to rerun all oracle builds.
+Aggregation copies the prepared proof into `eval/base.oracle.records.jsonl`;
+it does not rerun all oracle builds.
 
 ## Setup
 
@@ -119,68 +123,118 @@ uv run python -m w8_biayn.integrations.slime_multi_swe_cpp sandbox-image --dry-r
 
 ## Run
 
-Inside the SLIME container:
+Inside the generated SLIME container, prepare all 50 C++ tasks:
 
 ```bash
 cd /workspace/browser-is-all-you-need
 
-export SLIME_RUN_ID="moonlight_multi_swe_cpp_$(date -u +%Y%m%d%H%M%S)"
+export SLIME_RUN_ID="multi_swe_cpp_all"
+export SLIME_MULTI_SWE_DATA_DIR="/workspace/browser-is-all-you-need/.w8-biayn/slime/moonlight-multi-swe-cpp/runs/${SLIME_RUN_ID}/data"
 export SLIME_MULTI_SWE_SOURCE=/workspace/browser-is-all-you-need/.w8-biayn/data/multi-swe-bench-mini
-export SLIME_MULTI_SWE_EVAL_LIMIT=3
-export SLIME_EVAL_MAX_RESPONSE_LEN=16384
-export SLIME_NUM_GPUS=4
-export SLIME_TENSOR_MODEL_PARALLEL_SIZE=2
-export SLIME_EXPERT_MODEL_PARALLEL_SIZE=4
-export SLIME_SGLANG_MEM_FRACTION=0.45
-
-# Leave W8_SLIME_MULTI_SWE_SANDBOX_IMAGE unset for official per-task images.
+export SLIME_MULTI_SWE_EVAL_LIMIT=50
+export SLIME_MULTI_SWE_REBUILD_DATA=0
+export SLIME_MULTI_SWE_RESUME=1
+export SLIME_MULTI_SWE_PULL_IMAGES=auto
+export W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS=1200
 unset W8_SLIME_MULTI_SWE_SANDBOX_IMAGE
 
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
+```
+
+A schema-v2 data directory cannot be reused because it was created by the old
+clone-based protocol. Rebuild that directory once, then return the knob to
+zero:
+
+```bash
+export SLIME_MULTI_SWE_REBUILD_DATA=1
+bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
+export SLIME_MULTI_SWE_REBUILD_DATA=0
+```
+
+After interruption or failure, use the same run ID and data directory. This
+does not rebuild JSON, pull warm images, clone repositories, or rerun matching
+passes; failed, missing, or stale records are retried:
+
+```bash
+export SLIME_MULTI_SWE_REBUILD_DATA=0
+export SLIME_MULTI_SWE_RESUME=1
+export SLIME_MULTI_SWE_PULL_IMAGES=0
+bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
+```
+
+To refresh only the two observed nlohmann tasks, then finish the blocking
+all-task admission:
+
+```bash
+PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
+  --data-root "$SLIME_MULTI_SWE_DATA_DIR" \
+  --no-pull \
+  --resume \
+  --task-id nlohmann__json-1323 \
+  --task-id nlohmann__json-2099
+
+PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
+  --data-root "$SLIME_MULTI_SWE_DATA_DIR" \
+  --no-pull \
+  --resume
+
+PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp verify-data \
+  --data-root "$SLIME_MULTI_SWE_DATA_DIR"
+```
+
+A targeted command remains nonzero while any unselected record is missing or
+failing; full admission still requires all 50 tasks. Per-task progress is
+printed and committed to the local JSONL proof after every task.
+
+Only after `verify-data` succeeds, run the GPU evaluation:
+
+```bash
 bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh
 ```
 
-`prepare_data.sh` pulls images and compiles/tests every selected oracle, so it
-can take several minutes and emit long build logs. Use
-`SLIME_MULTI_SWE_PULL_IMAGES=0` only when every selected image is already in the
-local Docker cache; image inspection and the oracle checks still run.
+`SLIME_MULTI_SWE_PULL_IMAGES=auto` pulls on a fresh data build and skips pulls
+when the compatible image receipt already exists. Set it to `1` to force
+registry checks or `0` when all selected images are known to be local.
 
-For a deliberate debugging experiment only, set one compatible image before
-both preparation and evaluation:
+For a deliberate generic-image debugging experiment only, set one compatible
+override before both preparation and evaluation:
 
 ```bash
 export W8_SLIME_MULTI_SWE_SANDBOX_IMAGE=w8-biayn-multi-swe-cpp:latest
 ```
 
-Such data is admitted in `override` mode and `verify-data` requires the same
-override during evaluation. Do not present override-mode results as the default
+Override mode retains the checkout/cache fallback and is not the standard
 per-instance evaluation.
 
 ## Operator Checklist
 
 Before starting the paid/base-model rollout:
 
-- [ ] `git lfs install` succeeds and the dataset JSONL is materialized.
-- [ ] Docker is reachable from `.w8-biayn/slime/run-container.sh`.
+- [ ] The dataset JSONL is materialized and the SLIME container can reach Docker.
 - [ ] `W8_SLIME_MULTI_SWE_SANDBOX_IMAGE` is unset for the standard run.
-- [ ] `prepare_data.sh` exits 0 after all image pulls and oracle tests.
-- [ ] `data/manifest.json` has `schema_version: 2` and `admitted: true`.
-- [ ] `data/oracle.summary.json` has `all_passed: true` and matching task/pass
-      counts.
-- [ ] Every `data/oracle.records.jsonl` row has `tests_collected > 0` and records
-      the selected sandbox image.
-- [ ] `data/sandbox-images.json` says `mode: official-per-task` and records
-      immutable identities.
+- [ ] `data/manifest.json` has `schema_version: 3`, `admitted: true`, and
+      `harness_mode: official-instance-image`.
+- [ ] `data/oracle.summary.json` has `complete: true`, `all_passed: true`, and
+      matching expected/task/pass counts.
+- [ ] Every oracle row has `tests_collected > 0`, `setup_valid: true`, an
+      `oracle_cache_key`, and the immutable sandbox identity.
+- [ ] `data/sandbox-images.json` says `mode: official-per-task`.
+- [ ] No standard-path process is running `git clone`; only short-lived
+      `mswebench/*` containers should appear during grading.
 - [ ] Only then run `eval_base.sh` and inspect `base.summary.json`.
 
-Useful checks:
+Useful read-only checks:
 
 ```bash
-uv run python -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
-  --data-root "${SLIME_RUN_ROOT:-.w8-biayn/slime/moonlight-multi-swe-cpp/runs/${SLIME_RUN_ID}}/data" \
-  --dry-run
-uv run python -m w8_biayn.integrations.slime_multi_swe_cpp verify-data \
-  --data-root "${SLIME_RUN_ROOT:-.w8-biayn/slime/moonlight-multi-swe-cpp/runs/${SLIME_RUN_ID}}/data"
+docker ps --format 'table {{.ID}}\t{{.Image}}\t{{.Status}}'
+docker exec w8-slime bash -lc \
+  'pgrep -af "slime_multi_swe_cpp|git clone|python3" || true'
+PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
+  --data-root "$SLIME_MULTI_SWE_DATA_DIR" \
+  --dry-run \
+  --resume
+PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp verify-data \
+  --data-root "$SLIME_MULTI_SWE_DATA_DIR"
 ```
 
 ## Artifacts
@@ -209,10 +263,11 @@ The lane writes:
     base.summary.json
 ```
 
-The data-root oracle records are the blocking preflight proof. Each row includes
-`correct_answer_source: "fix_patch"`, `tests_collected`,
-`no_tests_collected`, the selected sandbox image/ID, and failure classification.
-`manifest.json` remains `admitted: false` if any record fails.
+The data-root oracle records are the incremental blocking preflight proof.
+Each row includes `correct_answer_source: "fix_patch"`, `tests_collected`,
+`no_tests_collected`, the immutable sandbox identity, `harness_mode`, the
+fingerprinted `oracle_cache_key`, and failure classification. `manifest.json`
+remains `admitted: false` if any record is failed, missing, or stale.
 
 The eval summary reports strict pass rate, mean reward, invalid-format rate,
 invalid-file rate, patch-apply error rate, harness-error rate,
@@ -260,14 +315,22 @@ diagnostics, but that path never changes strict reward or pass fields.
   harness must run CTest from `build/`; inspect `data/oracle.records.jsonl`.
 - Missing dataset checkout: clone `ByteDance-Seed/Multi-SWE-bench_mini` under
   `.w8-biayn/data/multi-swe-bench-mini` or set `SLIME_MULTI_SWE_SOURCE`.
-- Missing official image: rerun `prepare_data.sh`; it pulls selected images by
-  default. `SLIME_MULTI_SWE_PULL_IMAGES=0` requires a warm local Docker cache.
+- Missing official image: rerun with `SLIME_MULTI_SWE_PULL_IMAGES=1`.
+  The default `auto` mode skips registry pulls only when a compatible receipt
+  already exists; `0` requires a warm local Docker cache.
+- A `git clone` runs for each task: old schema-v2 code/data or a generic image
+  override is active. Pull the new commit, unset the override, rebuild data once
+  with `SLIME_MULTI_SWE_REBUILD_DATA=1`, then resume.
+- `download_test_data` fails and dependent nlohmann tests are `Not Run`: the old
+  host-checkout path is active. The schema-v3 standard path uses the official
+  image's preloaded `json_test_data`; rebuild once and resume.
 - `oracle.summary.json.all_passed` is false: fix the setup before starting the
   model. The lane keeps `manifest.json.admitted` false and exits nonzero.
 - Response truncation: raise `SLIME_EVAL_MAX_RESPONSE_LEN`.
 - Many patch-apply errors: inspect `base.records.jsonl` for path-policy
   rejections and malformed diffs.
-- Many timeouts: inspect both oracle and model records. The default timeout is
-  `W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS=600`.
+- Many timeouts: inspect both oracle and model records. The default build/test
+  timeout is `W8_SLIME_MULTI_SWE_TEST_TIMEOUT_SECONDS=1200`; image pulls and the
+  removed standard-path clones do not consume this budget.
 - Official Multi-SWE results differ: expected. This is a repo-owned SLIME-style
   eval, not the official Multi-SWE evaluator.

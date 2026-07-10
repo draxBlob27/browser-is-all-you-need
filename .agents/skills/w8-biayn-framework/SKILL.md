@@ -231,9 +231,11 @@ training and not an official Multi-SWE leaderboard run; it is a repo-owned
 SLIME rollout-only eval of base Moonlight on C++ issue-resolution tasks from
 `ByteDance-Seed/Multi-SWE-bench_mini`. Preparation is a blocking admission
 gate: select the official lowercase per-instance `mswebench` image, pin its
-immutable identity, run every dataset `fix_patch`, and require a positive CTest
-count. The proof lives in `data/oracle.records.jsonl`,
-`data/oracle.summary.json`, `data/sandbox-images.json`, and the schema-v2
+immutable identity, and grade in its exact prepared checkout/build/test assets
+without per-task GitHub clones. Run every dataset `fix_patch`, require a
+positive CTest count, persist after each task, and reuse only
+fingerprint-matching passing records on resume. The proof lives in `data/oracle.records.jsonl`,
+`data/oracle.summary.json`, `data/sandbox-images.json`, and the schema-v3
 manifest; aggregation copies it into `eval/base.oracle.records.jsonl` plus
 `oracle_setup_check` in `eval/base.summary.json`. Keep detailed setup, response
 contract, artifact fields, repo summaries, oracle proof, and `recovered_*`

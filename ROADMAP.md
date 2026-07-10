@@ -288,10 +288,13 @@ speed reward and not the official Multi-SWE evaluator. The canonical operator
 flow is `examples/slime/moonlight_multi_swe_cpp/README.md`; this roadmap keeps
 only the decision point.
 
-Decision gate: before model loading, require schema-v2 `data/manifest.json`
-to say `admitted: true`, `data/oracle.summary.json.all_passed` to be true, every
-oracle record to report a positive CTest count, and
-`data/sandbox-images.json` to prove official per-task immutable images. Then
+Decision gate: before model loading, require schema-v3 `data/manifest.json`
+to say `admitted: true`, `data/oracle.summary.json.all_passed` and
+`complete` to be true, every oracle record to report a positive CTest count,
+and `data/sandbox-images.json` to prove official per-task immutable images.
+The standard grader must use the image-prepared checkout/build/test assets
+without per-task GitHub clones; preflight persists after every task and resumes
+only fingerprint-matching passes. Then
 inspect `eval/base.records.jsonl`, `eval/base.oracle.records.jsonl`,
 `eval/base.summary.json`, and `stages/base-eval/run_receipt.txt`. Require the
 copied `base.summary.json.oracle_setup_check.all_passed` before treating model
