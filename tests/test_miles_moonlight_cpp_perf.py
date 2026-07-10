@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
@@ -118,6 +119,7 @@ def test_miles_glm47_wrappers_select_glm_defaults() -> None:
     ):
         assert f'"{probe_key}",' in sft_runner_text
         assert f'\\"{probe_key}\\": \\"${{{probe_key}:-}}\\"' in grpo_runner_text
+    assert '"W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY",' in sft_runner_text
     grpo_text = GLM47_GRPO_RUNNER.read_text(encoding="utf-8")
     assert (
         'MILES_APPLY_CHAT_TEMPLATE_KWARGS="${MILES_APPLY_CHAT_TEMPLATE_KWARGS:-{\\"enable_thinking\\": false}}"'
@@ -480,6 +482,7 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
     monkeypatch.setattr(miles_glm47_bridge, "_SGLANG_MEM_POOL_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_ROUTER_CB_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_WARM_START_OPT_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_TRAIN_ONLY_CLEAR_PATCHED", False)
     before_meta_path = list(sys.meta_path)
     sys.meta_path.insert(0, recorder)
     try:
@@ -488,9 +491,10 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
         added = [f for f in sys.meta_path if f is not recorder and f not in before_meta_path]
         # one lazy hook per patch target: mbridge.core.bridge, miles_plugins.mbridge,
         # megatron.bridge.peft.utils, miles update_weight module, sglang mem_pool,
-        # miles router_manager, miles lora_utils (optimizer reload), and
+        # miles router_manager, miles lora_utils (optimizer reload), Miles actor
+        # group (resident SFT cleanup), and
         # megatron.bridge for the bridge-class registration
-        assert len(added) == 8
+        assert len(added) == 9
     finally:
         sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
         sys.meta_path.remove(recorder)
@@ -500,6 +504,38 @@ def test_grpo_runner_supports_adapter_init_passthrough() -> None:
     text = GRPO_RUNNER.read_text(encoding="utf-8")
     assert 'LORA_ADAPTER_PATH="${MILES_LORA_ADAPTER_PATH:-}"' in text
     assert '--lora-adapter-path "${LORA_ADAPTER_PATH}"' in text
+
+
+def test_h100_sft_skips_only_train_only_actor_gc(monkeypatch) -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    calls: list[str] = []
+
+    class FakeRayTrainGroup:
+        async def clear_memory(self):
+            calls.append("cleared")
+
+    fake_module = types.SimpleNamespace(RayTrainGroup=FakeRayTrainGroup)
+    monkeypatch.setattr(miles_glm47_bridge, "_TRAIN_ONLY_CLEAR_PATCHED", False)
+    monkeypatch.setenv("W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY", "1")
+    miles_glm47_bridge._apply_train_only_clear_memory_skip(fake_module)
+
+    group = FakeRayTrainGroup()
+    group.args = types.SimpleNamespace(debug_train_only=True, offload_train=False)
+    asyncio.run(group.clear_memory())
+    assert calls == []
+
+    group.args.debug_train_only = False
+    asyncio.run(group.clear_memory())
+    assert calls == ["cleared"]
+
+    group.args.debug_train_only = True
+    group.args.offload_train = True
+    asyncio.run(group.clear_memory())
+    assert calls == ["cleared", "cleared"]
+
+    sft_text = GLM47_H100_SFT_RUNNER.read_text(encoding="utf-8")
+    assert 'W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY="${W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY:-1}"' in sft_text
 
 
 def test_grpo_runner_save_interval_is_configurable() -> None:

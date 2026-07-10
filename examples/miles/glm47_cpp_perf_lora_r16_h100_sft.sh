@@ -72,6 +72,9 @@ export MILES_SGLANG_LORA_USE_VIRTUAL_EXPERTS="${MILES_SGLANG_LORA_USE_VIRTUAL_EX
 export MILES_EXTRA_ARGS="--no-offload-train${MILES_EXTRA_ARGS:+ ${MILES_EXTRA_ARGS}}"
 export MILES_TRAIN_MODULE="${MILES_TRAIN_MODULE:-w8_biayn.integrations.miles_train_with_glm47_bridge}"
 export W8_REGISTER_GLM47_BRIDGE="${W8_REGISTER_GLM47_BRIDGE:-1}"
+# With no colocated rollout engine, retaining the allocator cache is both safe
+# and much cheaper than eight full Python GC scans after every SFT batch.
+export W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY="${W8_GLM47_SKIP_TRAIN_ONLY_CLEAR_MEMORY:-1}"
 # Modal 8x H100 has no docker daemon (gVisor). Default the local in-process
 # sandbox; override with W8_CPP_SANDBOX_BACKEND=docker only on hosts that mount it.
 export W8_CPP_SANDBOX_BACKEND="${W8_CPP_SANDBOX_BACKEND:-local}"
