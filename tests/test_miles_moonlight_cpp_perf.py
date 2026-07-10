@@ -488,6 +488,7 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
     monkeypatch.setattr(miles_glm47_bridge, "_ROUTER_CB_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_WARM_START_OPT_PATCHED", False)
     monkeypatch.setattr(miles_glm47_bridge, "_LORA_TMS_PATCHED", False)
+    monkeypatch.setattr(miles_glm47_bridge, "_LORA_UPDATE_TMS_PATCHED", False)
     before_meta_path = list(sys.meta_path)
     sys.meta_path.insert(0, recorder)
     try:
@@ -497,9 +498,10 @@ def test_register_glm47_bridge_installs_hooks_without_heavy_imports(monkeypatch)
         # one lazy hook per patch target: mbridge.core.bridge, miles_plugins.mbridge,
         # megatron.bridge.peft.utils, miles update_weight module, sglang mem_pool,
         # miles router_manager, miles lora_utils (optimizer reload), Miles'
-        # bridge_lora_helpers (non-nested TMS allocation), and
+        # bridge_lora_helpers (non-nested TMS allocation), Miles' actor
+        # (process-group reload inside the live TMS scope), and
         # megatron.bridge for the bridge-class registration
-        assert len(added) == 9
+        assert len(added) == 10
     finally:
         sys.meta_path[:] = [f for f in sys.meta_path if f is recorder or f in before_meta_path]
         sys.meta_path.remove(recorder)
@@ -919,3 +921,137 @@ def test_colocate_lora_buffers_suspend_outer_tms_region(monkeypatch) -> None:
     assert transitions == [False, True, False, True]
     assert cdll.interesting is True
     assert lora_utils._param_grad_buffer_patched is True
+
+
+def test_colocate_weight_sync_reloads_and_destroys_process_groups_inside_tms() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    events: list[str] = []
+
+    @contextmanager
+    def disable():
+        events.append("tms-enter")
+        try:
+            yield
+        finally:
+            events.append("tms-exit")
+
+    class FakeActor:
+        pass
+
+    fake_module = types.SimpleNamespace(
+        MegatronTrainRayActor=FakeActor,
+        torch_memory_saver=types.SimpleNamespace(disable=disable),
+        nullcontext=lambda: contextmanager(lambda: (yield))(),
+        reload_process_groups=lambda: events.append("reload"),
+        destroy_process_groups=lambda: events.append("destroy"),
+        print_memory=lambda label: events.append(label),
+        timer=lambda fn: fn,
+        dist=types.SimpleNamespace(get_rank=lambda: 0),
+        logger=types.SimpleNamespace(warning=lambda *args: None, info=lambda *args: None),
+        ray=types.SimpleNamespace(),
+        random=types.SimpleNamespace(),
+        get_gloo_group=lambda: None,
+        is_lora_enabled=lambda args: True,
+    )
+    miles_glm47_bridge._apply_colocate_lora_update_tms_scope(fake_module)
+
+    actor = FakeActor()
+    actor.args = types.SimpleNamespace(
+        debug_train_only=False,
+        debug_rollout_only=False,
+        offload_train=True,
+        debug_skip_weight_update=False,
+        ci_test=False,
+        keep_old_actor=False,
+    )
+    actor.weight_updater = types.SimpleNamespace(
+        update_weights=lambda: events.append("sync")
+    )
+    info = types.SimpleNamespace(
+        rollout_engines=[],
+        rollout_engine_lock=None,
+        has_new_engines=False,
+        engine_gpu_counts=[],
+        engine_gpu_offsets=[],
+    )
+
+    actor.update_weights(info)
+
+    assert events == [
+        "tms-enter",
+        "reload",
+        "before update_weights",
+        "sync",
+        "after update_weights",
+        "destroy",
+        "tms-exit",
+    ]
+
+
+def test_colocate_weight_sync_destroys_process_groups_before_tms_on_failure() -> None:
+    from w8_biayn.integrations import miles_glm47_bridge
+
+    events: list[str] = []
+
+    @contextmanager
+    def disable():
+        events.append("tms-enter")
+        try:
+            yield
+        finally:
+            events.append("tms-exit")
+
+    class FakeActor:
+        pass
+
+    def fail_sync():
+        events.append("sync")
+        raise RuntimeError("sync failed")
+
+    fake_module = types.SimpleNamespace(
+        MegatronTrainRayActor=FakeActor,
+        torch_memory_saver=types.SimpleNamespace(disable=disable),
+        nullcontext=lambda: contextmanager(lambda: (yield))(),
+        reload_process_groups=lambda: events.append("reload"),
+        destroy_process_groups=lambda: events.append("destroy"),
+        print_memory=lambda label: events.append(label),
+        timer=lambda fn: fn,
+        dist=types.SimpleNamespace(get_rank=lambda: 0),
+        logger=types.SimpleNamespace(warning=lambda *args: None, info=lambda *args: None),
+        ray=types.SimpleNamespace(),
+        random=types.SimpleNamespace(),
+        get_gloo_group=lambda: None,
+        is_lora_enabled=lambda args: True,
+    )
+    miles_glm47_bridge._apply_colocate_lora_update_tms_scope(fake_module)
+
+    actor = FakeActor()
+    actor.args = types.SimpleNamespace(
+        debug_train_only=False,
+        debug_rollout_only=False,
+        offload_train=True,
+        debug_skip_weight_update=False,
+        ci_test=False,
+        keep_old_actor=False,
+    )
+    actor.weight_updater = types.SimpleNamespace(update_weights=fail_sync)
+    info = types.SimpleNamespace(
+        rollout_engines=[],
+        rollout_engine_lock=None,
+        has_new_engines=False,
+        engine_gpu_counts=[],
+        engine_gpu_offsets=[],
+    )
+
+    with pytest.raises(RuntimeError, match="sync failed"):
+        actor.update_weights(info)
+
+    assert events == [
+        "tms-enter",
+        "reload",
+        "before update_weights",
+        "sync",
+        "destroy",
+        "tms-exit",
+    ]

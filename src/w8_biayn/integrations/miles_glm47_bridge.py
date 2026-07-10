@@ -12,6 +12,7 @@ _SGLANG_MEM_POOL_PATCHED = False
 _ROUTER_CB_PATCHED = False
 _WARM_START_OPT_PATCHED = False
 _LORA_TMS_PATCHED = False
+_LORA_UPDATE_TMS_PATCHED = False
 
 
 def register_glm47_bridge() -> None:
@@ -39,6 +40,7 @@ def register_glm47_bridge() -> None:
     _patch_router_circuit_breaker()
     _patch_warm_start_optimizer_reload()
     _patch_colocate_lora_tms_regions()
+    _patch_colocate_lora_update_tms_scope()
     _when_imported("megatron.bridge", lambda module: _register_glm47_bridge_class())
 
 
@@ -416,6 +418,126 @@ def _apply_colocate_lora_tms_region_patch(module) -> None:
         patch_param_grad_buffer_for_colocate_mode_lora
     )
     module._w8_tms_region_patched = True
+
+
+def _patch_colocate_lora_update_tms_scope() -> None:
+    """Keep reloaded NCCL communicators outside the paused TMS region."""
+
+    global _LORA_UPDATE_TMS_PATCHED
+    if _LORA_UPDATE_TMS_PATCHED:
+        return
+    if os.environ.get("W8_GLM47_NO_UPDATE_TMS_PATCH", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    _LORA_UPDATE_TMS_PATCHED = True
+    _when_imported(
+        "miles.backends.megatron_utils.actor",
+        _apply_colocate_lora_update_tms_scope,
+    )
+
+
+def _apply_colocate_lora_update_tms_scope(module) -> None:
+    """Run process-group reload, weight sync, and teardown in one live pool.
+
+    Miles pauses TMS' ``default`` region before rollout. Its stock update path
+    reloads NCCL process groups while that region is still paused and only then
+    enters ``torch_memory_saver.disable()`` for the adapter gather. The freshly
+    created communicators therefore point at paused storage and the first NCCL
+    collective fails with ``cudaErrorIllegalAddress``. Keeping the complete
+    transaction in the disabled scope also lets TMS dispose the temporary pool
+    only after every process group using it has been destroyed.
+    """
+
+    cls = getattr(module, "MegatronTrainRayActor", None)
+    if cls is None or getattr(cls, "_w8_update_tms_scope_patched", False):
+        return
+
+    def update_weights(self, info) -> None:
+        if self.args.debug_train_only or self.args.debug_rollout_only:
+            return
+
+        rollout_engines = info.rollout_engines
+        rollout_engine_lock = info.rollout_engine_lock
+        has_new_engines = info.has_new_engines
+        engine_gpu_counts = info.engine_gpu_counts
+        engine_gpu_offsets = info.engine_gpu_offsets
+        del info
+
+        context = (
+            module.torch_memory_saver.disable()
+            if self.args.offload_train
+            else module.nullcontext()
+        )
+        with context:
+            try:
+                if self.args.offload_train:
+                    module.reload_process_groups()
+
+                if has_new_engines:
+                    self.weight_updater.connect_rollout_engines(
+                        rollout_engines,
+                        rollout_engine_lock,
+                        engine_gpu_counts=engine_gpu_counts,
+                        engine_gpu_offsets=engine_gpu_offsets,
+                    )
+                    module.dist.barrier(group=module.get_gloo_group())
+                    if module.dist.get_rank() == 0:
+                        module.ray.get(
+                            self.rollout_manager.clear_updatable_has_new_engines.remote()
+                        )
+
+                if self.args.debug_skip_weight_update:
+                    if module.dist.get_rank() == 0:
+                        module.logger.warning(
+                            "Skipping actor-to-rollout weight update because "
+                            "--debug-skip-weight-update is set."
+                        )
+                    return
+
+                module.print_memory("before update_weights")
+                self.weight_updater.update_weights()
+                module.print_memory("after update_weights")
+
+                if (
+                    self.args.ci_test
+                    and len(rollout_engines) > 0
+                    and not module.is_lora_enabled(self.args)
+                ):
+                    engine = module.random.choice(rollout_engines)
+                    engine_version = module.ray.get(engine.get_weight_version.remote())
+                    if str(engine_version) != str(self.weight_updater.weight_version):
+                        raise RuntimeError(
+                            "Weight version mismatch! "
+                            f"Engine: {engine_version}, "
+                            f"Updater: {self.weight_updater.weight_version}"
+                        )
+
+                if getattr(self.args, "keep_old_actor", False):
+                    if self.args.update_weights_interval == 1:
+                        module.logger.info(
+                            "updating model queue: rollout_actor -> old_actor, "
+                            "actor -> rollout_actor"
+                        )
+                        self.weights_backuper.copy(
+                            src_tag="rollout_actor", dst_tag="old_actor"
+                        )
+                        self.weights_backuper.backup("rollout_actor")
+                    else:
+                        self.weights_backuper.backup("old_actor")
+            finally:
+                if self.args.offload_train:
+                    module.destroy_process_groups()
+
+    cls.update_weights = module.timer(update_weights)
+    cls._w8_update_tms_scope_patched = True
+    print(
+        "w8 GLM47 colocate: process-group reload and LoRA sync share one live TMS pool",
+        flush=True,
+    )
 
 
 def _dump_sync_forensics(updater, hf_named_tensors, out_dir) -> None:
