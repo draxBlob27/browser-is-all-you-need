@@ -661,7 +661,7 @@ def test_affected_simdjson_harness_mounts_offline_dependencies_and_disables_down
         {
             "_offline_dependency_cache": str(cache_root),
             "offline_dependency_bundle_sha256": multi_swe.simdjson_offline_bundle_sha256(),
-            "repo_harness_revision": multi_swe.SIMDJSON_HARNESS_REVISION,
+            "repo_harness_revision": multi_swe._simdjson_repo_harness_revision(task),
             "sandbox_image_digest": "mswebench/simdjson_m_simdjson@sha256:abc",
             "sandbox_image_id": "sha256:abc",
         }
@@ -700,8 +700,25 @@ def test_affected_simdjson_harness_mounts_offline_dependencies_and_disables_down
     assert "-DSIMDJSON_ALLOW_DOWNLOADS=OFF" in script
     assert "-DSIMDJSON_GOOGLE_BENCHMARKS=OFF" in script
     assert "-DSIMDJSON_COMPETITION=OFF" in script
+    assert "-DCMAKE_CXX_FLAGS=-Wno-error=effc++" in script
     assert "git clone" not in script
     assert "ctest --output-on-failure" in script
+
+
+def test_newer_simdjson_harness_keeps_all_warnings_as_errors() -> None:
+    instance_id = "simdjson__simdjson-1615"
+    row = {
+        **cpp_row(instance_id),
+        "org": "simdjson",
+        "repo": "simdjson",
+        "number": 1615,
+    }
+    harness = multi_swe.REPO_HARNESSES[("simdjson", "simdjson")]
+    task = multi_swe.normalized_task(row, harness=harness, instance_id=instance_id)
+
+    script = multi_swe._official_instance_script(task, harness, timeout_s=1200)
+
+    assert "-DCMAKE_CXX_FLAGS=-Wno-error=effc++" not in script
 
 
 def test_simdjson_dependency_cache_is_mirrored_once_into_shared_tmpdir(

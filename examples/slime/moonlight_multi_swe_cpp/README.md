@@ -48,6 +48,10 @@ This directly fixes three misleading setup failures:
   submodule from inside a `--network none` container. Optional benchmarks are
   disabled and the core test data/tool dependency is mounted from the pinned
   host cache.
+- PR 958's GCC 7 build no longer promotes external cxxopts `-Weffc++`
+  diagnostics to errors. The compatibility flag is narrowly
+  `-Wno-error=effc++`; all other warning-as-error checks and the full build
+  remain enabled.
 
 For example, Catch2 PR 1608 uses
 `mswebench/catchorg_m_catch2:pr-1608` (all repository components must be
@@ -363,6 +367,9 @@ diagnostics, but that path never changes strict reward or pass fields.
   `dependencies/benchmark`: the task predates the offline dependency receipt
   or its cache is missing. Pull this fix and rerun the four-task targeted
   preflight above; do not enable networking in the grading container.
+- simdjson PR 958 fails in `cxxopts.hpp` with `[-Werror=effc++]`: pull the
+  GCC 7 compatibility fix and rerun only `simdjson__simdjson-958`. Do not
+  suppress all warnings or omit the tools/tests.
 - `oracle.summary.json.all_passed` is false: fix the setup before starting the
   model. The lane keeps `manifest.json.admitted` false and exits nonzero.
 - Response truncation: raise `SLIME_EVAL_MAX_RESPONSE_LEN`.

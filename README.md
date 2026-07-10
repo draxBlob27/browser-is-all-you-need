@@ -94,6 +94,9 @@ The four historical simdjson images whose CMake files otherwise download
 Google Benchmark or an uninitialized submodule use a data-local, SHA-256-pinned
 `cxxopts`/simdjson-data cache prepared outside the grader and mounted
 read-only; the grading container remains network-disabled.
+PR 958 also keeps GCC 7's external-cxxopts `-Weffc++` diagnostics visible but
+non-fatal while preserving all other warning-as-error checks and the full test
+build.
 
 The GLM agentic SWE-agent lane grades the final edited FILE instead of model
 text: SWE-agent edits `candidate.cpp` over many turns, the hardened Docker

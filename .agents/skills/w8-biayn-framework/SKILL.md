@@ -243,7 +243,9 @@ diagnostics in `examples/slime/moonlight_multi_swe_cpp/README.md` instead of
 duplicating them across repo-wide docs. For simdjson PRs 958, 1615, 1712, and
 2016, preparation must populate the checksum-pinned data-local
 `cxxopts`/simdjson-data cache and the grader must mount it read-only while
-retaining `--network none`:
+retaining `--network none`. PR 958 must use only
+`-Wno-error=effc++` for external cxxopts under GCC 7; do not disable
+warnings-as-errors globally:
 
 ```bash
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh

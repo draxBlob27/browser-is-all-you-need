@@ -297,7 +297,9 @@ without per-task GitHub clones; preflight persists after every task and resumes
 only fingerprint-matching passes. The four affected historical simdjson tasks
 must also have a current `data/offline-dependencies.json` receipt for the
 checksum-pinned `cxxopts`/simdjson-data cache mounted read-only into their
-network-disabled graders. Then
+network-disabled graders. PR 958 additionally requires its narrow GCC 7
+external-cxxopts `-Wno-error=effc++` compatibility flag; do not disable
+warnings-as-errors globally. Then
 inspect `eval/base.records.jsonl`, `eval/base.oracle.records.jsonl`,
 `eval/base.summary.json`, and `stages/base-eval/run_receipt.txt`. Require the
 copied `base.summary.json.oracle_setup_check.all_passed` before treating model

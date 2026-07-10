@@ -51,6 +51,7 @@ SANDBOX_IMAGES_FILENAME = "sandbox-images.json"
 OFFLINE_DEPENDENCIES_FILENAME = "offline-dependencies.json"
 SIMDJSON_DEPENDENCY_CACHE_RELATIVE = Path("offline-dependencies") / "simdjson"
 SIMDJSON_HARNESS_REVISION = "offline-dependencies-v1"
+SIMDJSON_GCC7_EFFCXX_REVISION = "gcc7-cxxopts-effcxx-v1"
 SIMDJSON_OFFLINE_INSTANCE_IDS = frozenset(
     {
         "simdjson__simdjson-958",
@@ -716,6 +717,12 @@ def _uses_simdjson_offline_dependencies(task: dict[str, Any]) -> bool:
     return instance_id in SIMDJSON_OFFLINE_INSTANCE_IDS
 
 
+def _simdjson_repo_harness_revision(task: dict[str, Any]) -> str:
+    if str(task.get("instance_id") or "") == "simdjson__simdjson-958":
+        return f"{SIMDJSON_HARNESS_REVISION}+{SIMDJSON_GCC7_EFFCXX_REVISION}"
+    return SIMDJSON_HARNESS_REVISION
+
+
 def simdjson_offline_bundle_sha256() -> str:
     payload = {
         "harness_revision": SIMDJSON_HARNESS_REVISION,
@@ -858,7 +865,7 @@ def prepare_simdjson_offline_dependencies(
     for task_path, task in affected:
         task["offline_dependency_cache"] = SIMDJSON_DEPENDENCY_CACHE_RELATIVE.as_posix()
         task["offline_dependency_bundle_sha256"] = bundle_sha256
-        task["repo_harness_revision"] = SIMDJSON_HARNESS_REVISION
+        task["repo_harness_revision"] = _simdjson_repo_harness_revision(task)
         write_json(task_path, task)
 
     manifest_path = root / "manifest.json"
@@ -1182,7 +1189,7 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
                 )
         for task_path, task in affected_simdjson_tasks:
             if (
-                task.get("repo_harness_revision") != SIMDJSON_HARNESS_REVISION
+                task.get("repo_harness_revision") != _simdjson_repo_harness_revision(task)
                 or task.get("offline_dependency_bundle_sha256") != expected_bundle
             ):
                 raise ValueError(f"stale Multi-SWE simdjson task harness in {task_path}")
@@ -1589,6 +1596,20 @@ def _official_instance_script(
     quoted_repo = shlex.quote(repo_dir)
     quoted_base = shlex.quote(base_ref)
     if _uses_simdjson_offline_dependencies(task):
+        cmake_args = [
+            "cmake",
+            "-DSIMDJSON_DEVELOPER_MODE=ON",
+            "-DSIMDJSON_ALLOW_DOWNLOADS=OFF",
+            "-DSIMDJSON_GOOGLE_BENCHMARKS=OFF",
+            "-DSIMDJSON_COMPETITION=OFF",
+            "-DSIMDJSON_CXXOPTS=OFF",
+        ]
+        if str(task.get("instance_id") or "") == "simdjson__simdjson-958":
+            # This old release applies -Weffc++ -Werror to external cxxopts.
+            # Preserve the full build while making only that warning class non-fatal.
+            cmake_args.append("-DCMAKE_CXX_FLAGS=-Wno-error=effc++")
+        cmake_args.append("..")
+        cmake_command = shlex.join(cmake_args)
         test_body = """
 set -euo pipefail
 if [ -s /home/test.patch ]; then
@@ -1597,16 +1618,10 @@ else
   git -C "$repo_dir" apply --whitespace=nowarn /home/fix.patch
 fi
 cd "$repo_dir/build"
-cmake \
-  -DSIMDJSON_DEVELOPER_MODE=ON \
-  -DSIMDJSON_ALLOW_DOWNLOADS=OFF \
-  -DSIMDJSON_GOOGLE_BENCHMARKS=OFF \
-  -DSIMDJSON_COMPETITION=OFF \
-  -DSIMDJSON_CXXOPTS=OFF \
-  ..
+{cmake_command}
 cmake --build .
 ctest --output-on-failure
-""".strip()
+""".format(cmake_command=cmake_command).strip()
     else:
         test_body = "bash /home/fix-run.sh"
     quoted_test_body = shlex.quote(test_body)
