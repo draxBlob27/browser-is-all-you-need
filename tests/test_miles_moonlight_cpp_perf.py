@@ -525,33 +525,48 @@ def test_h100_runtime_aligns_all_flashinfer_packages() -> None:
     assert "ENV FLASHINFER_VERSION=${FLASHINFER_VERSION}" in text
     for package in ("flashinfer-python", "flashinfer-cubin", "flashinfer-jit-cache"):
         assert package in text
+    assert "SGLANG_KERNEL_VERSION=0.4.4" in text
+    assert "TORCH_MEMORY_SAVER_VERSION=0.0.9.post1" in text
+    assert "https://docs.sglang.ai/whl/cu${FLASHINFER_CUDA_INDEX}/" in text
 
 
 def test_h100_runtime_preflight_accepts_aligned_versions() -> None:
     module = runpy.run_path("scripts/check_miles_h100_runtime.py")
-    validate = module["validate_flashinfer_runtime"]
+    validate = module["validate_miles_h100_runtime"]
 
-    versions = validate(lambda _package: "0.6.12+cu129")
-
-    assert set(versions) == {
-        "flashinfer-python",
-        "flashinfer-cubin",
-        "flashinfer-jit-cache",
+    expected = {
+        "flashinfer-python": "0.6.12",
+        "flashinfer-cubin": "0.6.12",
+        "flashinfer-jit-cache": "0.6.12+cu129",
+        "sglang-kernel": "0.4.4+cu129",
+        "torch-memory-saver": "0.0.9.post1",
     }
+    versions = validate(expected.__getitem__)
+
+    assert versions == expected
 
 
 def test_h100_runtime_preflight_rejects_stale_or_mixed_versions() -> None:
     module = runpy.run_path("scripts/check_miles_h100_runtime.py")
-    validate = module["validate_flashinfer_runtime"]
+    validate = module["validate_miles_h100_runtime"]
 
-    with pytest.raises(RuntimeError, match="below SGLang's minimum"):
-        validate(lambda _package: "0.6.11.post1")
-
-    mixed = {
+    current = {
         "flashinfer-python": "0.6.12",
         "flashinfer-cubin": "0.6.12",
-        "flashinfer-jit-cache": "0.6.11.post1+cu129",
+        "flashinfer-jit-cache": "0.6.12+cu129",
+        "sglang-kernel": "0.4.4+cu129",
+        "torch-memory-saver": "0.0.9.post1",
     }
+
+    stale = {**current, "sglang-kernel": "0.4.2.post2+cu129"}
+    with pytest.raises(RuntimeError, match="below the required minimum"):
+        validate(stale.__getitem__)
+
+    stale_saver = {**current, "torch-memory-saver": "0.0.9"}
+    with pytest.raises(RuntimeError, match="below the required minimum"):
+        validate(stale_saver.__getitem__)
+
+    mixed = {**current, "flashinfer-jit-cache": "0.6.13+cu129"}
     with pytest.raises(RuntimeError, match="versions are not aligned"):
         validate(mixed.__getitem__)
 

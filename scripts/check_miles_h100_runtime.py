@@ -9,44 +9,52 @@ from collections.abc import Callable
 from importlib import metadata
 
 
-MINIMUM_FLASHINFER = (0, 6, 12)
+MINIMUM_VERSIONS = {
+    "flashinfer-python": "0.6.12",
+    "flashinfer-cubin": "0.6.12",
+    "flashinfer-jit-cache": "0.6.12",
+    "sglang-kernel": "0.4.4",
+    "torch-memory-saver": "0.0.9.post1",
+}
 FLASHINFER_PACKAGES = (
     "flashinfer-python",
     "flashinfer-cubin",
     "flashinfer-jit-cache",
 )
+REQUIRED_PACKAGES = (*FLASHINFER_PACKAGES, "sglang-kernel", "torch-memory-saver")
 
 
-def release_tuple(raw_version: str) -> tuple[int, int, int]:
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", raw_version)
+def version_key(raw_version: str) -> tuple[int, int, int, int]:
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\.post(\d+))?", raw_version)
     if match is None:
         raise ValueError(f"cannot parse package version {raw_version!r}")
-    return tuple(int(part) for part in match.groups())
+    major, minor, patch, post = match.groups()
+    return int(major), int(minor), int(patch), int(post or 0)
 
 
-def validate_flashinfer_runtime(
+def validate_miles_h100_runtime(
     version_lookup: Callable[[str], str] = metadata.version,
 ) -> dict[str, str]:
     versions: dict[str, str] = {}
     missing: list[str] = []
-    for package in FLASHINFER_PACKAGES:
+    for package in REQUIRED_PACKAGES:
         try:
             versions[package] = version_lookup(package)
         except metadata.PackageNotFoundError:
             missing.append(package)
 
     if missing:
-        raise RuntimeError(f"missing FlashInfer packages: {', '.join(missing)}")
+        raise RuntimeError(f"missing Miles H100 runtime packages: {', '.join(missing)}")
 
-    releases = {package: release_tuple(raw) for package, raw in versions.items()}
+    releases = {package: version_key(raw) for package, raw in versions.items()}
+    for package, minimum in MINIMUM_VERSIONS.items():
+        if releases[package] < version_key(minimum):
+            raise RuntimeError(
+                f"{package} {versions[package]} is below the required minimum {minimum}"
+            )
+
     python_release = releases["flashinfer-python"]
-    if python_release < MINIMUM_FLASHINFER:
-        minimum = ".".join(str(part) for part in MINIMUM_FLASHINFER)
-        raise RuntimeError(
-            f"flashinfer-python {versions['flashinfer-python']} is below SGLang's "
-            f"minimum {minimum}"
-        )
-    if any(release != python_release for release in releases.values()):
+    if any(releases[package] != python_release for package in FLASHINFER_PACKAGES):
         rendered = ", ".join(f"{name}={versions[name]}" for name in FLASHINFER_PACKAGES)
         raise RuntimeError(f"FlashInfer package versions are not aligned: {rendered}")
     return versions
@@ -54,7 +62,7 @@ def validate_flashinfer_runtime(
 
 def main() -> int:
     try:
-        versions = validate_flashinfer_runtime()
+        versions = validate_miles_h100_runtime()
     except (RuntimeError, ValueError) as exc:
         print(f"Miles H100 runtime preflight failed: {exc}", file=sys.stderr)
         print(
@@ -63,11 +71,10 @@ def main() -> int:
         )
         return 2
 
-    rendered = ", ".join(f"{name}={versions[name]}" for name in FLASHINFER_PACKAGES)
+    rendered = ", ".join(f"{name}={versions[name]}" for name in REQUIRED_PACKAGES)
     print(f"Miles H100 runtime preflight passed: {rendered}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

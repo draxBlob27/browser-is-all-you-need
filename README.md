@@ -62,8 +62,9 @@ step per rollout because multi-step rollouts currently misnumber resumable Miles
 checkpoints; see [issue #25](https://github.com/tokenbender/browser-is-all-you-need/issues/25).
 
 Build the repo-owned H100 runtime layer first. It aligns the FlashInfer Python
-package, cubins, and CUDA 12.9 JIT cache with the SGLang source in the Miles
-base image; the GRPO wrapper checks this contract before starting Ray:
+package, cubins, CUDA 12.9 JIT cache, SGLang CUDA kernel, and colocated memory
+saver with the newer `sglang-miles` source in the Miles base image; the GRPO
+wrapper checks this contract before starting Ray:
 
 ```bash
 docker build \
