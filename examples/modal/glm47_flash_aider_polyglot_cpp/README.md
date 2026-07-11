@@ -241,6 +241,11 @@ shards is quarantined and redownloaded. The Aider runner mounts only the
 results Volume; it never mounts weights. The model and results Volume names
 must differ.
 
+Recursive local download uses Modal SDK 1.5.2's public `FileEntryType` and
+reads only exact `FILE` entries. Directories, the Polyglot source symlink, and
+all other non-regular entries are skipped before `read_file`; regular files
+still require byte-for-byte agreement with any existing local copy.
+
 Use `W8_MODAL_AIDER_RESUME=1` only for an incomplete, identity-matching run.
 Resume uses Aider's `--cont`, refuses completed runs and changed identities,
 and never fabricates completed task rows. A fresh run ID remains the normal

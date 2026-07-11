@@ -272,6 +272,9 @@ Keep `min_containers=0`, but use a 1200-second SGLang scaledown window to span
 Aider generation/compile gaps without repeated four-H100 cold starts. Bind the
 value into plan identity and receipts; explicit stop plus control-plane
 verification still ends billing immediately on every exit.
+Modal SDK 1.5.2 Volume entries expose an `IntEnum`; never classify them through
+`str(entry.type)`. Download only `FileEntryType.FILE`, skip every non-regular
+entry, and retain strict byte reconciliation.
 
 
 ```bash

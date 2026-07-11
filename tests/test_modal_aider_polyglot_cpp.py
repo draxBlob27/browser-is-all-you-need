@@ -6,6 +6,7 @@ import runpy
 import sys
 import tempfile
 import types
+from enum import IntEnum
 from pathlib import Path
 
 import pytest
@@ -452,6 +453,9 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert run.index("trap cleanup EXIT") < run.index("modal token info") < run.index("modal run")
     assert "W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN" in run
     assert "modal app stop" in run and "modal app list --json" in run
+    assert "from modal.volume import FileEntryType" in modal_app
+    assert "if entry.type != FileEntryType.FILE:" in modal_app
+    assert 'kind = str(getattr(entry, "type", "")).lower()' not in modal_app
     assert os.access(RUN_SH, os.X_OK)
 
 
@@ -508,6 +512,15 @@ def test_modal_app_imports_from_shallow_remote_path(tmp_path: Path, monkeypatch)
 
     modal_object = _ModalObject()
     modal_stub = types.ModuleType("modal")
+    modal_volume_stub = types.ModuleType("modal.volume")
+
+    class _FileEntryType(IntEnum):
+        UNSPECIFIED = 0
+        FILE = 1
+        DIRECTORY = 2
+        SYMLINK = 3
+
+    modal_volume_stub.FileEntryType = _FileEntryType
 
     def is_local() -> bool:
         return False
@@ -519,6 +532,7 @@ def test_modal_app_imports_from_shallow_remote_path(tmp_path: Path, monkeypatch)
     cfg = config(tmp_path)
     monkeypatch.setenv("W8_MODAL_AIDER_RUNTIME_CONFIG", json.dumps(cfg.runtime_mapping()))
     monkeypatch.setitem(sys.modules, "modal", modal_stub)
+    monkeypatch.setitem(sys.modules, "modal.volume", modal_volume_stub)
     monkeypatch.syspath_prepend(str(ROOT / "src"))
 
     with tempfile.NamedTemporaryFile(

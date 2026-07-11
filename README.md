@@ -91,6 +91,9 @@ The singleton SGLang Server keeps `min_containers=0` but uses Modal's
 cold-start four H100s. The run wrapper still stops and verifies the App
 immediately on every success or failure; the 20-minute window is not a teardown
 delay.
+Artifact download uses Modal SDK 1.5.2's explicit `FileEntryType.FILE`; it
+skips directories and every other non-regular entry before byte reads while
+retaining byte-for-byte reconciliation for downloaded files.
 
 
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt

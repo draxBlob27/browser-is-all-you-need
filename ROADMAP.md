@@ -357,6 +357,10 @@ Keep the singleton Server at `min_containers=0`, but set its scaledown window
 to Modal's 1200-second maximum so gaps between generation and C++ compilation
 do not cycle four H100s. Record the window in plan identity and receipts. The
 local wrapper must still stop and verify the App immediately when the run exits.
+When downloading recursive Volume artifacts under Modal SDK 1.5.2, read only
+entries whose public type is exactly `FileEntryType.FILE`. Skip directories,
+symlinks, and other non-regular entries before `read_file`, then preserve the
+existing byte-for-byte local reconciliation.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

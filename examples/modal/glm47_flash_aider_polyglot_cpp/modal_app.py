@@ -21,6 +21,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import modal
+from modal.volume import FileEntryType
 
 
 IS_LOCAL = modal.is_local()
@@ -745,8 +746,7 @@ def _download_run() -> Path:
     downloaded = 0
     for entry in results_volume.iterdir(prefix, recursive=True):
         remote = str(entry.path).lstrip("/")
-        kind = str(getattr(entry, "type", "")).lower()
-        if "dir" in kind:
+        if entry.type != FileEntryType.FILE:
             continue
         relative = Path(remote).relative_to(prefix)
         if relative.is_absolute() or ".." in relative.parts:

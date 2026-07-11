@@ -285,6 +285,11 @@ generation and C++ compile/test gaps. Plans, resume identity, server receipts,
 and final receipts must record this value. The wrapper's explicit stop and
 control-plane verification must still tear the App down immediately on every
 exit rather than waiting for the idle window.
+Recursive results-Volume download under pinned Modal SDK 1.5.2 must compare
+the public `FileEntry.type` directly with `FileEntryType.FILE`. It must skip
+directories, symlinks, FIFOs, sockets, and unspecified entries before calling
+`read_file`, while retaining path-safety and byte-for-byte reconciliation for
+every downloaded regular file.
 Do not accept `main`, `latest`, branch names, abbreviated Git commits, or an
 untagged/undigested SGLang image for a full result. A smoke may allow a pinned
 version tag only with an explicitly recorded unsafe-development override.
