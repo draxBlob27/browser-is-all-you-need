@@ -498,6 +498,173 @@ def test_reward_func_applies_replacements_and_records_test_success(tmp_path: Pat
     assert record["runtime_cpu_ns"] is None
 
 
+def test_gemini_sanity_uses_exact_admitted_prompt_and_strict_grader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    eval_row = json.loads(paths["eval"].read_text(encoding="utf-8"))
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("GEMINI_API_KEY", "api-key-secret")
+
+    def fake_generate(**kwargs: object) -> polyglot.GeminiGeneration:
+        captured.update(kwargs)
+        return polyglot.GeminiGeneration(
+            text=valid_response(),
+            api_key_source="GEMINI_API_KEY",
+            finish_reason="STOP",
+            usage_metadata={"total_token_count": 123},
+        )
+
+    output = tmp_path / "gemini"
+    summary, artifact_paths = polyglot.run_polyglot_gemini_sanity(
+        data_root=data_root,
+        task_id="two-fer",
+        output_dir=output,
+        model="gemini-3.5-flash",
+        generator=fake_generate,
+    )
+
+    assert captured["prompt"] == eval_row["prompt"]
+    assert "// oracle cpp" not in str(captured["prompt"])
+    assert captured["temperature"] == 0.0
+    assert captured["top_p"] == 1.0
+    assert summary["strict_pass"] is True
+    assert summary["strict_reason"] == "passed"
+    assert summary["oracle_setup_check"]["all_passed"] is True
+    assert artifact_paths["prompt"].read_text(encoding="utf-8") == eval_row["prompt"]
+    assert artifact_paths["response"].read_text(encoding="utf-8") == valid_response()
+    record = json.loads(artifact_paths["record"].read_text(encoding="utf-8"))
+    assert record["all_tests_pass"] is True
+    assert record["sanity_model"] == "gemini-3.5-flash"
+    request_text = artifact_paths["request"].read_text(encoding="utf-8")
+    assert "GEMINI_API_KEY" in request_text
+    assert "api-key-secret" not in request_text
+
+
+def test_gemini_sanity_preserves_strict_format_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+
+    def fake_generate(**_kwargs: object) -> polyglot.GeminiGeneration:
+        return polyglot.GeminiGeneration(
+            text="Here is the answer with prose.",
+            api_key_source="GOOGLE_API_KEY",
+        )
+
+    summary, artifact_paths = polyglot.run_polyglot_gemini_sanity(
+        data_root=data_root,
+        task_id="cpp/two-fer",
+        output_dir=tmp_path / "gemini-invalid",
+        generator=fake_generate,
+    )
+
+    assert summary["strict_pass"] is False
+    assert summary["strict_reason"] == "invalid_format"
+    assert summary["recovered_pass"] is False
+    record = json.loads(artifact_paths["record"].read_text(encoding="utf-8"))
+    assert record["score"] == -1.0
+    assert record["invalid_format"] is True
+
+
+def test_gemini_sanity_api_failure_does_not_create_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    output = tmp_path / "gemini-api-failure"
+
+    def failed_generate(**_kwargs: object) -> polyglot.GeminiGeneration:
+        raise RuntimeError("simulated Gemini API failure")
+
+    with pytest.raises(RuntimeError, match="simulated Gemini API failure"):
+        polyglot.run_polyglot_gemini_sanity(
+            data_root=data_root,
+            task_id="cpp/two-fer",
+            output_dir=output,
+            generator=failed_generate,
+        )
+
+    assert not output.exists()
+
+
+def test_gemini_sanity_plan_is_one_task_raw_response_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+
+    plan = polyglot.build_gemini_sanity_plan(
+        data_root=data_root,
+        task_id="two-fer",
+        model="gemini-3.5-flash",
+        temperature=0.0,
+        top_p=1.0,
+        seed=42,
+        max_output_tokens=8192,
+    )
+
+    assert plan["kind"] == "polyglot-gemini-sanity"
+    assert plan["task_id"] == "cpp/two-fer"
+    assert plan["generation_config"]["candidate_count"] == 1
+    assert plan["response_policy"] == {
+        "raw_response_only": True,
+        "strict_scoring": True,
+        "recovery_is_diagnostic_only": True,
+    }
+    assert len(plan["prompt_sha256"]) == 64
+    assert "// oracle cpp" not in plan["prompt"]
+
+    with pytest.raises(ValueError, match="mutable -latest alias"):
+        polyglot.build_gemini_sanity_plan(
+            data_root=data_root,
+            task_id="two-fer",
+            model="gemini-flash-latest",
+            temperature=0.0,
+            top_p=1.0,
+            seed=42,
+            max_output_tokens=8192,
+        )
+
+
+def test_gemini_api_key_precedence_and_missing_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+    assert polyglot._gemini_api_key() == ("google-key", "GOOGLE_API_KEY")
+
+    monkeypatch.delenv("GOOGLE_API_KEY")
+    assert polyglot._gemini_api_key() == ("gemini-key", "GEMINI_API_KEY")
+
+    monkeypatch.delenv("GEMINI_API_KEY")
+    with pytest.raises(ValueError, match="Missing Gemini API key"):
+        polyglot._gemini_api_key()
+
+
+def test_gemini_sanity_cli_dry_run_uses_no_key_or_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    output = tmp_path / "unused-dry-run-output"
+    args = polyglot.build_arg_parser().parse_args(
+        [
+            "gemini-sanity",
+            "--data-root",
+            str(data_root),
+            "--task-id",
+            "two-fer",
+            "--out",
+            str(output),
+            "--dry-run",
+        ]
+    )
+
+    args.func(args)
+
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["task_id"] == "cpp/two-fer"
+    assert plan["model"] == "gemini-3.5-flash"
+    assert plan["response_policy"]["raw_response_only"] is True
+    assert not output.exists()
+
+
 def test_score_debug_dump_writes_polyglot_summary_without_speed_metrics(tmp_path: Path) -> None:
     debug_jsonl = tmp_path / "debug.jsonl"
     debug_jsonl.write_text(
@@ -681,4 +848,8 @@ def test_moonlight_polyglot_cpp_readme_documents_operator_flow() -> None:
     assert "recovered_pass_rate" in text
     assert "--rollout-skip-special-tokens" in text
     assert "rollout_skip_special_tokens=1" in text
+    assert "gemini-sanity" in text
+    assert "GEMINI_API_KEY" in text
+    assert "raw response" in text
+    assert "not a" in text and "pass@k" in text
     assert "correct_and_faster_rate" in text

@@ -12,9 +12,10 @@ import shutil
 import subprocess
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from w8_biayn.cpp_perf.eval import write_json
 from w8_biayn.cpp_perf.sandbox import BASE_DOCKER_IMAGE, DEFAULT_MEMORY
@@ -35,6 +36,10 @@ DEFAULT_TEST_TIMEOUT_SECONDS = 180
 DEFAULT_EVAL_LIMIT = 4
 DEFAULT_POLYGLOT_PIDS_LIMIT = 2048
 ORACLE_CORRECT_ANSWER_SOURCE = "files.example"
+GEMINI_SANITY_KIND = "polyglot-gemini-sanity"
+GEMINI_SANITY_SCHEMA_VERSION = 1
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_API_KEY_ENV_NAMES = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
 POLYGLOT_TEST_SCRIPT = (
     "mkdir -p build && cd build && "
     "cmake -DEXERCISM_RUN_ALL_TESTS=1 -G 'Unix Makefiles' .. && make"
@@ -99,6 +104,14 @@ class PolyglotTestResult:
     @property
     def passed(self) -> bool:
         return self.returncode == 0 and not self.timeout
+
+
+@dataclass(frozen=True)
+class GeminiGeneration:
+    text: str
+    api_key_source: str
+    finish_reason: str | None = None
+    usage_metadata: dict[str, Any] | None = None
 
 
 class PolyglotResponseError(ValueError):
@@ -1640,6 +1653,288 @@ def build_polyglot_sandbox_image(*, image: str = DEFAULT_POLYGLOT_SANDBOX_IMAGE)
     )
 
 
+def _normalize_polyglot_task_id(task_id: str) -> str:
+    normalized = task_id.strip()
+    if not normalized:
+        raise ValueError("Gemini sanity task id must not be empty")
+    return normalized if normalized.startswith("cpp/") else f"cpp/{normalized}"
+
+
+def load_admitted_polyglot_eval_row(
+    data_root: str | Path, task_id: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = Path(data_root).resolve()
+    oracle_check = validate_polyglot_dataset(root)
+    normalized_task_id = _normalize_polyglot_task_id(task_id)
+    rows = _read_jsonl(root / "eval" / "cpp.jsonl")
+    matches = [row for row in rows if row.get("task_id") == normalized_task_id]
+    if len(matches) != 1:
+        available = ", ".join(sorted(str(row.get("task_id")) for row in rows))
+        raise ValueError(
+            f"Expected one admitted Polyglot row for {normalized_task_id!r}; "
+            f"found {len(matches)}. Available: {available}"
+        )
+    row = matches[0]
+    prompt = row.get("prompt")
+    metadata = row.get("metadata")
+    if not isinstance(prompt, str) or not prompt.strip() or not isinstance(metadata, dict):
+        raise ValueError(f"Invalid admitted Polyglot eval row for {normalized_task_id!r}")
+    if metadata.get("oracle_setup_valid") is not True:
+        raise ValueError(f"Polyglot oracle admission is not valid for {normalized_task_id!r}")
+    return row, oracle_check
+
+
+def _gemini_api_key() -> tuple[str, str]:
+    for env_name in GEMINI_API_KEY_ENV_NAMES:
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            return value, env_name
+    names = " or ".join(GEMINI_API_KEY_ENV_NAMES)
+    raise ValueError(f"Missing Gemini API key; export {names}")
+
+
+def _sdk_json_object(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump(mode="json", exclude_none=True)
+        return dict(dumped) if isinstance(dumped, dict) else {"value": dumped}
+    return {"value": str(value)}
+
+
+def _gemini_finish_reason(response: Any) -> str | None:
+    candidates = getattr(response, "candidates", None)
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    finish_reason = getattr(candidates[0], "finish_reason", None)
+    if finish_reason is None:
+        return None
+    value = getattr(finish_reason, "value", None)
+    return str(value if value is not None else finish_reason)
+
+
+def _validate_gemini_generation_config(
+    *, model: str, temperature: float, top_p: float, max_output_tokens: int
+) -> None:
+    if not model.strip():
+        raise ValueError("Gemini model must not be empty")
+    if model.strip().endswith("-latest"):
+        raise ValueError("Use an exact Gemini model id, not a mutable -latest alias")
+    if temperature < 0.0:
+        raise ValueError("Gemini temperature must not be negative")
+    if not 0.0 <= top_p <= 1.0:
+        raise ValueError("Gemini top-p must be between 0 and 1")
+    if max_output_tokens <= 0:
+        raise ValueError("Gemini max output tokens must be positive")
+
+
+def generate_gemini_text(
+    *,
+    prompt: str,
+    model: str,
+    temperature: float,
+    top_p: float,
+    seed: int,
+    max_output_tokens: int,
+) -> GeminiGeneration:
+    _validate_gemini_generation_config(
+        model=model,
+        temperature=temperature,
+        top_p=top_p,
+        max_output_tokens=max_output_tokens,
+    )
+    api_key, api_key_source = _gemini_api_key()
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:  # pragma: no cover - exercised without the optional extra
+        raise RuntimeError(
+            "Gemini sanity dependencies are missing; rerun with `uv run --extra gemini`"
+        ) from exc
+
+    config = types.GenerateContentConfig(
+        candidate_count=1,
+        max_output_tokens=max_output_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
+    )
+    with genai.Client(api_key=api_key) as client:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=config,
+        )
+    text = getattr(response, "text", None)
+    if not isinstance(text, str) or not text.strip():
+        finish_reason = _gemini_finish_reason(response) or "unknown"
+        raise RuntimeError(f"Gemini returned no text; finish_reason={finish_reason}")
+    return GeminiGeneration(
+        text=text,
+        api_key_source=api_key_source,
+        finish_reason=_gemini_finish_reason(response),
+        usage_metadata=_sdk_json_object(getattr(response, "usage_metadata", None)),
+    )
+
+
+def build_gemini_sanity_plan(
+    *,
+    data_root: str | Path,
+    task_id: str,
+    model: str,
+    temperature: float,
+    top_p: float,
+    seed: int,
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    _validate_gemini_generation_config(
+        model=model,
+        temperature=temperature,
+        top_p=top_p,
+        max_output_tokens=max_output_tokens,
+    )
+    row, oracle_check = load_admitted_polyglot_eval_row(data_root, task_id)
+    return _gemini_sanity_plan_from_row(
+        row=row,
+        oracle_check=oracle_check,
+        model=model,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
+        max_output_tokens=max_output_tokens,
+    )
+
+
+def _gemini_sanity_plan_from_row(
+    *,
+    row: dict[str, Any],
+    oracle_check: dict[str, Any],
+    model: str,
+    temperature: float,
+    top_p: float,
+    seed: int,
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    prompt = str(row["prompt"])
+    return {
+        "kind": GEMINI_SANITY_KIND,
+        "schema_version": GEMINI_SANITY_SCHEMA_VERSION,
+        "provider": "google-gemini-api",
+        "task_id": row["task_id"],
+        "problem_id": row["problem_id"],
+        "model": model,
+        "generation_config": {
+            "candidate_count": 1,
+            "max_output_tokens": max_output_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "seed": seed,
+        },
+        "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+        "prompt": prompt,
+        "oracle_setup_check": oracle_check,
+        "response_policy": {
+            "raw_response_only": True,
+            "strict_scoring": True,
+            "recovery_is_diagnostic_only": True,
+        },
+    }
+
+
+def run_polyglot_gemini_sanity(
+    *,
+    data_root: str | Path,
+    task_id: str,
+    output_dir: str | Path,
+    model: str = DEFAULT_GEMINI_MODEL,
+    temperature: float = 0.0,
+    top_p: float = 1.0,
+    seed: int = 42,
+    max_output_tokens: int = 8192,
+    force: bool = False,
+    generator: Callable[..., GeminiGeneration] | None = None,
+) -> tuple[dict[str, Any], dict[str, Path]]:
+    output = Path(output_dir).resolve()
+    if output.exists() and any(output.iterdir()) and not force:
+        raise FileExistsError(f"{output} already exists and is not empty; pass --force to replace it")
+
+    _validate_gemini_generation_config(
+        model=model,
+        temperature=temperature,
+        top_p=top_p,
+        max_output_tokens=max_output_tokens,
+    )
+    row, oracle_check = load_admitted_polyglot_eval_row(data_root, task_id)
+    plan = _gemini_sanity_plan_from_row(
+        row=row,
+        oracle_check=oracle_check,
+        model=model,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
+        max_output_tokens=max_output_tokens,
+    )
+    generate = generator or generate_gemini_text
+    generation = generate(
+        prompt=plan["prompt"],
+        model=model,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
+        max_output_tokens=max_output_tokens,
+    )
+
+    metadata = {
+        **row["metadata"],
+        "task_id": row["task_id"],
+        "problem_id": row["problem_id"],
+        "split": row["split"],
+        "task_root": str(Path(data_root).resolve()),
+    }
+    record = _score_sample({"index": 0, "metadata": metadata, "response": generation.text})
+    record["sanity_provider"] = "google-gemini-api"
+    record["sanity_model"] = model
+
+    if output.exists() and force:
+        shutil.rmtree(output)
+    output.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "prompt": output / "prompt.txt",
+        "response": output / "response.txt",
+        "request": output / "request.json",
+        "record": output / "record.json",
+        "summary": output / "summary.json",
+    }
+    paths["prompt"].write_text(str(plan.pop("prompt")), encoding="utf-8")
+    paths["response"].write_text(generation.text, encoding="utf-8")
+    request = {
+        key: value
+        for key, value in plan.items()
+        if key not in {"oracle_setup_check", "response_policy"}
+    }
+    request["api_key_source"] = generation.api_key_source
+    write_json(paths["request"], request)
+    write_json(paths["record"], record)
+    summary = {
+        **plan,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "api_key_source": generation.api_key_source,
+        "finish_reason": generation.finish_reason,
+        "usage_metadata": generation.usage_metadata,
+        "strict_pass": record.get("all_tests_pass") is True,
+        "strict_score": record.get("score"),
+        "strict_reason": record.get("reason"),
+        "recovered_pass": record.get("recovered_all_tests_pass") is True,
+        "recovered_reason": record.get("recovered_reason"),
+        "artifacts": {key: path.name for key, path in paths.items()},
+    }
+    write_json(paths["summary"], summary)
+    return summary, paths
+
+
 def _build_data_command(args: argparse.Namespace) -> None:
     paths = build_slime_polyglot_cpp_dataset(
         args.source_root,
@@ -1679,6 +1974,42 @@ def _sandbox_image_command(args: argparse.Namespace) -> None:
     raise SystemExit(result.returncode)
 
 
+def _gemini_sanity_command(args: argparse.Namespace) -> None:
+    if args.dry_run:
+        plan = build_gemini_sanity_plan(
+            data_root=args.data_root,
+            task_id=args.task_id,
+            model=args.model,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            seed=args.seed,
+            max_output_tokens=args.max_output_tokens,
+        )
+        print(json.dumps(plan, indent=2, sort_keys=True))
+        return
+    summary, paths = run_polyglot_gemini_sanity(
+        data_root=args.data_root,
+        task_id=args.task_id,
+        output_dir=args.out,
+        model=args.model,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        seed=args.seed,
+        max_output_tokens=args.max_output_tokens,
+        force=args.force,
+    )
+    print(
+        json.dumps(
+            {
+                "paths": {key: str(path) for key, path in paths.items()},
+                "summary": summary,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1709,6 +2040,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     sandbox_image.add_argument("--image", default=DEFAULT_POLYGLOT_SANDBOX_IMAGE)
     sandbox_image.add_argument("--dry-run", action="store_true")
     sandbox_image.set_defaults(func=_sandbox_image_command)
+
+    gemini_sanity = subparsers.add_parser(
+        "gemini-sanity",
+        help="Run one admitted Polyglot task through Gemini and the strict local grader",
+    )
+    gemini_sanity.add_argument("--data-root", required=True)
+    gemini_sanity.add_argument("--task-id", required=True)
+    gemini_sanity.add_argument("--out", required=True)
+    gemini_sanity.add_argument("--model", default=DEFAULT_GEMINI_MODEL)
+    gemini_sanity.add_argument("--temperature", type=float, default=0.0)
+    gemini_sanity.add_argument("--top-p", type=float, default=1.0)
+    gemini_sanity.add_argument("--seed", type=int, default=42)
+    gemini_sanity.add_argument("--max-output-tokens", type=int, default=8192)
+    gemini_sanity.add_argument("--dry-run", action="store_true")
+    gemini_sanity.add_argument("--force", action="store_true")
+    gemini_sanity.set_defaults(func=_gemini_sanity_command)
     return parser
 
 

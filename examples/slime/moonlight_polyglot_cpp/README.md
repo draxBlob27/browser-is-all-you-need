@@ -124,6 +124,77 @@ as response text. `stages/base-eval/run_receipt.txt` records
 Start with a small `SLIME_POLYGLOT_EVAL_LIMIT`. Raise or unset it only after
 the data manifest, rollout dump, and summary JSON are clean.
 
+## Optional Gemini One-Task Sanity Check
+
+This is a paid external-API canary for the prompt/parser/grader seam, not a
+Polyglot benchmark, pass@k result, Moonlight replacement, or official Aider
+comparison. It sends exactly one admitted row's saved `prompt` to Gemini,
+persists the raw response, and grades that unmodified text through this lane's
+strict parser and Docker tests. It does not add a system prompt, structured
+output schema, oracle files, test files, response repair, or parser relaxation.
+`recovered_*` remains diagnostic only and never changes `strict_pass`.
+
+Run this on the host after Polyglot data admission and sandbox-image setup; no
+SLIME container or GPU is required. Use the same task that needs a cross-model
+check, for example `all-your-base`. Dry-run first to inspect the exact request
+without using an API key or making a paid request:
+
+```bash
+export SLIME_RUN_ID=<admitted-polyglot-run-id>
+export POLYGLOT_DATA_ROOT="$PWD/.w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/data"
+export GEMINI_SANITY_OUT="$PWD/.w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/eval/gemini-sanity/all-your-base"
+
+uv run --extra gemini python -m w8_biayn.integrations.slime_polyglot_cpp \
+  gemini-sanity \
+  --data-root "$POLYGLOT_DATA_ROOT" \
+  --task-id cpp/all-your-base \
+  --out "$GEMINI_SANITY_OUT" \
+  --model gemini-3.5-flash \
+  --temperature 0 \
+  --top-p 1 \
+  --seed 42 \
+  --max-output-tokens 8192 \
+  --dry-run
+```
+
+For the single paid request, export the key in the shell and remove
+`--dry-run`. `GOOGLE_API_KEY` takes precedence over `GEMINI_API_KEY`, matching
+the official SDK; only the environment-variable name is recorded, never its
+value. Do not put either key in committed files or command arguments.
+
+```bash
+export GEMINI_API_KEY=<secret>
+
+uv run --extra gemini python -m w8_biayn.integrations.slime_polyglot_cpp \
+  gemini-sanity \
+  --data-root "$POLYGLOT_DATA_ROOT" \
+  --task-id cpp/all-your-base \
+  --out "$GEMINI_SANITY_OUT" \
+  --model gemini-3.5-flash \
+  --temperature 0 \
+  --top-p 1 \
+  --seed 42 \
+  --max-output-tokens 8192
+
+jq '{strict_pass, strict_reason, recovered_pass, recovered_reason,
+     model, finish_reason, oracle_setup_check}' \
+  "$GEMINI_SANITY_OUT/summary.json"
+```
+
+The command rejects mutable `*-latest` model aliases; record and pass an exact
+model id from the [official Gemini model list](https://ai.google.dev/gemini-api/docs/models).
+API-key behavior follows the
+[official Gemini key guidance](https://ai.google.dev/gemini-api/docs/generate-content/api-key).
+Use `--force` only for an intentional replacement; otherwise a nonempty output
+directory blocks the paid call.
+
+Artifacts are `prompt.txt` (verbatim admitted prompt), `response.txt` (raw API
+text), `request.json` (redacted request receipt), `record.json` (the normal
+strict reward record), and `summary.json` (oracle proof plus strict and
+diagnostic outcomes). A strict Gemini pass is useful evidence that a strong
+external model can satisfy this one task and contract. Any failure remains a
+failure; manual cleanup or recovered output must not be reported as passing.
+
 ## Artifacts
 
 The lane writes:
@@ -146,6 +217,12 @@ The lane writes:
   eval/
     base.records.jsonl
     base.summary.json
+    gemini-sanity/<task>/
+      prompt.txt
+      response.txt
+      request.json
+      record.json
+      summary.json
 ```
 
 The summary reports strict pass rate, mean reward, invalid-format rate,

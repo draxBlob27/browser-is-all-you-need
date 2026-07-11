@@ -281,6 +281,14 @@ The one-shot launcher must enable SLIME's supported special-token skipping so
 terminal tokenizer markers are removed during decoding; parser strictness
 against real prose outside the required path/code blocks remains unchanged.
 
+Optional cross-model gate: `gemini-sanity` may run exactly one admitted prompt
+through an exact Gemini model id, then the same strict parser and Docker grader.
+It must dry-run before the paid API call, keep the API key in environment only,
+persist prompt/raw-response/request/record/summary artifacts, expose no oracle
+or test content, perform no response repair, and report recovered fields as
+diagnostic only. This is a prompt/parser/grader sanity check, not pass@k or an
+official Polyglot/Aider comparison.
+
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
 Question:

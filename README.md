@@ -393,6 +393,16 @@ pass/fail rates, repo-owned category breakdowns, and `recovered_*` diagnostics
 for format-teachable failures; it deliberately omits PIE speed metrics such as
 `correct_and_faster_rate`.
 
+After admission, an optional one-task Gemini API sanity command can send the
+exact saved prompt to an exact model id and grade the raw response with the
+same strict parser and Docker harness. It is a paid cross-model canary, not a
+pass@k benchmark or official Aider result; it never exposes `files.example`,
+repairs output, or awards recovered diagnostics. Use
+`uv run --extra gemini python -m
+w8_biayn.integrations.slime_polyglot_cpp gemini-sanity --dry-run ...` first;
+the complete credential, artifact, and interpretation contract lives in the
+lane README.
+
 
 ## Moonlight Multi-SWE C++ Base Eval
 
