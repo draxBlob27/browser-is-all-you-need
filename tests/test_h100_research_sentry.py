@@ -326,7 +326,7 @@ def _write_gate0_chain(
                         "authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
                         "executor_id": "executor-h100-001",
                         "gpu_count": 8,
-                        "available_gpu_count": 8,
+                        "available_gpu_count": 0,
                         "price_per_gpu": 2.25,
                         "price_per_hour": 18.0,
                         "pending_price_change": False,
@@ -1966,7 +1966,13 @@ def test_gate0_rejects_provider_v1_unconditionally(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "mutation",
-    ["missing", "wrong-endpoint", "tampered-raw-rate", "aggregate-mismatch"],
+    [
+        "missing",
+        "wrong-endpoint",
+        "tampered-raw-rate",
+        "invalid-post-availability",
+        "aggregate-mismatch",
+    ],
 )
 def test_gate0_requires_exact_pre_and_post_rent_boundary_evidence(
     tmp_path: Path,
@@ -1983,6 +1989,8 @@ def test_gate0_requires_exact_pre_and_post_rent_boundary_evidence(
         executor["rent_boundary"]["endpoint"] = "/executors/other/rent"
     elif mutation == "tampered-raw-rate":
         executor["rent_boundary"]["after_post"]["price_per_hour"] = 17.0
+    elif mutation == "invalid-post-availability":
+        executor["rent_boundary"]["after_post"]["available_gpu_count"] = 9
     else:
         executor["rate_evidence"]["available_gpu_count"] = 9
     _json(gate0["provider_output"], provider)

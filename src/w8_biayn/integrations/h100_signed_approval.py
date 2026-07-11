@@ -1607,6 +1607,7 @@ def _validate_successful_provider_output(output: bytes, permit: VerifiedPermit) 
         raw_executor_id=raw_executor_id,
         signed_observed_rate=observed_rate,
         label="after_post",
+        require_full_availability=False,
     )
     aggregate = _validate_raw_rate_snapshot(
         {"authority": executor.get("rate_authority"), **dict(aggregate_rate)},
@@ -1614,7 +1615,17 @@ def _validate_successful_provider_output(output: bytes, permit: VerifiedPermit) 
         signed_observed_rate=observed_rate,
         label="aggregate",
     )
-    if before_post != after_post or before_post != aggregate:
+    before_identity = {
+        key: value for key, value in before_post.items() if key != "available_gpu_count"
+    }
+    after_identity = {
+        key: value for key, value in after_post.items() if key != "available_gpu_count"
+    }
+    if (
+        before_post != aggregate
+        or before_identity != after_identity
+        or after_post["available_gpu_count"] > before_post["available_gpu_count"]
+    ):
         raise PermitVerificationError("provider output rent-boundary rate evidence diverges")
     if (
         reconciliation.get("status") != "CONFIRMED_UNIQUE"
@@ -1631,6 +1642,7 @@ def _validate_raw_rate_snapshot(
     raw_executor_id: str,
     signed_observed_rate: Decimal,
     label: str,
+    require_full_availability: bool = True,
 ) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise PermitVerificationError(f"provider output {label} rate evidence is missing")
@@ -1641,7 +1653,8 @@ def _validate_raw_rate_snapshot(
         or gpu_count != REQUIRED_GPU_COUNT
         or isinstance(available_gpu_count, bool)
         or not isinstance(available_gpu_count, int)
-        or available_gpu_count < REQUIRED_GPU_COUNT
+        or not 0 <= available_gpu_count <= REQUIRED_GPU_COUNT
+        or (require_full_availability and available_gpu_count != REQUIRED_GPU_COUNT)
     ):
         raise PermitVerificationError(f"provider output {label} GPU rate shape is invalid")
     price_per_gpu = _require_decimal(value, "price_per_gpu")

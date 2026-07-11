@@ -804,7 +804,11 @@ def test_post_rent_availability_drop_is_expected_and_preserved(capsys) -> None:
     assert not any(call[0] == "down" for call in client.calls)
 
 
-def test_post_rent_invalid_availability_terminates_attributable_pod(capsys) -> None:
+@pytest.mark.parametrize("invalid_availability", [-1, -0.5, 0.0, 7.5, "0", False, 9])
+def test_post_rent_invalid_availability_terminates_attributable_pod(
+    capsys,
+    invalid_availability: object,
+) -> None:
     module = _module()
     client = FakeLium()
     stable = [
@@ -817,7 +821,7 @@ def test_post_rent_invalid_availability_terminates_attributable_pod(capsys) -> N
             "price_change_effective_date": None,
         }
     ]
-    malformed = [{**stable[0], "available_gpu_count": 9}]
+    malformed = [{**stable[0], "available_gpu_count": invalid_availability}]
     client.raw_rate_side_effects = [stable, stable, stable, stable, malformed]
 
     exit_code, record = _run(module, client, capsys)
@@ -831,6 +835,34 @@ def test_post_rent_invalid_availability_terminates_attributable_pod(capsys) -> N
     }
     assert ("down", "pod-123") in client.calls
     assert client.active_pods == []
+
+
+@pytest.mark.parametrize("invalid_availability", [-1, 8.0, 8.5, "8", True, 9])
+def test_pre_rent_availability_requires_a_genuine_exact_integer(
+    capsys,
+    invalid_availability: object,
+) -> None:
+    module = _module()
+    client = FakeLium()
+    client.raw_rate_rows = [
+        {
+            "id": EXECUTOR_ID,
+            "gpu_count": 8,
+            "available_gpu_count": invalid_availability,
+            "price_per_gpu": 2.25,
+            "pending_price_per_hour": None,
+            "price_change_effective_date": None,
+        }
+    ]
+
+    exit_code, record = _run(module, client, capsys)
+
+    assert exit_code != 0
+    assert record["error"] in {
+        "executor_rate_shape_invalid",
+        "executor_raw_availability_mismatch",
+    }
+    assert not any(call[0] == "rent_post" for call in client.calls)
 
 
 def test_missing_raw_rate_and_pending_rate_change_never_create_pod(capsys) -> None:

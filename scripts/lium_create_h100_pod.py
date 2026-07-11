@@ -897,14 +897,13 @@ def _raw_executor_rate_with_request(
             "Expected exactly one raw rate record for the executor",
         )
     row = matches[0]
-    try:
-        gpu_count = int(row.get("gpu_count"))
-        available_gpu_count = int(row.get("available_gpu_count"))
-    except (TypeError, ValueError) as exc:
+    gpu_count = row.get("gpu_count")
+    available_gpu_count = row.get("available_gpu_count")
+    if type(gpu_count) is not int or type(available_gpu_count) is not int:
         raise ProviderFailure(
             "executor_rate_shape_invalid",
             "Raw executor GPU availability is malformed",
-        ) from exc
+        )
     price_per_gpu = _decimal(row.get("price_per_gpu"), "price_per_gpu")
     if row.get("pending_price_per_hour") is not None or row.get("price_change_effective_date"):
         raise ProviderFailure(

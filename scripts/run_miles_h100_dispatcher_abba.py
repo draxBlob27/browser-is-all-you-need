@@ -1706,6 +1706,32 @@ def _validate_gate0_chain(paths: dict[str, Path]) -> dict[str, Any]:
         or rate_evidence.get("pending_price_change") is not False
     ):
         raise RuntimeError("Gate0 provider output rate authority is invalid")
+    rent_boundary = (
+        executor.get("rent_boundary") if isinstance(executor.get("rent_boundary"), dict) else {}
+    )
+    expected_before = {"authority": executor.get("rate_authority"), **rate_evidence}
+    after_post = (
+        rent_boundary.get("after_post")
+        if isinstance(rent_boundary.get("after_post"), dict)
+        else {}
+    )
+    before_identity = {
+        key: value for key, value in expected_before.items() if key != "available_gpu_count"
+    }
+    after_identity = {
+        key: value for key, value in after_post.items() if key != "available_gpu_count"
+    }
+    after_available = after_post.get("available_gpu_count")
+    if (
+        rent_boundary.get("status") != "VERIFIED_PRE_AND_POST"
+        or rent_boundary.get("endpoint") != f"/executors/{executor.get('id')}/rent"
+        or rent_boundary.get("before_post") != expected_before
+        or set(after_post) != set(expected_before)
+        or after_identity != before_identity
+        or type(after_available) is not int
+        or not 0 <= after_available <= rate_evidence["available_gpu_count"]
+    ):
+        raise RuntimeError("Gate0 provider output rent boundary is invalid")
     if (
         reconciliation.get("status") != "CONFIRMED_UNIQUE"
         or reconciliation.get("rent_mutation_attempt_policy")

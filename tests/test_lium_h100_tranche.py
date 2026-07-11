@@ -196,6 +196,7 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "'executor_id':raw_executor_id,'gpu_count':8,'available_gpu_count':8,"
         "'price_per_gpu':2.25,'price_per_hour':float(option('--expected-observed-rate')),"
         "'pending_price_change':False}\n"
+        "after_rate = dict(raw_rate); after_rate['available_gpu_count'] = 0\n"
         "record = {\n"
         " 'schema':'lium-h100-pod-create/v2','status':'RUNNING',\n"
         " 'pod':{'id':pod_id,'name':name,'huid':'fake-huid','ssh_cmd':'ssh fake'},\n"
@@ -206,7 +207,7 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "'rate_evidence':{key:value for key,value in raw_rate.items() if key != 'authority'},"
         "'rent_boundary':{'status':'VERIFIED_PRE_AND_POST',"
         "'endpoint':f'/executors/{raw_executor_id}/rent',"
-        "'before_post':raw_rate,'after_post':dict(raw_rate)}},\n"
+        "'before_post':raw_rate,'after_post':after_rate}},\n"
         " 'template':{'id':option('--template-id'),'docker_image':option('--template-image'),"
         "'docker_image_tag':option('--template-tag'),'status':option('--template-status')},\n"
         " 'access':{'ssh_public_key_path':option('--ssh-public-key-path'),"
@@ -223,6 +224,8 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "record['executor']['rent_boundary']['endpoint'] = '/executors/attacker/rent'\n"
         "elif boundary_tamper == 'after_rate': "
         "record['executor']['rent_boundary']['after_post']['price_per_hour'] = 17\n"
+        "elif boundary_tamper == 'after_availability': "
+        "record['executor']['rent_boundary']['after_post']['available_gpu_count'] = 9\n"
         "elif boundary_tamper == 'aggregate_rate': "
         "record['executor']['rate_evidence']['price_per_hour'] = 17\n"
         "output_mode = os.environ.get('FAKE_PROVIDER_OUTPUT_MODE', 'valid')\n"
@@ -917,7 +920,7 @@ def test_missing_or_partial_provider_output_reconciles_all_attributable_allocati
 
 @pytest.mark.parametrize(
     "tamper",
-    ["missing", "status", "endpoint", "after_rate", "aggregate_rate"],
+    ["missing", "status", "endpoint", "after_rate", "after_availability", "aggregate_rate"],
 )
 def test_outer_wrapper_rejects_tampered_rent_boundary_and_reconciles(
     tmp_path: Path, tamper: str

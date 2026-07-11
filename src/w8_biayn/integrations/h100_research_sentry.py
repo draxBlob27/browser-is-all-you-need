@@ -2680,8 +2680,10 @@ def _validate_gate0_chain(
         if (
             set(rate_evidence) != aggregate_rate_fields
             or rate_evidence.get("executor_id") != executor.get("id")
-            or _integer(rate_evidence.get("gpu_count")) != 8
-            or (_integer(rate_evidence.get("available_gpu_count")) or 0) < 8
+            or type(rate_evidence.get("gpu_count")) is not int
+            or rate_evidence.get("gpu_count") != 8
+            or type(rate_evidence.get("available_gpu_count")) is not int
+            or rate_evidence.get("available_gpu_count") != 8
             or not math.isclose(
                 _finite(rate_evidence.get("price_per_hour")) or -1.0,
                 _finite(executor.get("observed_rate_usd_per_hour")) or -2.0,
@@ -2700,6 +2702,27 @@ def _validate_gate0_chain(
             "authority": expected_rate_authority,
             **rate_evidence,
         }
+        after_post = rent_boundary.get("after_post")
+        after_available = (
+            after_post.get("available_gpu_count")
+            if isinstance(after_post, dict)
+            and type(after_post.get("available_gpu_count")) is int
+            else None
+        )
+        expected_after_identity = {
+            key: value
+            for key, value in expected_raw_rate.items()
+            if key != "available_gpu_count"
+        }
+        observed_after_identity = (
+            {
+                key: value
+                for key, value in after_post.items()
+                if key != "available_gpu_count"
+            }
+            if isinstance(after_post, dict)
+            else {}
+        )
         signed_observed_rate = _finite(payload.get("observed_node_hourly_rate_usd"))
         price_per_gpu = _finite(rate_evidence.get("price_per_gpu"))
         price_per_hour = _finite(rate_evidence.get("price_per_hour"))
@@ -2707,7 +2730,11 @@ def _validate_gate0_chain(
             rent_boundary.get("status") != "VERIFIED_PRE_AND_POST"
             or rent_boundary.get("endpoint") != f"/executors/{executor.get('id')}/rent"
             or rent_boundary.get("before_post") != expected_raw_rate
-            or rent_boundary.get("after_post") != expected_raw_rate
+            or not isinstance(after_post, dict)
+            or set(after_post) != set(expected_raw_rate)
+            or observed_after_identity != expected_after_identity
+            or after_available is None
+            or not 0 <= after_available <= 8
             or expected_raw_rate.get("authority") != executor.get("rate_authority")
             or signed_observed_rate is None
             or price_per_gpu is None

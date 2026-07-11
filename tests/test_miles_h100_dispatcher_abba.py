@@ -418,6 +418,28 @@ def _write_gate0_chain(root: Path) -> dict[str, Path]:
                         "price_per_hour": 18.0,
                         "pending_price_change": False,
                     },
+                    "rent_boundary": {
+                        "status": "VERIFIED_PRE_AND_POST",
+                        "endpoint": "/executors/executor-uuid-001/rent",
+                        "before_post": {
+                            "authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
+                            "executor_id": "executor-uuid-001",
+                            "gpu_count": 8,
+                            "available_gpu_count": 8,
+                            "price_per_gpu": 2.25,
+                            "price_per_hour": 18.0,
+                            "pending_price_change": False,
+                        },
+                        "after_post": {
+                            "authority": "provider_raw_price_per_gpu_x_gpu_count/v1",
+                            "executor_id": "executor-uuid-001",
+                            "gpu_count": 8,
+                            "available_gpu_count": 0,
+                            "price_per_gpu": 2.25,
+                            "price_per_hour": 18.0,
+                            "pending_price_change": False,
+                        },
+                    },
                 },
                 "template": {
                     "id": "template-001",
@@ -1573,6 +1595,21 @@ def test_gate0_unique_allocation_reconciliation_fails_closed(tmp_path: Path) -> 
     module["write_json"](gate0["launch_receipt"], receipt)
 
     with pytest.raises(RuntimeError, match="unique allocation reconciliation"):
+        module["_validate_gate0_chain"](gate0)
+
+
+def test_gate0_post_rent_availability_must_be_a_bounded_decrease(tmp_path: Path) -> None:
+    module = _module()
+    gate0 = _write_gate0_chain(tmp_path / "gate0")
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    provider["executor"]["rent_boundary"]["after_post"]["available_gpu_count"] = 9
+    module["write_json"](gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    module["write_json"](gate0["launch_receipt"], receipt)
+
+    with pytest.raises(RuntimeError, match="rent boundary is invalid"):
         module["_validate_gate0_chain"](gate0)
 
 
