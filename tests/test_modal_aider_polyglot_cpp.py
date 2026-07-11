@@ -36,6 +36,7 @@ LANE = ROOT / "examples/modal/glm47_flash_aider_polyglot_cpp"
 PURE = ROOT / "src/w8_biayn/modal_aider_polyglot_cpp.py"
 MODAL_APP = LANE / "modal_app.py"
 RUN_SH = LANE / "run.sh"
+RUNNER_DOCKERFILE = LANE / "Dockerfile.aider"
 
 
 def valid_env(**overrides: str) -> dict[str, str]:
@@ -349,3 +350,11 @@ def test_modal_images_add_mount_mode_local_source_after_build_steps() -> None:
             block = block.split(f"{next_name} =", 1)[0]
         assert block.count(".add_local_dir(") == 1
         assert block.rfind(".add_local_dir(") > block.rfind(".env(")
+
+
+def test_aider_runner_uses_python_311_for_pinned_dev_dependencies() -> None:
+    """Pinned Aider's NumPy constraints are unsatisfiable on Python 3.10."""
+
+    dockerfile = RUNNER_DOCKERFILE.read_text(encoding="utf-8")
+    assert dockerfile.startswith("FROM python:3.11-bookworm\n")
+    assert "buildpack-deps:jammy" not in dockerfile
