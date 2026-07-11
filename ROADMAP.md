@@ -339,6 +339,10 @@ The digest-pinned SGLang image must overlay Transformers commit
 `76732b4e7120808ff989edbd16401f61fa6a0afa`, fail its image build unless
 `glm4_moe_lite` is registered, and record the commit in plans and receipts
 before GPU admission.
+Reject stale remote run artifacts in a CPU-only preflight before model loading
+or GPU admission. After that gate, permit an SGLang container restart only
+when the runner-written config is identity-compatible; it must not mistake its
+own active run artifacts for operator reuse.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

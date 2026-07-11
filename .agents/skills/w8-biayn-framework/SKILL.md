@@ -289,6 +289,10 @@ Overlay the SGLang base with official Transformers commit
 `76732b4e7120808ff989edbd16401f61fa6a0afa`, fail image construction unless
 `glm4_moe_lite` is registered, and persist that identity in plans and
 receipts.
+Run stale-result admission on CPU before model loading or GPU startup. A
+server restart may accept only the active run's identity-compatible config;
+do not let the server freshness guard reject artifacts written by its own
+benchmark runner.
 
 
 ```bash

@@ -263,6 +263,10 @@ official GLM-4.7-Flash Transformers commit
 `76732b4e7120808ff989edbd16401f61fa6a0afa`. Image construction must fail
 unless Transformers recognizes `glm4_moe_lite`, and receipts must record this
 commit.
+A CPU-only results-Volume preflight must reject every stale run ID before
+model loading or GPU startup. After admission, a restarted SGLang container
+must accept the runner-written config only when its immutable identity remains
+compatible; that active config is not evidence of operator run-ID reuse.
 Do not accept `main`, `latest`, branch names, abbreviated Git commits, or an
 untagged/undigested SGLang image for a full result. A smoke may allow a pinned
 version tag only with an explicitly recorded unsafe-development override.

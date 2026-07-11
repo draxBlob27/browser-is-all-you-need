@@ -736,6 +736,28 @@ def assert_resume_compatible(
         raise ModalAiderError("existing run artifacts require W8_MODAL_AIDER_RESUME=1")
 
 
+def validate_remote_preflight(config: ModalAiderConfig, run_root: str | Path) -> None:
+    """Reject a stale remote run before model loading or GPU admission."""
+
+    root = Path(run_root)
+    present = list(root.iterdir()) if root.is_dir() else []
+    prior_config = root / "config.redacted.json"
+    if not present:
+        if config.resume:
+            raise ModalAiderError("resume requested but the remote run has no prior artifacts")
+        return
+    if not config.resume:
+        raise ModalAiderError("remote run id already has artifacts; use a fresh run id")
+    if not prior_config.is_file():
+        raise ModalAiderError("resume requested but the remote run has no prior config")
+    assert_resume_compatible(config, prior_config)
+    prior_receipt = root / "run_receipt.json"
+    if prior_receipt.is_file():
+        status = json.loads(prior_receipt.read_text(encoding="utf-8")).get("status")
+        if status == "complete":
+            raise ModalAiderError("a completed full run cannot be resumed")
+
+
 def ensure_secret_free(value: Any, secrets: Sequence[str]) -> None:
     rendered = json.dumps(value, sort_keys=True) if not isinstance(value, str) else value
     leaks = [secret for secret in secrets if secret and secret in rendered]

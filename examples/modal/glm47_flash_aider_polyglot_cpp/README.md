@@ -110,6 +110,12 @@ The plan is written under:
 
 Inspect it before acknowledging spend.
 
+Every paid invocation first checks the results Volume in a CPU-only function.
+A fresh run rejects any pre-existing remote artifact before model loading or
+GPU startup. After that admission, an SGLang container restart accepts only
+the same identity-compatible configuration written by the active benchmark
+runner, avoiding a false run-ID collision during Modal lifecycle recovery.
+
 ## Blocking Smoke
 
 Smoke allocates the real four-GPU server, but runs only two C++ tasks with one

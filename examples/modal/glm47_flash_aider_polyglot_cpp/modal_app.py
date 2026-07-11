@@ -55,6 +55,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     validate_aider_results,
     validate_authoritative_stats,
     validate_model_snapshot,
+    validate_remote_preflight,
     validate_sglang_help,
     write_json,
 )
@@ -147,6 +148,21 @@ else:
 
 def _remote_config(payload: dict[str, Any]) -> ModalAiderConfig:
     return _config_from_payload(payload)
+
+
+@app.function(
+    image=downloader_image,
+    volumes={"/results": results_volume},
+    timeout=120,
+    retries=0,
+)
+def preflight_remote_run(config_payload: dict[str, Any]) -> None:
+    """Reject stale result state on CPU before model loading or GPU startup."""
+
+    config = _remote_config(config_payload)
+    results_volume.reload()
+    run_root = Path("/results") / config.remote_run_path.lstrip("/")
+    validate_remote_preflight(config, run_root)
 
 
 @app.function(
@@ -316,14 +332,10 @@ class SGLangServer:
         failure_path.unlink(missing_ok=True)
         prior_config = run_root / "config.redacted.json"
         if prior_config.is_file():
-            if not config.resume:
-                raise ModalAiderError("remote run id already has artifacts; use a fresh run id")
-            assert_resume_compatible(config, prior_config)
-            prior_receipt = run_root / "run_receipt.json"
-            if prior_receipt.is_file():
-                status = json.loads(prior_receipt.read_text(encoding="utf-8")).get("status")
-                if status == "complete":
-                    raise ModalAiderError("a completed full run cannot be resumed")
+            # The benchmark runner writes this while the server is live. A
+            # Modal container restart must accept its own compatible run state;
+            # stale-run admission already happened on CPU before GPU startup.
+            assert_resume_compatible(config, prior_config, allow_plan=True)
         elif config.resume:
             raise ModalAiderError("resume requested but the remote run has no prior config")
         help_result = subprocess.run(
@@ -711,6 +723,7 @@ def _download_run() -> Path:
 def main() -> None:
     """Cache weights, run the benchmark, and download committed artifacts."""
 
+    preflight_remote_run.remote(RUNTIME)
     cache_receipt = preload_model.remote(RUNTIME)
     server_url = SGLangServer.get_url()
     result = run_aider_benchmark.remote(RUNTIME, server_url, cache_receipt, app.app_id)

@@ -31,6 +31,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     validate_aider_results,
     validate_authoritative_stats,
     validate_model_snapshot,
+    validate_remote_preflight,
     validate_sglang_help,
     write_json,
 )
@@ -81,7 +82,6 @@ def write_result(root: Path, task: str, *, exception: bool = False) -> None:
     )
     write_json(task_root / ".aider.results.json", payload)
     (task_root / ".aider.chat.history.md").write_text("model response\n", encoding="utf-8")
-
 
 
 def authoritative_stats(tasks: int, *, tries: int = 2) -> dict[str, object]:
@@ -284,6 +284,39 @@ def test_resume_rejects_identity_mismatch(tmp_path: Path) -> None:
         )
 
 
+def test_remote_preflight_rejects_stale_runs_before_paid_startup(tmp_path: Path) -> None:
+    cfg = config(tmp_path, W8_MODAL_AIDER_PHASE="smoke", W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1")
+    run_root = tmp_path / "remote-run"
+
+    validate_remote_preflight(cfg, run_root)
+    run_root.mkdir()
+    write_json(run_root / "server.failure.json", {"status": "failed"})
+    with pytest.raises(ModalAiderError, match="fresh run id"):
+        validate_remote_preflight(cfg, run_root)
+
+
+def test_remote_preflight_allows_only_compatible_incomplete_resume(tmp_path: Path) -> None:
+    run_root = tmp_path / "remote-run"
+    run_root.mkdir()
+    original = config(
+        tmp_path,
+        W8_MODAL_AIDER_PHASE="smoke",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+    )
+    write_json(run_root / "config.redacted.json", original.redacted_mapping())
+    resumed = config(
+        tmp_path,
+        W8_MODAL_AIDER_PHASE="smoke",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+        W8_MODAL_AIDER_RESUME="1",
+    )
+    validate_remote_preflight(resumed, run_root)
+
+    write_json(run_root / "run_receipt.json", {"status": "complete"})
+    with pytest.raises(ModalAiderError, match="completed full run"):
+        validate_remote_preflight(resumed, run_root)
+
+
 def test_runtime_mapping_keeps_only_hf_token_presence(tmp_path: Path) -> None:
     cfg = config(tmp_path, HF_TOKEN="hf-sentinel")
     runtime = cfg.runtime_mapping()
@@ -337,6 +370,14 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert 'volumes={"/results": results_volume}' in modal_app
     assert "secrets=downloader_secrets" in modal_app
     assert "secrets=[runner_secret]" in modal_app
+    assert (
+        modal_app.index("preflight_remote_run.remote(RUNTIME)")
+        < modal_app.index("preload_model.remote(RUNTIME)")
+        < modal_app.index("SGLangServer.get_url()")
+    )
+    server_start = modal_app.split("class SGLangServer:", 1)[1].split("def _run_aider_stage", 1)[0]
+    assert "assert_resume_compatible(config, prior_config, allow_plan=True)" in server_start
+    assert "remote run id already has artifacts" not in server_start
     assert "HF_TOKEN" not in modal_app.split("def run_aider_benchmark", 1)[1]
     assert run.index("trap cleanup EXIT") < run.index("modal token info") < run.index("modal run")
     assert "W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN" in run

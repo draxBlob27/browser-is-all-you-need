@@ -72,6 +72,10 @@ startup fails; raw server output stays ephemeral.
 The server image overlays the official pinned Transformers commit
 `76732b4e7120808ff989edbd16401f61fa6a0afa` and build-checks
 `glm4_moe_lite` before any GPU allocation.
+A CPU-only results-Volume preflight rejects stale run IDs before model loading
+or GPU startup. Once admitted, a restarted server container accepts only its
+own identity-compatible config instead of rejecting artifacts written by the
+live benchmark runner.
 
 
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt
