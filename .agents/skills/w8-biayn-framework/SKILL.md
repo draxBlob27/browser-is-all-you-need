@@ -227,6 +227,16 @@ Keep `--rollout-skip-special-tokens` enabled in the launcher. Terminal
 tokenizer markers such as `<|im_end|>` are a decoding concern; do not weaken
 the strict whole-file parser to accept them as response content.
 
+Use `w8_biayn.integrations.slime_polyglot_cpp compare-runs` for historical
+pass@k visualization. Require exactly two successful, oracle-clean runs with
+uniform samples per task, identical task and immutable oracle-fingerprint sets,
+and matching model/sampling/grader receipt fields. The report uses six
+mutually-exclusive medium-grained presentation categories for grouped pass@k
+bars, stacked sample outcomes, and a compact dumbbell view; it does not replace
+the stored fine-grained multi-label category summary. Keep task-level empirical
+pass@k distinct from sample-level outcome rates, and keep recovered-format
+results diagnostic only.
+
 The optional `gemini-sanity` command is limited to one admitted Polyglot task
 and must reuse the exact saved prompt, raw API response, strict parser, and
 Docker grader. Dry-run before spending; take `GOOGLE_API_KEY` or

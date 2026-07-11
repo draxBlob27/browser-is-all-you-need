@@ -393,6 +393,18 @@ pass/fail rates, repo-owned category breakdowns, and `recovered_*` diagnostics
 for format-teachable failures; it deliberately omits PIE speed metrics such as
 `correct_and_faster_rate`.
 
+Completed Polyglot runs can be compared without rerunning inference:
+`python -m w8_biayn.integrations.slime_polyglot_cpp compare-runs --run
+<pass1-run> --run <pass8-run> --out <report-dir>`. The reporter validates
+successful receipts, recomputed summaries, passing oracle proof, identical
+task/fingerprint sets, uniform per-task sample counts, and comparable model,
+sampling, sandbox, and timeout settings. It produces category-focused grouped
+and stacked bar charts plus a compact dumbbell view, JSON, CSV, and Markdown.
+The six mutually-exclusive presentation groups are separate from the existing
+fine-grained multi-label diagnostic categories. Empirical pass@k is task-level;
+the stacked outcome bars are sample-level. The complete command and artifact
+contract lives in the lane README.
+
 After admission, an optional one-task Gemini API sanity command can send the
 exact saved prompt to an exact model id and grade the raw response with the
 same strict parser and Docker harness. It is a paid cross-model canary, not a

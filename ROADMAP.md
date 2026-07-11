@@ -281,6 +281,14 @@ The one-shot launcher must enable SLIME's supported special-token skipping so
 terminal tokenizer markers are removed during decoding; parser strictness
 against real prose outside the required path/code blocks remains unchanged.
 
+For completed pass@1/pass@8 runs, the `compare-runs` report is the presentation
+gate: derive a uniform `k` from records, require successful and comparable
+receipts, recompute summaries, and match task plus oracle fingerprints before
+charting. Use the six mutually-exclusive report categories for grouped pass@k
+bars and sample-outcome stacked bars while retaining the source summary's
+fine-grained multi-label taxonomy. Keep task-level empirical pass@k distinct
+from sample-level outcome distributions.
+
 Optional cross-model gate: `gemini-sanity` may run exactly one admitted prompt
 through an exact Gemini model id, then the same strict parser and Docker grader.
 It must dry-run before the paid API call, keep the API key in environment only,

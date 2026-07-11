@@ -124,6 +124,77 @@ as response text. `stages/base-eval/run_receipt.txt` records
 Start with a small `SLIME_POLYGLOT_EVAL_LIMIT`. Raise or unset it only after
 the data manifest, rollout dump, and summary JSON are clean.
 
+## Compare Pass@1 And Pass@8
+
+After two complete evaluations over the same task set, use the offline
+`compare-runs` command. It reads existing artifacts; it does not load a model,
+rerun SLIME, or invoke Docker:
+
+```bash
+PASS1_RUN=/path/to/moonlight_polyglot_pass1_run
+PASS8_RUN=/path/to/moonlight_polyglot_pass8_run
+REPORT_OUT=.w8-biayn/slime/moonlight-polyglot-cpp/reports/pass1-vs-pass8
+
+uv run python -m w8_biayn.integrations.slime_polyglot_cpp compare-runs \
+  --run "$PASS1_RUN" \
+  --run "$PASS8_RUN" \
+  --out "$REPORT_OUT"
+```
+
+The command derives `k` from `eval/base.records.jsonl` and requires exactly
+the same positive sample count for every task in a run. It then requires both
+run receipts to be successful; recomputes each stored summary from its records;
+requires the embedded schema-v2 oracle proof; compares task IDs and immutable
+task/grader/image fingerprints; and checks the model, sampling, response-limit,
+sandbox, and timeout receipt fields. It rejects a comparison when any of those
+inputs differ. Future receipts record `eval_n_samples_per_prompt` explicitly,
+but record-based derivation keeps historical runs reportable.
+
+The generated report is category-first:
+
+- `category_pass_at_k.svg`: the primary grouped horizontal bar chart;
+- `category_sample_outcomes.svg`: 100% stacked bars for strict individual
+  sample outcomes;
+- `overall_pass_at_k.svg`: the two overall task-level bars;
+- `category_gain.svg`: a compact dumbbell view of the same category pass
+  rates;
+- `comparison.summary.json`, `category_summary.csv`, and
+  `task_outcomes.csv`: machine-readable chart sources;
+- `report.md`: an index that embeds all charts and records interpretation
+  rules.
+
+The source `base.summary.json` retains its fine-grained, multi-label diagnostic
+taxonomy. For presentation, the comparison uses six mutually-exclusive groups
+so that each exercise contributes exactly once and each bar has a useful
+denominator:
+
+- Algorithms & data structures
+- Text & parsing
+- Numerical reasoning
+- Time & date
+- State & concurrency
+- Logic, grids & games
+
+`pass@k` here is the empirical fraction of tasks with at least one strict pass
+among exactly `k` samples. The stacked outcome chart instead counts individual
+samples, so it has a different denominator. Recovered-format results remain
+diagnostic and never count as strict passes. The two runs are independently
+sampled, so the reporter does not force pass@8 to be monotonic over pass@1 for
+every category.
+
+For the two July 11 runs, the command shape is:
+
+```bash
+uv run python -m w8_biayn.integrations.slime_polyglot_cpp compare-runs \
+  --run /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/runs/moonlight_polyglot_p1_smoke_20260711085134 \
+  --run /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/runs/moonlight_polyglot_p1_full_20260711091339 \
+  --out /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/reports/moonlight_polyglot_pass1_vs_pass8_20260711
+```
+
+Use `--force` only to overwrite the known files in an intentional report
+directory. Generated reports remain local evidence under `.w8-biayn/` and
+must not be committed.
+
 ## Optional Gemini One-Task Sanity Check
 
 This is a paid external-API canary for the prompt/parser/grader seam, not a
@@ -229,6 +300,15 @@ The lane writes:
       request.json
       record.json
       summary.json
+  ../../reports/<comparison-name>/
+    comparison.summary.json
+    category_summary.csv
+    task_outcomes.csv
+    overall_pass_at_k.svg
+    category_pass_at_k.svg
+    category_sample_outcomes.svg
+    category_gain.svg
+    report.md
 ```
 
 The summary reports strict pass rate, mean reward, invalid-format rate,

@@ -580,6 +580,7 @@ sglang_enable_tp_memory_inbalance_check=${SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHEC
 eval_max_response_len=${EVAL_MAX_RESPONSE_LEN}
 eval_temperature=${EVAL_TEMPERATURE}
 eval_top_p=${EVAL_TOP_P}
+eval_n_samples_per_prompt=${EVAL_N_SAMPLES_PER_PROMPT}
 rollout_skip_special_tokens=1
 polyglot_sandbox_image=${POLYGLOT_SANDBOX_IMAGE}
 polyglot_test_timeout_seconds=${POLYGLOT_TEST_TIMEOUT_SECONDS}

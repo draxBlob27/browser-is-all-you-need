@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,95 @@ from w8_biayn.integrations import slime_polyglot_cpp as polyglot
 EXAMPLE_ROOT = Path("examples/slime/moonlight_polyglot_cpp")
 RUNNER = EXAMPLE_ROOT / "moonlight_polyglot_cpp.sh"
 README = EXAMPLE_ROOT / "README.md"
+
+
+def make_polyglot_comparison_run(
+    root: Path,
+    *,
+    run_id: str,
+    task_samples: dict[str, list[bool]],
+    config_overrides: dict[str, str] | None = None,
+) -> Path:
+    records: list[dict[str, object]] = []
+    oracle_records: list[dict[str, object]] = []
+    for exercise, samples in task_samples.items():
+        categories = list(polyglot.categorize_polyglot_cpp_exercise(exercise))
+        task_id = f"cpp/{exercise}"
+        oracle_records.append(
+            {
+                "task_id": task_id,
+                "exercise": exercise,
+                "setup_valid": True,
+                "passed": True,
+                "reason": "passed",
+                "oracle_input_sha256": f"sha256:{exercise}",
+            }
+        )
+        for sample_index, passed in enumerate(samples):
+            records.append(
+                {
+                    "score": 1.0 if passed else 0.0,
+                    "reward": 1.0 if passed else 0.0,
+                    "reason": "passed" if passed else "tests_failed",
+                    "task_id": task_id,
+                    "problem_id": exercise,
+                    "exercise": exercise,
+                    "split": "eval",
+                    "sample_index": sample_index,
+                    "all_tests_pass": passed,
+                    "tests_passed": 1 if passed else 0,
+                    "tests_total": 1,
+                    "compile_error": False,
+                    "timeout": False,
+                    "categories": categories,
+                    "category": categories[0],
+                }
+            )
+
+    oracle_check = {
+        "enabled": True,
+        "blocking": True,
+        "complete": True,
+        "schema_version": polyglot.SCHEMA_VERSION,
+        "oracle_protocol_version": polyglot.ORACLE_PROTOCOL_VERSION,
+        "correct_answer_source": polyglot.ORACLE_CORRECT_ANSWER_SOURCE,
+        "task_count": len(task_samples),
+        "all_passed": True,
+    }
+    summary = polyglot.aggregate_polyglot_records(records, label="base")
+    summary["oracle_setup_check"] = oracle_check
+    (root / "eval").mkdir(parents=True)
+    (root / "data").mkdir()
+    (root / "stages" / "base-eval").mkdir(parents=True)
+    (root / "eval" / "base.records.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    (root / "eval" / "base.summary.json").write_text(
+        json.dumps(summary),
+        encoding="utf-8",
+    )
+    (root / "data" / "oracle.records.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in oracle_records),
+        encoding="utf-8",
+    )
+    config = {
+        "hf_model_id": "moonshotai/Moonlight-16B-A3B-Instruct",
+        "eval_max_response_len": "4096",
+        "eval_temperature": "0.7",
+        "eval_top_p": "1",
+        "rollout_skip_special_tokens": "1",
+        "polyglot_sandbox_image": "w8-biayn-polyglot-cpp:latest",
+        "polyglot_test_timeout_seconds": "180",
+    }
+    config.update(config_overrides or {})
+    receipt = {"status": "0", "ray_job_terminal_status": "SUCCEEDED", "run_id": run_id}
+    receipt.update(config)
+    (root / "stages" / "base-eval" / "run_receipt.txt").write_text(
+        "".join(f"{key}={value}\n" for key, value in receipt.items()),
+        encoding="utf-8",
+    )
+    return root
 
 
 @pytest.fixture(autouse=True)
@@ -729,6 +819,180 @@ def test_score_debug_dump_writes_polyglot_summary_without_speed_metrics(tmp_path
     assert "missing_runtime_rate" not in summary
 
 
+def test_polyglot_report_categories_are_complete_mutually_exclusive_and_apt() -> None:
+    grouped = [
+        exercise
+        for exercises in polyglot.POLYGLOT_REPORT_CATEGORY_EXERCISES.values()
+        for exercise in exercises
+    ]
+
+    assert len(polyglot.POLYGLOT_REPORT_CATEGORY_EXERCISES) == 6
+    assert len(grouped) == len(set(grouped))
+    assert set(grouped) == set(polyglot.POLYGLOT_CPP_EXERCISE_CATEGORIES)
+    assert all(
+        3 <= len(exercises) <= 6
+        for exercises in polyglot.POLYGLOT_REPORT_CATEGORY_EXERCISES.values()
+    )
+
+
+def test_build_polyglot_pass_at_k_report_writes_category_visuals(tmp_path: Path) -> None:
+    p1_samples = {
+        "two-fer": [True],
+        "knapsack": [False],
+        "clock": [False],
+        "bank-account": [False],
+        "yacht": [True],
+        "allergies": [False],
+    }
+    p8_passes = {
+        "two-fer": True,
+        "knapsack": True,
+        "clock": False,
+        "bank-account": True,
+        "yacht": True,
+        "allergies": True,
+    }
+    p8_samples = {
+        exercise: [False] * 7 + [passed] for exercise, passed in p8_passes.items()
+    }
+    p1 = make_polyglot_comparison_run(
+        tmp_path / "p1",
+        run_id="polyglot-p1",
+        task_samples=p1_samples,
+    )
+    p8 = make_polyglot_comparison_run(
+        tmp_path / "p8",
+        run_id="polyglot-p8",
+        task_samples=p8_samples,
+    )
+
+    payload, paths = polyglot.build_polyglot_pass_at_k_report(
+        [p8, p1],
+        tmp_path / "report",
+    )
+
+    assert [run["label"] for run in payload["runs"]] == ["pass@1", "pass@8"]
+    assert payload["runs"][0]["passed_task_count"] == 2
+    assert payload["runs"][1]["passed_task_count"] == 5
+    assert len(payload["categories"]) == 6
+    assert {category["category"] for category in payload["categories"]} == set(
+        polyglot.POLYGLOT_REPORT_CATEGORY_EXERCISES
+    )
+    assert all(path.exists() for path in paths.values())
+    for key in ("overall_chart", "category_chart", "outcome_chart", "gain_chart"):
+        chart = paths[key]
+        assert "<svg" in chart.read_text(encoding="utf-8")
+        assert ET.parse(chart).getroot().tag.endswith("svg")
+    report = paths["report"].read_text(encoding="utf-8")
+    assert "Strict pass@k by category" in report
+    assert "dumbbell" in report
+    assert "not an official Aider leaderboard result" in report
+    category_csv = paths["category_csv"].read_text(encoding="utf-8")
+    assert "pass_at_1_pass_rate" in category_csv
+    assert "pass_at_8_pass_rate" in category_csv
+
+
+def test_polyglot_pass_at_k_report_rejects_nonuniform_sample_counts(tmp_path: Path) -> None:
+    uneven = make_polyglot_comparison_run(
+        tmp_path / "uneven",
+        run_id="uneven",
+        task_samples={"two-fer": [False, True], "knapsack": [False]},
+    )
+    p8 = make_polyglot_comparison_run(
+        tmp_path / "p8",
+        run_id="p8",
+        task_samples={"two-fer": [True] * 8, "knapsack": [False] * 8},
+    )
+
+    with pytest.raises(ValueError, match="non-uniform samples per task"):
+        polyglot.build_polyglot_pass_at_k_report([uneven, p8], tmp_path / "report")
+
+
+def test_polyglot_pass_at_k_report_rejects_config_mismatch(tmp_path: Path) -> None:
+    p1 = make_polyglot_comparison_run(
+        tmp_path / "p1",
+        run_id="p1",
+        task_samples={"two-fer": [True]},
+    )
+    p8 = make_polyglot_comparison_run(
+        tmp_path / "p8",
+        run_id="p8",
+        task_samples={"two-fer": [False] * 7 + [True]},
+        config_overrides={"eval_temperature": "1.0"},
+    )
+
+    with pytest.raises(ValueError, match="eval_temperature.*differs"):
+        polyglot.build_polyglot_pass_at_k_report([p1, p8], tmp_path / "report")
+
+
+def test_polyglot_pass_at_k_report_rejects_task_set_mismatch(tmp_path: Path) -> None:
+    p1 = make_polyglot_comparison_run(
+        tmp_path / "p1",
+        run_id="p1",
+        task_samples={"two-fer": [True]},
+    )
+    p8 = make_polyglot_comparison_run(
+        tmp_path / "p8",
+        run_id="p8",
+        task_samples={"two-fer": [True] * 8, "knapsack": [False] * 8},
+    )
+
+    with pytest.raises(ValueError, match="task sets differ"):
+        polyglot.build_polyglot_pass_at_k_report([p1, p8], tmp_path / "report")
+
+
+def test_polyglot_pass_at_k_report_rejects_oracle_fingerprint_mismatch(
+    tmp_path: Path,
+) -> None:
+    p1 = make_polyglot_comparison_run(
+        tmp_path / "p1",
+        run_id="p1",
+        task_samples={"two-fer": [True]},
+    )
+    p8 = make_polyglot_comparison_run(
+        tmp_path / "p8",
+        run_id="p8",
+        task_samples={"two-fer": [True] * 8},
+    )
+    oracle_path = p8 / "data" / "oracle.records.jsonl"
+    oracle = json.loads(oracle_path.read_text(encoding="utf-8"))
+    oracle["oracle_input_sha256"] = "sha256:different-grader"
+    oracle_path.write_text(json.dumps(oracle) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fingerprints differ"):
+        polyglot.build_polyglot_pass_at_k_report([p1, p8], tmp_path / "report")
+
+
+def test_polyglot_pass_at_k_report_rejects_failed_receipt(tmp_path: Path) -> None:
+    p1 = make_polyglot_comparison_run(
+        tmp_path / "p1",
+        run_id="p1",
+        task_samples={"two-fer": [True]},
+    )
+    p8 = make_polyglot_comparison_run(
+        tmp_path / "p8",
+        run_id="p8",
+        task_samples={"two-fer": [True] * 8},
+    )
+    receipt_path = p1 / "stages" / "base-eval" / "run_receipt.txt"
+    receipt_path.write_text(
+        receipt_path.read_text(encoding="utf-8").replace("status=0", "status=1"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="receipt is not successful"):
+        polyglot.build_polyglot_pass_at_k_report([p1, p8], tmp_path / "report")
+
+
+def test_polyglot_compare_runs_cli_parses_two_historical_runs() -> None:
+    args = polyglot.build_arg_parser().parse_args(
+        ["compare-runs", "--run", "/runs/p1", "--run", "/runs/p8", "--out", "/reports/x"]
+    )
+
+    assert args.run == ["/runs/p1", "/runs/p8"]
+    assert args.out == "/reports/x"
+
+
 def test_score_debug_dump_embeds_admitted_oracle_setup_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -852,6 +1116,7 @@ def test_moonlight_polyglot_cpp_runner_is_base_eval_only() -> None:
     assert "W8_SLIME_POLYGLOT_SANDBOX_IMAGE" in text
     assert "base.records.jsonl" in text
     assert "rollout_skip_special_tokens=1" in text
+    assert "eval_n_samples_per_prompt=" in text
     assert "correct_and_faster_rate" not in text
 
 
@@ -877,4 +1142,5 @@ def test_moonlight_polyglot_cpp_readme_documents_operator_flow() -> None:
     assert "GEMINI_API_KEY" in text
     assert "raw response" in text
     assert "not a" in text and "pass@k" in text
+    assert "compare-runs" in text
     assert "correct_and_faster_rate" in text

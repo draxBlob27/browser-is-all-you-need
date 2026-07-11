@@ -200,6 +200,16 @@ Keep `--rollout-skip-special-tokens` enabled in the launcher. Terminal
 tokenizer markers such as `<|im_end|>` are a decoding concern; do not weaken
 the strict whole-file parser to accept them as response content.
 
+Historical Polyglot pass@k comparisons use the repo-owned `compare-runs`
+command. It must derive a uniform sample count from records, require successful
+receipts and passing embedded oracle proofs, recompute summaries, and match task
+sets, immutable oracle fingerprints, and relevant run configuration before
+writing local evidence. Keep the source fine-grained multi-label categories,
+but use the six mutually-exclusive presentation groups documented in the lane
+README for category bars. Report empirical pass@k at task level and strict
+outcome distributions at sample level; recovered diagnostics never become
+passes.
+
 The optional `gemini-sanity` command is limited to one admitted Polyglot task
 and must reuse the exact saved prompt, raw API response, strict parser, and
 Docker grader. Dry-run before spending; take `GOOGLE_API_KEY` or

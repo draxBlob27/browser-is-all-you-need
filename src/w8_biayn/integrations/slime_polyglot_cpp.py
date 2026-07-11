@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import html
 import json
 import os
 import re
@@ -83,6 +85,73 @@ POLYGLOT_CPP_EXERCISE_CATEGORIES: dict[str, tuple[str, ...]] = {
     "zebra-puzzle": ("constraint-solving", "logic-puzzles"),
 }
 
+# The source summary above is deliberately fine-grained and multi-label. That
+# is useful when diagnosing one exercise, but it produces dozens of tiny bars
+# for a 26-task pass@k comparison. Reports therefore use one stable,
+# mutually-exclusive presentation category per exercise. Six groups keep the
+# chart readable while preserving the benchmark's meaningful task families.
+POLYGLOT_REPORT_CATEGORY_EXERCISES: dict[str, tuple[str, ...]] = {
+    "Algorithms & data structures": (
+        "binary-search-tree",
+        "circular-buffer",
+        "grade-school",
+        "knapsack",
+        "linked-list",
+        "sublist",
+    ),
+    "Text & parsing": (
+        "crypto-square",
+        "diamond",
+        "kindergarten-garden",
+        "phone-number",
+        "two-fer",
+    ),
+    "Numerical reasoning": (
+        "all-your-base",
+        "allergies",
+        "complex-numbers",
+        "perfect-numbers",
+        "space-age",
+    ),
+    "Time & date": ("clock", "gigasecond", "meetup"),
+    "State & concurrency": (
+        "bank-account",
+        "dnd-character",
+        "parallel-letter-frequency",
+        "robot-name",
+    ),
+    "Logic, grids & games": (
+        "queen-attack",
+        "spiral-matrix",
+        "yacht",
+        "zebra-puzzle",
+    ),
+}
+POLYGLOT_REPORT_CATEGORY_BY_EXERCISE = {
+    exercise: category
+    for category, exercises in POLYGLOT_REPORT_CATEGORY_EXERCISES.items()
+    for exercise in exercises
+}
+POLYGLOT_COMPARISON_KIND = "polyglot-pass-at-k-comparison"
+POLYGLOT_COMPARISON_SCHEMA_VERSION = 1
+POLYGLOT_COMPARISON_CONFIG_KEYS = (
+    "hf_model_id",
+    "eval_max_response_len",
+    "eval_temperature",
+    "eval_top_p",
+    "rollout_skip_special_tokens",
+    "polyglot_sandbox_image",
+    "polyglot_test_timeout_seconds",
+)
+POLYGLOT_OUTCOME_BUCKETS = (
+    ("passed", "Passed", "#2ca02c"),
+    ("format", "Format/files", "#d62728"),
+    ("compile", "Compile", "#ff7f0e"),
+    ("timeout", "Timeout", "#9467bd"),
+    ("tests", "Tests failed", "#1f77b4"),
+    ("other", "Other failure", "#7f7f7f"),
+)
+
 
 @dataclass(frozen=True)
 class PolyglotExercise:
@@ -112,6 +181,23 @@ class GeminiGeneration:
     api_key_source: str
     finish_reason: str | None = None
     usage_metadata: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class PolyglotComparisonRun:
+    root: Path
+    run_id: str
+    k: int
+    records: list[dict[str, Any]]
+    summary: dict[str, Any]
+    receipt: dict[str, str]
+    oracle_fingerprints: dict[str, str]
+    task_ids: tuple[str, ...]
+    passed_task_ids: frozenset[str]
+
+    @property
+    def label(self) -> str:
+        return f"pass@{self.k}"
 
 
 class PolyglotResponseError(ValueError):
@@ -1573,6 +1659,756 @@ def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def polyglot_report_category(exercise: str) -> str:
+    """Return the stable, mutually-exclusive presentation category."""
+
+    category = POLYGLOT_REPORT_CATEGORY_BY_EXERCISE.get(exercise)
+    if category is None:
+        raise ValueError(
+            f"Polyglot exercise {exercise!r} has no report category; "
+            "add an apt presentation category before charting it"
+        )
+    return category
+
+
+def _read_run_receipt(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError(f"cannot read Polyglot run receipt: {path}") from exc
+    receipt: dict[str, str] = {}
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        if "=" not in line:
+            raise ValueError(f"invalid Polyglot run receipt line at {path}:{line_number}")
+        key, value = line.split("=", 1)
+        if not key or key in receipt:
+            raise ValueError(f"invalid Polyglot run receipt line at {path}:{line_number}")
+        receipt[key] = value
+    return receipt
+
+
+def _require_passing_summary_oracle(summary: dict[str, Any], *, path: Path) -> None:
+    oracle = summary.get("oracle_setup_check")
+    if (
+        not isinstance(oracle, dict)
+        or oracle.get("schema_version") != SCHEMA_VERSION
+        or oracle.get("oracle_protocol_version") != ORACLE_PROTOCOL_VERSION
+        or oracle.get("correct_answer_source") != ORACLE_CORRECT_ANSWER_SOURCE
+        or oracle.get("complete") is not True
+        or oracle.get("all_passed") is not True
+    ):
+        raise ValueError(f"Polyglot summary does not contain a passing oracle proof: {path}")
+
+
+def _task_rows(records: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        task_id = record.get("task_id")
+        exercise = record.get("exercise") or record.get("problem_id")
+        if (
+            not isinstance(task_id, str)
+            or not task_id.startswith("cpp/")
+            or not isinstance(exercise, str)
+            or task_id != f"cpp/{exercise}"
+        ):
+            raise ValueError(f"invalid Polyglot comparison record identity: {task_id!r}")
+        polyglot_report_category(exercise)
+        by_task[task_id].append(record)
+    if not by_task:
+        raise ValueError("Polyglot comparison records are empty")
+    return by_task
+
+
+def _validate_stored_polyglot_summary(
+    summary: dict[str, Any],
+    records: list[dict[str, Any]],
+    *,
+    path: Path,
+) -> None:
+    if summary.get("benchmark") != BENCHMARK or summary.get("language") != LANGUAGE:
+        raise ValueError(f"unexpected benchmark or language in Polyglot summary: {path}")
+    label = summary.get("label")
+    if not isinstance(label, str) or not label:
+        raise ValueError(f"missing label in Polyglot summary: {path}")
+    recomputed = aggregate_polyglot_records(records, label=label)
+    for key, expected in recomputed.items():
+        if key == "best_records":
+            continue
+        if summary.get(key) != expected:
+            raise ValueError(f"Polyglot summary field {key!r} does not match records: {path}")
+    _require_passing_summary_oracle(summary, path=path)
+
+
+def _load_polyglot_comparison_run(run_root: str | Path) -> PolyglotComparisonRun:
+    root = Path(run_root).expanduser().resolve()
+    summary_path = root / "eval" / "base.summary.json"
+    records_path = root / "eval" / "base.records.jsonl"
+    receipt_path = root / "stages" / "base-eval" / "run_receipt.txt"
+    oracle_records_path = root / "data" / "oracle.records.jsonl"
+    for path in (summary_path, records_path, receipt_path, oracle_records_path):
+        if not path.is_file():
+            raise ValueError(f"missing Polyglot comparison artifact: {path}")
+
+    summary = _read_json_object(summary_path)
+    records = _read_jsonl(records_path)
+    receipt = _read_run_receipt(receipt_path)
+    oracle_records = _read_jsonl(oracle_records_path)
+    _validate_stored_polyglot_summary(summary, records, path=summary_path)
+
+    by_task = _task_rows(records)
+    sample_counts = {len(task_records) for task_records in by_task.values()}
+    if len(sample_counts) != 1:
+        detail = ", ".join(
+            f"{task_id}={len(task_records)}"
+            for task_id, task_records in sorted(by_task.items())
+        )
+        raise ValueError(f"Polyglot run has non-uniform samples per task: {detail}")
+    k = next(iter(sample_counts))
+    if k <= 0:
+        raise ValueError(f"Polyglot run has invalid samples per task: {root}")
+
+    task_ids = tuple(sorted(by_task))
+    if summary.get("task_count") != len(task_ids) or summary.get("sample_count") != len(records):
+        raise ValueError(f"Polyglot summary counts do not match records: {summary_path}")
+
+    oracle_fingerprints: dict[str, str] = {}
+    for oracle_record in oracle_records:
+        task_id = oracle_record.get("task_id")
+        fingerprint = oracle_record.get("oracle_input_sha256")
+        if (
+            not isinstance(task_id, str)
+            or task_id in oracle_fingerprints
+            or not isinstance(fingerprint, str)
+            or not fingerprint
+            or oracle_record.get("setup_valid") is not True
+            or oracle_record.get("passed") is not True
+            or oracle_record.get("reason") != "passed"
+        ):
+            raise ValueError(f"invalid Polyglot oracle comparison record: {oracle_records_path}")
+        oracle_fingerprints[task_id] = fingerprint
+    if set(oracle_fingerprints) != set(task_ids):
+        raise ValueError(f"Polyglot eval/oracle task mismatch: {root}")
+
+    if receipt.get("status") != "0":
+        raise ValueError(f"Polyglot base-eval receipt is not successful: {receipt_path}")
+    terminal_status = receipt.get("ray_job_terminal_status")
+    if terminal_status and terminal_status != "SUCCEEDED":
+        raise ValueError(f"Polyglot Ray job did not succeed: {receipt_path}")
+    missing_config = [key for key in POLYGLOT_COMPARISON_CONFIG_KEYS if key not in receipt]
+    if missing_config:
+        raise ValueError(
+            f"Polyglot receipt is missing comparison fields {missing_config}: {receipt_path}"
+        )
+
+    passed_task_ids = frozenset(
+        task_id
+        for task_id, task_records in by_task.items()
+        if any(record.get("all_tests_pass") is True for record in task_records)
+    )
+    return PolyglotComparisonRun(
+        root=root,
+        run_id=receipt.get("run_id") or root.name,
+        k=k,
+        records=records,
+        summary=summary,
+        receipt=receipt,
+        oracle_fingerprints=oracle_fingerprints,
+        task_ids=task_ids,
+        passed_task_ids=passed_task_ids,
+    )
+
+
+def _require_comparable_polyglot_runs(
+    run_roots: Sequence[str | Path],
+) -> list[PolyglotComparisonRun]:
+    if len(run_roots) != 2:
+        raise ValueError("Polyglot pass@k comparison requires exactly two run roots")
+    runs = sorted(
+        (_load_polyglot_comparison_run(root) for root in run_roots),
+        key=lambda run: run.k,
+    )
+    if runs[0].k == runs[1].k:
+        raise ValueError(f"Polyglot comparison runs both use k={runs[0].k}")
+    if runs[0].task_ids != runs[1].task_ids:
+        left = set(runs[0].task_ids)
+        right = set(runs[1].task_ids)
+        raise ValueError(
+            "Polyglot comparison task sets differ: "
+            f"only {runs[0].run_id}={sorted(left - right)}, "
+            f"only {runs[1].run_id}={sorted(right - left)}"
+        )
+    if runs[0].oracle_fingerprints != runs[1].oracle_fingerprints:
+        raise ValueError("Polyglot comparison task/grader/image fingerprints differ")
+    for key in POLYGLOT_COMPARISON_CONFIG_KEYS:
+        values = {run.receipt[key] for run in runs}
+        if len(values) != 1:
+            detail = ", ".join(f"{run.run_id}={run.receipt[key]!r}" for run in runs)
+            raise ValueError(f"Polyglot comparison config {key!r} differs: {detail}")
+    return runs
+
+
+def _comparison_outcome(record: dict[str, Any]) -> str:
+    reason = str(record.get("reason") or "")
+    if record.get("all_tests_pass") is True:
+        return "passed"
+    if reason in {"invalid_format", "invalid_files"}:
+        return "format"
+    if record.get("compile_error") is True or reason == "compile_error":
+        return "compile"
+    if record.get("timeout") is True or reason == "timeout":
+        return "timeout"
+    if reason == "tests_failed":
+        return "tests"
+    return "other"
+
+
+def _comparison_category_rows(
+    runs: Sequence[PolyglotComparisonRun],
+) -> list[dict[str, Any]]:
+    task_ids = runs[0].task_ids
+    tasks_by_category: dict[str, list[str]] = defaultdict(list)
+    for task_id in task_ids:
+        exercise = task_id.removeprefix("cpp/")
+        tasks_by_category[polyglot_report_category(exercise)].append(task_id)
+
+    rows: list[dict[str, Any]] = []
+    for category in POLYGLOT_REPORT_CATEGORY_EXERCISES:
+        category_tasks = tuple(sorted(tasks_by_category.get(category, ())))
+        if not category_tasks:
+            continue
+        run_values: dict[str, Any] = {}
+        task_set = set(category_tasks)
+        for run in runs:
+            passed = len(task_set & run.passed_task_ids)
+            category_records = [
+                record for record in run.records if str(record.get("task_id")) in task_set
+            ]
+            outcomes = Counter(_comparison_outcome(record) for record in category_records)
+            sample_count = len(category_records)
+            run_values[run.label] = {
+                "k": run.k,
+                "passed_task_count": passed,
+                "task_count": len(category_tasks),
+                "pass_rate": passed / len(category_tasks),
+                "sample_count": sample_count,
+                "outcome_counts": {
+                    key: outcomes.get(key, 0)
+                    for key, _label, _color in POLYGLOT_OUTCOME_BUCKETS
+                },
+                "outcome_rates": {
+                    key: outcomes.get(key, 0) / sample_count if sample_count else 0.0
+                    for key, _label, _color in POLYGLOT_OUTCOME_BUCKETS
+                },
+            }
+        rows.append(
+            {
+                "category": category,
+                "task_ids": list(category_tasks),
+                "task_count": len(category_tasks),
+                "runs": run_values,
+            }
+        )
+    return rows
+
+
+def _comparison_payload(runs: Sequence[PolyglotComparisonRun]) -> dict[str, Any]:
+    categories = _comparison_category_rows(runs)
+    task_rows = []
+    for task_id in runs[0].task_ids:
+        exercise = task_id.removeprefix("cpp/")
+        task_rows.append(
+            {
+                "task_id": task_id,
+                "exercise": exercise,
+                "category": polyglot_report_category(exercise),
+                "runs": {
+                    run.label: {"k": run.k, "passed": task_id in run.passed_task_ids}
+                    for run in runs
+                },
+            }
+        )
+    return {
+        "kind": POLYGLOT_COMPARISON_KIND,
+        "schema_version": POLYGLOT_COMPARISON_SCHEMA_VERSION,
+        "benchmark": BENCHMARK,
+        "language": LANGUAGE,
+        "semantics": {
+            "pass_at_k": (
+                "Empirical task-level rate with at least one strict pass among exactly k samples."
+            ),
+            "sample_outcomes": "Mutually exclusive strict outcomes over individual samples.",
+            "independent_runs": (
+                "Runs are sampled independently; the report does not enforce monotonic pass@k."
+            ),
+            "report_categories": (
+                "Stable, mutually-exclusive presentation groups; source summaries retain "
+                "their fine-grained multi-label categories."
+            ),
+        },
+        "comparison_config": {
+            key: runs[0].receipt[key] for key in POLYGLOT_COMPARISON_CONFIG_KEYS
+        },
+        "runs": [
+            {
+                "run_id": run.run_id,
+                "run_root": str(run.root),
+                "label": run.label,
+                "k": run.k,
+                "task_count": len(run.task_ids),
+                "sample_count": len(run.records),
+                "passed_task_count": len(run.passed_task_ids),
+                "pass_rate": len(run.passed_task_ids) / len(run.task_ids),
+            }
+            for run in runs
+        ],
+        "categories": categories,
+        "tasks": task_rows,
+    }
+
+
+def _write_comparison_json(path: Path, payload: object) -> Path:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_comparison_csv(path: Path, rows: list[dict[str, Any]]) -> Path:
+    if not rows:
+        raise ValueError(f"refusing to write empty comparison CSV: {path}")
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def _flat_category_csv_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    labels = [str(run["label"]) for run in payload["runs"]]
+    for category in payload["categories"]:
+        row: dict[str, Any] = {
+            "category": category["category"],
+            "task_count": category["task_count"],
+            "task_ids": ";".join(category["task_ids"]),
+        }
+        for label in labels:
+            values = category["runs"][label]
+            prefix = label.replace("@", "_at_")
+            row[f"{prefix}_passed_tasks"] = values["passed_task_count"]
+            row[f"{prefix}_pass_rate"] = values["pass_rate"]
+            row[f"{prefix}_sample_count"] = values["sample_count"]
+            for key, _name, _color in POLYGLOT_OUTCOME_BUCKETS:
+                row[f"{prefix}_{key}_sample_rate"] = values["outcome_rates"][key]
+        rows.append(row)
+    return rows
+
+
+def _flat_task_csv_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    labels = [str(run["label"]) for run in payload["runs"]]
+    rows: list[dict[str, Any]] = []
+    for task in payload["tasks"]:
+        row = {
+            "task_id": task["task_id"],
+            "exercise": task["exercise"],
+            "category": task["category"],
+        }
+        for label in labels:
+            row[f"{label.replace('@', '_at_')}_passed"] = task["runs"][label]["passed"]
+        rows.append(row)
+    return rows
+
+
+def _svg_escape(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _write_comparison_svg(
+    path: Path,
+    body: Iterable[str],
+    *,
+    width: int,
+    height: int,
+) -> Path:
+    content = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+            f'viewBox="0 0 {width} {height}" role="img">'
+        ),
+        '<rect width="100%" height="100%" fill="white"/>',
+        *body,
+        "</svg>",
+    ]
+    path.write_text("\n".join(content) + "\n", encoding="utf-8")
+    return path
+
+
+def _comparison_grid(
+    *,
+    left: float,
+    top: float,
+    plot_width: float,
+    plot_height: float,
+) -> list[str]:
+    parts: list[str] = []
+    for percent in (0, 25, 50, 75, 100):
+        x = left + plot_width * percent / 100
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top + plot_height:.1f}" '
+            'stroke="#e5e7eb"/>'
+        )
+        parts.append(
+            f'<text x="{x:.1f}" y="{top + plot_height + 24:.1f}" text-anchor="middle" '
+            f'font-family="Arial" font-size="12" fill="#374151">{percent}%</text>'
+        )
+    return parts
+
+
+def _write_overall_pass_chart(path: Path, payload: dict[str, Any]) -> Path:
+    width, height = 820, 330
+    left, top, plot_width, plot_height = 165.0, 80.0, 565.0, 150.0
+    runs = payload["runs"]
+    colors = ("#2563eb", "#f97316")
+    parts = [
+        '<title>Overall empirical pass at k</title>',
+        (
+            f'<text x="{width / 2}" y="34" text-anchor="middle" font-family="Arial" '
+            'font-size="22" font-weight="700">Overall strict pass@k</text>'
+        ),
+        *_comparison_grid(
+            left=left,
+            top=top,
+            plot_width=plot_width,
+            plot_height=plot_height,
+        ),
+    ]
+    for index, run in enumerate(runs):
+        rate = float(run["pass_rate"])
+        bar_width = rate * plot_width
+        y = top + 28 + index * 60
+        parts.append(
+            f'<text x="{left - 14:.1f}" y="{y + 21:.1f}" text-anchor="end" '
+            f'font-family="Arial" font-size="15">{_svg_escape(run["label"])}</text>'
+        )
+        parts.append(
+            f'<rect x="{left}" y="{y:.1f}" width="{bar_width:.1f}" height="28" '
+            f'fill="{colors[index]}"/>'
+        )
+        text_x = min(left + plot_width + 7, left + bar_width + 8)
+        parts.append(
+            f'<text x="{text_x:.1f}" y="{y + 20:.1f}" font-family="Arial" '
+            f'font-size="13" font-weight="700">{run["passed_task_count"]}/'
+            f'{run["task_count"]} ({rate * 100:.1f}%)</text>'
+        )
+    return _write_comparison_svg(path, parts, width=width, height=height)
+
+
+def _write_category_pass_chart(path: Path, payload: dict[str, Any]) -> Path:
+    categories = payload["categories"]
+    runs = payload["runs"]
+    width = 1120
+    left, right, top, bottom = 270.0, 120.0, 88.0, 58.0
+    row_height = 86.0
+    height = int(top + bottom + row_height * len(categories))
+    plot_width = width - left - right
+    plot_height = row_height * len(categories)
+    colors = ("#2563eb", "#f97316")
+    parts = [
+        '<title>Strict pass at k by report category</title>',
+        (
+            f'<text x="{width / 2}" y="32" text-anchor="middle" font-family="Arial" '
+            'font-size="22" font-weight="700">Strict pass@k by category</text>'
+        ),
+        *_comparison_grid(
+            left=left,
+            top=top,
+            plot_width=plot_width,
+            plot_height=plot_height,
+        ),
+    ]
+    for run_index, run in enumerate(runs):
+        x = left + run_index * 150
+        parts.append(
+            f'<rect x="{x:.1f}" y="51" width="14" height="14" fill="{colors[run_index]}"/>'
+        )
+        parts.append(
+            f'<text x="{x + 20:.1f}" y="63" font-family="Arial" font-size="13">'
+            f'{_svg_escape(run["label"])}</text>'
+        )
+    for category_index, category in enumerate(categories):
+        center_y = top + category_index * row_height + row_height / 2
+        parts.append(
+            f'<text x="{left - 14:.1f}" y="{center_y + 4:.1f}" text-anchor="end" '
+            f'font-family="Arial" font-size="14">{_svg_escape(category["category"])}</text>'
+        )
+        for run_index, run in enumerate(runs):
+            values = category["runs"][run["label"]]
+            rate = float(values["pass_rate"])
+            y = center_y - 25 + run_index * 28
+            bar_width = plot_width * rate
+            parts.append(
+                f'<rect x="{left}" y="{y:.1f}" width="{bar_width:.1f}" height="20" '
+                f'fill="{colors[run_index]}"/>'
+            )
+            text_x = min(left + plot_width + 6, left + bar_width + 7)
+            parts.append(
+                f'<text x="{text_x:.1f}" y="{y + 15:.1f}" font-family="Arial" '
+                f'font-size="12">{values["passed_task_count"]}/{values["task_count"]} '
+                f'({rate * 100:.1f}%)</text>'
+            )
+    return _write_comparison_svg(path, parts, width=width, height=height)
+
+
+def _write_category_outcome_chart(path: Path, payload: dict[str, Any]) -> Path:
+    categories = payload["categories"]
+    runs = payload["runs"]
+    width = 1160
+    left, right, top, bottom = 290.0, 55.0, 112.0, 58.0
+    row_height = 92.0
+    height = int(top + bottom + row_height * len(categories))
+    plot_width = width - left - right
+    plot_height = row_height * len(categories)
+    parts = [
+        '<title>Individual sample outcomes by report category</title>',
+        (
+            f'<text x="{width / 2}" y="32" text-anchor="middle" font-family="Arial" '
+            'font-size="22" font-weight="700">Sample outcomes by category</text>'
+        ),
+        (
+            f'<text x="{width / 2}" y="54" text-anchor="middle" font-family="Arial" '
+            'font-size="12" fill="#4b5563">100% stacked; strict individual-sample outcomes</text>'
+        ),
+        *_comparison_grid(
+            left=left,
+            top=top,
+            plot_width=plot_width,
+            plot_height=plot_height,
+        ),
+    ]
+    legend_x = left
+    for _key, label, color in POLYGLOT_OUTCOME_BUCKETS:
+        parts.append(
+            f'<rect x="{legend_x:.1f}" y="73" width="12" height="12" fill="{color}"/>'
+        )
+        parts.append(
+            f'<text x="{legend_x + 17:.1f}" y="84" font-family="Arial" font-size="11">'
+            f'{_svg_escape(label)}</text>'
+        )
+        legend_x += 122
+    for category_index, category in enumerate(categories):
+        center_y = top + category_index * row_height + row_height / 2
+        parts.append(
+            f'<text x="{left - 72:.1f}" y="{center_y + 4:.1f}" text-anchor="end" '
+            f'font-family="Arial" font-size="14">{_svg_escape(category["category"])}</text>'
+        )
+        for run_index, run in enumerate(runs):
+            values = category["runs"][run["label"]]
+            y = center_y - 26 + run_index * 30
+            parts.append(
+                f'<text x="{left - 8:.1f}" y="{y + 15:.1f}" text-anchor="end" '
+                f'font-family="Arial" font-size="11">{_svg_escape(run["label"])}</text>'
+            )
+            x = left
+            for key, label, color in POLYGLOT_OUTCOME_BUCKETS:
+                rate = float(values["outcome_rates"][key])
+                segment_width = plot_width * rate
+                if segment_width:
+                    parts.append(
+                        f'<rect x="{x:.1f}" y="{y:.1f}" width="{segment_width:.1f}" '
+                        f'height="21" fill="{color}"><title>{_svg_escape(label)}: '
+                        f'{rate * 100:.1f}%</title></rect>'
+                    )
+                    if rate >= 0.09:
+                        parts.append(
+                            f'<text x="{x + segment_width / 2:.1f}" y="{y + 15:.1f}" '
+                            'text-anchor="middle" font-family="Arial" font-size="10" '
+                            f'fill="white">{rate * 100:.0f}%</text>'
+                        )
+                x += segment_width
+    return _write_comparison_svg(path, parts, width=width, height=height)
+
+
+def _write_category_gain_chart(path: Path, payload: dict[str, Any]) -> Path:
+    categories = payload["categories"]
+    runs = payload["runs"]
+    width = 1080
+    left, right, top, bottom = 270.0, 70.0, 82.0, 60.0
+    row_height = 70.0
+    height = int(top + bottom + row_height * len(categories))
+    plot_width = width - left - right
+    plot_height = row_height * len(categories)
+    colors = ("#2563eb", "#f97316")
+    parts = [
+        '<title>Category pass at k dumbbell comparison</title>',
+        (
+            f'<text x="{width / 2}" y="32" text-anchor="middle" font-family="Arial" '
+            'font-size="22" font-weight="700">Category pass@k change</text>'
+        ),
+        *_comparison_grid(
+            left=left,
+            top=top,
+            plot_width=plot_width,
+            plot_height=plot_height,
+        ),
+    ]
+    for run_index, run in enumerate(runs):
+        x = left + run_index * 150
+        parts.append(
+            f'<circle cx="{x + 7:.1f}" cy="58" r="7" fill="{colors[run_index]}"/>'
+        )
+        parts.append(
+            f'<text x="{x + 20:.1f}" y="63" font-family="Arial" font-size="13">'
+            f'{_svg_escape(run["label"])}</text>'
+        )
+    for category_index, category in enumerate(categories):
+        y = top + category_index * row_height + row_height / 2
+        rates = [float(category["runs"][run["label"]]["pass_rate"]) for run in runs]
+        xs = [left + plot_width * rate for rate in rates]
+        parts.append(
+            f'<text x="{left - 14:.1f}" y="{y + 5:.1f}" text-anchor="end" '
+            f'font-family="Arial" font-size="14">{_svg_escape(category["category"])}</text>'
+        )
+        parts.append(
+            f'<line x1="{xs[0]:.1f}" y1="{y:.1f}" x2="{xs[1]:.1f}" y2="{y:.1f}" '
+            'stroke="#9ca3af" stroke-width="4"/>'
+        )
+        for run_index, x in enumerate(xs):
+            parts.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="{colors[run_index]}"/>'
+            )
+            parts.append(
+                f'<text x="{x:.1f}" y="{y - 13:.1f}" text-anchor="middle" '
+                f'font-family="Arial" font-size="11">{rates[run_index] * 100:.1f}%</text>'
+            )
+    return _write_comparison_svg(path, parts, width=width, height=height)
+
+
+def _render_polyglot_comparison_markdown(payload: dict[str, Any]) -> str:
+    lines = [
+        "# Aider Polyglot C++ pass@k comparison",
+        "",
+        (
+            "This is a repo-owned SLIME whole-file evaluation, not an official "
+            "Aider leaderboard result."
+        ),
+        "",
+        "## Overall",
+        "",
+        "| Run | Samples/task | Strict passed tasks | Strict pass rate |",
+        "|---|---:|---:|---:|",
+    ]
+    for run in payload["runs"]:
+        lines.append(
+            f'| {run["run_id"]} | {run["k"]} | '
+            f'{run["passed_task_count"]}/{run["task_count"]} | '
+            f'{run["pass_rate"] * 100:.1f}% |'
+        )
+    lines.extend(
+        [
+            "",
+            "![Overall strict pass@k](overall_pass_at_k.svg)",
+            "",
+            "## Categories",
+            "",
+            (
+                "The report uses six mutually-exclusive presentation groups so every task "
+                "contributes once. The original fine-grained multi-label categories remain "
+                "unchanged in each run's base.summary.json."
+            ),
+            "",
+            "![Strict pass@k by category](category_pass_at_k.svg)",
+            "",
+            "![Individual sample outcomes by category](category_sample_outcomes.svg)",
+            "",
+            (
+                "The dumbbell view is a compact secondary view of the same category pass "
+                "rates; it is not an additional metric."
+            ),
+            "",
+            "![Category pass@k change](category_gain.svg)",
+            "",
+            "## Category membership",
+            "",
+            "| Category | Tasks |",
+            "|---|---|",
+        ]
+    )
+    for category in payload["categories"]:
+        exercises = ", ".join(
+            task_id.removeprefix("cpp/") for task_id in category["task_ids"]
+        )
+        lines.append(f'| {category["category"]} | {exercises} |')
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            (
+                "- pass@k is the empirical fraction of tasks with at least one strict pass "
+                "among exactly k samples."
+            ),
+            (
+                "- The stacked bars are individual-sample outcome distributions; they use a "
+                "different denominator from task-level pass@k."
+            ),
+            (
+                "- The two evaluations are independent stochastic runs, so pass@k is not "
+                "forced to be monotonic for every category."
+            ),
+            "- Recovered-format diagnostics never count as strict passes.",
+            "",
+            "Machine-readable sources: [comparison.summary.json](comparison.summary.json), "
+            "[category_summary.csv](category_summary.csv), and "
+            "[task_outcomes.csv](task_outcomes.csv).",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_polyglot_pass_at_k_report(
+    run_roots: Sequence[str | Path],
+    output_dir: str | Path,
+    *,
+    force: bool = False,
+) -> tuple[dict[str, Any], dict[str, Path]]:
+    """Validate two historical runs and write a category-focused pass@k report."""
+
+    runs = _require_comparable_polyglot_runs(run_roots)
+    output = Path(output_dir).expanduser().resolve()
+    if output.exists() and not output.is_dir():
+        raise FileExistsError(f"Polyglot comparison output is not a directory: {output}")
+    if output.exists() and any(output.iterdir()) and not force:
+        raise FileExistsError(
+            f"{output} already exists and is not empty; pass --force to replace report files"
+        )
+    output.mkdir(parents=True, exist_ok=True)
+    payload = _comparison_payload(runs)
+    paths = {
+        "summary": output / "comparison.summary.json",
+        "category_csv": output / "category_summary.csv",
+        "task_csv": output / "task_outcomes.csv",
+        "overall_chart": output / "overall_pass_at_k.svg",
+        "category_chart": output / "category_pass_at_k.svg",
+        "outcome_chart": output / "category_sample_outcomes.svg",
+        "gain_chart": output / "category_gain.svg",
+        "report": output / "report.md",
+    }
+    _write_comparison_json(paths["summary"], payload)
+    _write_comparison_csv(paths["category_csv"], _flat_category_csv_rows(payload))
+    _write_comparison_csv(paths["task_csv"], _flat_task_csv_rows(payload))
+    _write_overall_pass_chart(paths["overall_chart"], payload)
+    _write_category_pass_chart(paths["category_chart"], payload)
+    _write_category_outcome_chart(paths["outcome_chart"], payload)
+    _write_category_gain_chart(paths["gain_chart"], payload)
+    paths["report"].write_text(_render_polyglot_comparison_markdown(payload), encoding="utf-8")
+    return payload, paths
+
+
 def _read_json_object(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -2035,6 +2871,24 @@ def _gemini_sanity_command(args: argparse.Namespace) -> None:
     )
 
 
+def _compare_runs_command(args: argparse.Namespace) -> None:
+    payload, paths = build_polyglot_pass_at_k_report(
+        args.run,
+        args.out,
+        force=args.force,
+    )
+    print(
+        json.dumps(
+            {
+                "paths": {key: str(path) for key, path in paths.items()},
+                "runs": payload["runs"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2081,6 +2935,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     gemini_sanity.add_argument("--dry-run", action="store_true")
     gemini_sanity.add_argument("--force", action="store_true")
     gemini_sanity.set_defaults(func=_gemini_sanity_command)
+
+    compare_runs = subparsers.add_parser(
+        "compare-runs",
+        help="Validate two Polyglot runs and write a category-focused pass@k report",
+    )
+    compare_runs.add_argument(
+        "--run", action="append", required=True, help="Completed Polyglot run root; pass twice"
+    )
+    compare_runs.add_argument("--out", required=True)
+    compare_runs.add_argument("--force", action="store_true")
+    compare_runs.set_defaults(func=_compare_runs_command)
     return parser
 
 
