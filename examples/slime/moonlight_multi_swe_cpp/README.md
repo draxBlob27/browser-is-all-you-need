@@ -223,6 +223,11 @@ Only after `verify-data` succeeds, run the GPU evaluation:
 bash examples/slime/moonlight_multi_swe_cpp/eval_base.sh
 ```
 
+The launcher enables SLIME's `--rollout-skip-special-tokens` decoding flag so
+Moonlight's terminal control token (for example `<|im_end|>`) is not retained
+as response text. `stages/base-eval/run_receipt.txt` records
+`rollout_skip_special_tokens=1` for this contract.
+
 `SLIME_MULTI_SWE_PULL_IMAGES=auto` pulls on a fresh data build and skips pulls
 when the compatible image receipt already exists. Set it to `1` to force
 registry checks or `0` when all selected images are known to be local.
@@ -335,6 +340,11 @@ Any prose outside the diff block is invalid. The grader rejects binary patches,
 unsafe paths, and edits to tests, examples, docs, build files, CI files,
 generated files, and files introduced by the dataset `test_patch`.
 
+Tokenizer control tokens are removed by the SLIME/SGLang decoding path, not by
+this parser. A literal `<|im_end|>` that reaches the parser therefore remains
+invalid, just like any other text outside the single diff fence. Historical
+artifacts are not rewritten; rerun evaluation after updating the launcher.
+
 Invalid-format responses may still be best-effort parsed into `recovered_*`
 diagnostics, but that path never changes strict reward or pass fields.
 
@@ -376,6 +386,9 @@ diagnostics, but that path never changes strict reward or pass fields.
 - `oracle.summary.json.all_passed` is false: fix the setup before starting the
   model. The lane keeps `manifest.json.admitted` false and exits nonzero.
 - Response truncation: raise `SLIME_EVAL_MAX_RESPONSE_LEN`.
+- Responses end in a literal `<|im_end|>`: the run used an older launcher or
+  did not activate SLIME special-token skipping. Update the checkout, rerun the
+  base evaluation, and confirm `rollout_skip_special_tokens=1` in the receipt.
 - Many patch-apply errors: inspect `base.records.jsonl` for path-policy
   rejections and malformed diffs.
 - Many timeouts: inspect both oracle and model records. The default build/test

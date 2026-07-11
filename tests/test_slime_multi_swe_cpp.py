@@ -136,6 +136,9 @@ def test_parse_patch_response_accepts_single_diff_block_and_rejects_prose() -> N
     with pytest.raises(multi_swe.MultiSweResponseError, match="unexpected prose"):
         multi_swe.parse_patch_response("Here is the fix.\n" + valid_diff_response())
 
+    with pytest.raises(multi_swe.MultiSweResponseError, match="unexpected prose"):
+        multi_swe.parse_patch_response(valid_diff_response() + "<|im_end|>")
+
     with pytest.raises(multi_swe.MultiSweResponseError, match="expected exactly one"):
         multi_swe.parse_patch_response(valid_diff_response() + "\n" + valid_diff_response())
 
@@ -1101,6 +1104,7 @@ def test_moonlight_multi_swe_cpp_runner_is_base_eval_only() -> None:
     assert "SLIME_MULTI_SWE_REBUILD_DATA" in text
     assert "w8_biayn.integrations.slime_multi_swe_cpp verify-data" in text
     assert "--eval-prompt-data multi_swe_cpp" in text
+    assert "--rollout-skip-special-tokens" in text
     assert "--custom-rm-path w8_biayn.integrations.slime_multi_swe_cpp.reward_func" in text
     assert 'MULTI_SWE_SANDBOX_IMAGE_OVERRIDE="${W8_SLIME_MULTI_SWE_SANDBOX_IMAGE:-}"' in text
     assert "W8_SLIME_MULTI_SWE_SANDBOX_IMAGE:-w8-biayn-multi-swe-cpp" not in text
@@ -1111,6 +1115,7 @@ def test_moonlight_multi_swe_cpp_runner_is_base_eval_only() -> None:
     assert "base.records.jsonl" in text
     assert "base.oracle.records.jsonl" in text
     assert "multi_swe_oracle_setup_check" in text
+    assert "rollout_skip_special_tokens=1" in text
     assert "correct_and_faster_rate" not in text
 
 
@@ -1129,6 +1134,8 @@ def test_moonlight_multi_swe_cpp_readme_documents_operator_flow() -> None:
     assert "oracle_setup_check" in text
     assert "fix_patch" in text
     assert "recovered_*" in text
+    assert "--rollout-skip-special-tokens" in text
+    assert "rollout_skip_special_tokens=1" in text
     assert "correct_and_faster_rate" in text
 
 

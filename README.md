@@ -79,6 +79,9 @@ fingerprints, mappings, and counts. Only that all-passing proof admits the eval
 manifest. It is not part of the PIE training proof and is not an official
 Aider leaderboard run; keep detailed setup and artifact semantics in
 `examples/slime/moonlight_polyglot_cpp/README.md`.
+Its base-eval launcher enables SLIME special-token skipping so terminal
+tokenizer markers such as `<|im_end|>` do not become false prose outside the
+required whole-file response blocks; the strict parser itself is not relaxed.
 
 The Moonlight Multi-SWE C++ lane is an optional rollout-only base-eval
 benchmark for the C++ subset of `ByteDance-Seed/Multi-SWE-bench_mini`. It uses
@@ -93,6 +96,10 @@ resumes only fingerprint-matching passes before admitting the manifest. It is no
 training proof, does not report speed metrics, and is not an official Multi-SWE
 leaderboard run; keep detailed setup and artifact semantics in
 `examples/slime/moonlight_multi_swe_cpp/README.md`.
+Its base-eval launcher likewise enables SLIME special-token skipping before
+the strict single-diff parser; existing saved artifacts require a fresh eval
+and are not retroactively normalized.
+
 The four historical simdjson images whose CMake files otherwise download
 Google Benchmark or an uninitialized submodule use a data-local, SHA-256-pinned
 `cxxopts`/simdjson-data cache prepared outside the grader and mounted

@@ -337,6 +337,9 @@ def test_parse_replacements_accepts_path_code_pairs_and_rejects_bad_files() -> N
     with pytest.raises(polyglot.PolyglotResponseError, match="unexpected prose"):
         polyglot.parse_replacements("Here is the fix.\n" + valid_response(), ["two_fer.cpp", "two_fer.h"])
 
+    with pytest.raises(polyglot.PolyglotResponseError, match="unexpected prose"):
+        polyglot.parse_replacements(valid_response() + "<|im_end|>", ["two_fer.cpp", "two_fer.h"])
+
     with pytest.raises(polyglot.PolyglotResponseError, match="unknown or forbidden"):
         polyglot.parse_replacements(valid_response().replace("two_fer.h", "two_fer_test.cpp"), ["two_fer.cpp", "two_fer.h"])
 
@@ -653,9 +656,11 @@ def test_moonlight_polyglot_cpp_runner_is_base_eval_only() -> None:
     assert 'oracle_summary_path=${DATA_DIR}/oracle.summary.json' in text
     assert '--data-root "${DATA_DIR}"' in text
     assert "--eval-prompt-data polyglot_cpp" in text
+    assert "--rollout-skip-special-tokens" in text
     assert "--custom-rm-path w8_biayn.integrations.slime_polyglot_cpp.reward_func" in text
     assert "W8_SLIME_POLYGLOT_SANDBOX_IMAGE" in text
     assert "base.records.jsonl" in text
+    assert "rollout_skip_special_tokens=1" in text
     assert "correct_and_faster_rate" not in text
 
 
@@ -674,4 +679,6 @@ def test_moonlight_polyglot_cpp_readme_documents_operator_flow() -> None:
     assert "oracle_setup_check" in text
     assert "files.example" in text
     assert "recovered_pass_rate" in text
+    assert "--rollout-skip-special-tokens" in text
+    assert "rollout_skip_special_tokens=1" in text
     assert "correct_and_faster_rate" in text

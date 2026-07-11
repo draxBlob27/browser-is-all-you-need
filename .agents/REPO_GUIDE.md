@@ -196,6 +196,10 @@ records, task/grader/image fingerprints, strict on-disk reconciliation, and
 instead of duplicating them
 across repo-wide docs:
 
+Keep `--rollout-skip-special-tokens` enabled in the launcher. Terminal
+tokenizer markers such as `<|im_end|>` are a decoding concern; do not weaken
+the strict whole-file parser to accept them as response content.
+
 ```bash
 bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
 bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
@@ -227,6 +231,10 @@ warnings-as-errors or the ordinary benchmark/test build globally. Nlohmann PR
 2099 must run the dataset's other 49 CTests plus the PR-relevant `CBOR` and
 `MessagePack` doctest cases explicitly, excluding only their unrelated
 historical roundtrip fixture cases:
+
+Keep `--rollout-skip-special-tokens` enabled in the launcher. Terminal
+tokenizer markers such as `<|im_end|>` are a decoding concern; do not weaken
+the strict single-diff parser to accept them as response content.
 
 ```bash
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh

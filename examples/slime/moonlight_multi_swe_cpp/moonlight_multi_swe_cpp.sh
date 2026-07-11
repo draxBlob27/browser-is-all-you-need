@@ -437,6 +437,7 @@ base_model_args() {
     --distributed-timeout-minutes "${DISTRIBUTED_TIMEOUT_MINUTES}"
     --megatron-to-hf-mode "${MEGATRON_TO_HF_MODE}"
     --train-memory-margin-bytes "${SLIME_TRAIN_MEMORY_MARGIN_BYTES:-268435456}"
+    --rollout-skip-special-tokens
     --no-save-optim
     --no-save-rng
     --save-debug-rollout-data "${ROLLOUT_DUMP_TEMPLATE}"
@@ -627,6 +628,7 @@ sglang_enable_tp_memory_inbalance_check=${SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHEC
 eval_max_response_len=${EVAL_MAX_RESPONSE_LEN}
 eval_temperature=${EVAL_TEMPERATURE}
 eval_top_p=${EVAL_TOP_P}
+rollout_skip_special_tokens=1
 multi_swe_sandbox_image_mode=$([ -n "${MULTI_SWE_SANDBOX_IMAGE_OVERRIDE}" ] && echo debug-override || echo official-per-task)
 multi_swe_sandbox_image_override=${MULTI_SWE_SANDBOX_IMAGE_OVERRIDE}
 multi_swe_sandbox_images_file=${DATA_DIR}/sandbox-images.json
@@ -809,4 +811,3 @@ case "${STAGE}" in
     exit 2
     ;;
 esac
-

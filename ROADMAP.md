@@ -277,6 +277,9 @@ mappings, and manifest counts before admission. Inspect `data/oracle.records.jso
 `oracle_protocol_version == 1`, `complete`, and `all_passed` before treating
 model failures as setup-clean. Keep Polyglot C++ results separate from both PIE
 uplift claims and Aider leaderboard numbers.
+The one-shot launcher must enable SLIME's supported special-token skipping so
+terminal tokenizer markers are removed during decoding; parser strictness
+against real prose outside the required path/code blocks remains unchanged.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
@@ -314,6 +317,9 @@ inspect `eval/base.records.jsonl`, `eval/base.oracle.records.jsonl`,
 copied `base.summary.json.oracle_setup_check.all_passed` before treating model
 failures as setup-clean. Keep Multi-SWE C++ results separate from PIE uplift
 claims, Polyglot C++ results, and official Multi-SWE leaderboard numbers.
+The one-shot launcher must enable SLIME's supported special-token skipping so
+terminal tokenizer markers are removed during decoding; parser strictness
+against real prose outside the single diff fence remains unchanged.
 
 ## Stage 4: Run SFT
 
