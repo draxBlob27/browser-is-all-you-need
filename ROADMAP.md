@@ -360,7 +360,11 @@ local wrapper must still stop and verify the App immediately when the run exits.
 When downloading recursive Volume artifacts under Modal SDK 1.5.2, read only
 entries whose public type is exactly `FileEntryType.FILE`. Skip directories,
 symlinks, and other non-regular entries before `read_file`, then preserve the
-existing byte-for-byte local reconciliation.
+existing byte-for-byte local reconciliation. Validate all paths before local
+writes, use the SDK async API with a fixed 16-file concurrency bound, and emit
+progress. Once the remote result is committed, reduce the server scaledown
+window to two seconds before downloading so artifact transfer does not retain
+the four-H100 replica.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

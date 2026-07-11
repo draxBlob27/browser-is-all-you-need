@@ -7,6 +7,7 @@ thin boundary; the contract and all admission logic live in the pure
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import fields
 import hashlib
 import json
@@ -31,6 +32,7 @@ if IS_LOCAL:
 
 from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     AIDER_REPO_URL,
+    ARTIFACT_DOWNLOAD_CONCURRENCY,
     BENCHMARK_LABEL,
     MODEL_REPO,
     MODEL_SETTINGS_PATH,
@@ -39,6 +41,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     SCHEMA_VERSION,
     SERVED_MODEL_NAME,
     SGLANG_ADMISSION_MAX_TOKENS,
+    SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS,
     SGLANG_SCALEDOWN_WINDOW_SECONDS,
     TRANSFORMERS_COMMIT,
     TRANSFORMERS_REPO_URL,
@@ -739,25 +742,61 @@ def run_aider_benchmark(
     return {"status": status, "stats": final_stats, "receipt": receipt}
 
 
+async def _download_volume_files(
+    volume: modal.Volume,
+    prefix: str,
+    local_root: Path,
+    *,
+    concurrency: int = ARTIFACT_DOWNLOAD_CONCURRENCY,
+) -> int:
+    """Validate and download regular Volume files with bounded concurrency."""
+
+    if concurrency < 1:
+        raise ModalAiderError("artifact download concurrency must be positive")
+
+    files: list[tuple[str, Path]] = []
+    async for entry in volume.iterdir.aio(prefix, recursive=True):
+        if entry.type != FileEntryType.FILE:
+            continue
+        remote = str(entry.path).lstrip("/")
+        try:
+            relative = Path(remote).relative_to(prefix)
+        except ValueError as exc:
+            raise ModalAiderError(f"unsafe Modal Volume artifact path: {remote}") from exc
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ModalAiderError(f"unsafe Modal Volume artifact path: {remote}")
+        files.append((remote, local_root / relative))
+
+    semaphore = asyncio.Semaphore(concurrency)
+    completed = 0
+    total = len(files)
+
+    async def download_one(remote: str, target: Path) -> None:
+        nonlocal completed
+        async with semaphore:
+            chunks = [chunk async for chunk in volume.read_file.aio(remote)]
+            data = b"".join(chunks)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                if target.read_bytes() != data:
+                    raise ModalAiderError(
+                        f"local artifact differs from committed Volume file: {target}"
+                    )
+            else:
+                target.write_bytes(data)
+            completed += 1
+            if completed % 250 == 0 or completed == total:
+                print(f"artifact_download: {completed}/{total}")
+
+    await asyncio.gather(*(download_one(remote, target) for remote, target in files))
+    return total
+
+
 def _download_run() -> Path:
     prefix = f"runs/{CONFIG.run_id}"
     local_root = CONFIG.local_run_path(ROOT)
     local_root.mkdir(parents=True, exist_ok=True)
-    downloaded = 0
-    for entry in results_volume.iterdir(prefix, recursive=True):
-        remote = str(entry.path).lstrip("/")
-        if entry.type != FileEntryType.FILE:
-            continue
-        relative = Path(remote).relative_to(prefix)
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ModalAiderError(f"unsafe Modal Volume artifact path: {remote}")
-        target = local_root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        data = b"".join(results_volume.read_file(remote))
-        if target.exists() and target.read_bytes() != data:
-            raise ModalAiderError(f"local artifact differs from committed Volume file: {target}")
-        target.write_bytes(data)
-        downloaded += 1
+    downloaded = asyncio.run(_download_volume_files(results_volume, prefix, local_root))
     if not downloaded:
         raise ModalAiderError(f"no artifacts downloaded from {CONFIG.results_volume}:{prefix}")
     return local_root
@@ -771,6 +810,7 @@ def main() -> None:
     cache_receipt = preload_model.remote(RUNTIME)
     server_url = SGLangServer.get_url()
     result = run_aider_benchmark.remote(RUNTIME, server_url, cache_receipt, app.app_id)
+    SGLangServer.update_autoscaler(scaledown_window=SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS)
     local_root = _download_run()
     print(f"remote_status: {result['status']}")
     print(f"downloaded_artifacts: {local_root}")

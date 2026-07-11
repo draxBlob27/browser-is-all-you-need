@@ -244,7 +244,11 @@ must differ.
 Recursive local download uses Modal SDK 1.5.2's public `FileEntryType` and
 reads only exact `FILE` entries. Directories, the Polyglot source symlink, and
 all other non-regular entries are skipped before `read_file`; regular files
-still require byte-for-byte agreement with any existing local copy.
+still require byte-for-byte agreement with any existing local copy. The client
+validates the complete entry list first, then uses the SDK async API with at
+most 16 file reads in flight and prints progress every 250 files. When the
+remote result is committed, the client lowers the server scaledown window to
+two seconds before download so the four H100s can shut down during transfer.
 
 Use `W8_MODAL_AIDER_RESUME=1` only for an incomplete, identity-matching run.
 Resume uses Aider's `--cont`, refuses completed runs and changed identities,

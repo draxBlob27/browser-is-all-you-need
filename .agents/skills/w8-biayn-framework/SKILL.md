@@ -307,7 +307,11 @@ value into plan identity and receipts; explicit stop plus control-plane
 verification still ends billing immediately on every exit.
 Modal SDK 1.5.2 Volume entries expose an `IntEnum`; never classify them through
 `str(entry.type)`. Download only `FileEntryType.FILE`, skip every non-regular
-entry, and retain strict byte reconciliation.
+entry, and retain strict byte reconciliation. Validate the full entry list
+before writing locally, then download with the SDK async API at a fixed
+16-file concurrency bound. After the committed benchmark result returns,
+lower the server scaledown window to two seconds before transfer so the H100s
+do not remain allocated for artifact copying.
 
 
 ```bash

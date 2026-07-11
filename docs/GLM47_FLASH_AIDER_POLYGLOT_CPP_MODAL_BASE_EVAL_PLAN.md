@@ -289,7 +289,13 @@ Recursive results-Volume download under pinned Modal SDK 1.5.2 must compare
 the public `FileEntry.type` directly with `FileEntryType.FILE`. It must skip
 directories, symlinks, FIFOs, sockets, and unspecified entries before calling
 `read_file`, while retaining path-safety and byte-for-byte reconciliation for
-every downloaded regular file.
+every downloaded regular file. Enumerate and validate the complete regular-file
+set before local writes, then use the SDK async API with a fixed bound of 16
+concurrent file reads and periodic progress output. Immediately after the
+durable remote benchmark result returns, reduce the SGLang server scaledown
+window to two seconds before local transfer; the 1200-second run-identity value
+continues to protect generation and compilation gaps, but does not keep H100s
+alive while the client copies artifacts.
 Do not accept `main`, `latest`, branch names, abbreviated Git commits, or an
 untagged/undigested SGLang image for a full result. A smoke may allow a pinned
 version tag only with an explicitly recorded unsafe-development override.

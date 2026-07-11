@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import runpy
@@ -13,10 +14,12 @@ import pytest
 
 from w8_biayn.modal_aider_polyglot_cpp import (
     AIDER_MODEL_NAME,
+    ARTIFACT_DOWNLOAD_CONCURRENCY,
     BENCHMARK_LABEL,
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
     SGLANG_ADMISSION_MAX_TOKENS,
+    SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS,
     SGLANG_SCALEDOWN_WINDOW_SECONDS,
     TRANSFORMERS_COMMIT,
     ModalAiderConfig,
@@ -116,6 +119,8 @@ def test_valid_plan_config_and_redacted_plan_are_deterministic(tmp_path: Path) -
     assert cfg.identity_mapping()["transformers_commit"] == TRANSFORMERS_COMMIT
     assert cfg.identity_mapping()["sglang_scaledown_window_seconds"] == 1200
     assert SGLANG_SCALEDOWN_WINDOW_SECONDS == 20 * 60
+    assert SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS == 2
+    assert ARTIFACT_DOWNLOAD_CONCURRENCY == 16
     rendered = json.dumps(first, sort_keys=True)
     assert "ak-test-sentinel" not in rendered
     assert "as-test-sentinel" not in rendered
@@ -455,6 +460,14 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert "modal app stop" in run and "modal app list --json" in run
     assert "from modal.volume import FileEntryType" in modal_app
     assert "if entry.type != FileEntryType.FILE:" in modal_app
+    assert "asyncio.Semaphore(concurrency)" in modal_app
+    assert "volume.iterdir.aio(" in modal_app
+    assert "volume.read_file.aio(" in modal_app
+    assert (
+        modal_app.index("run_aider_benchmark.remote(")
+        < modal_app.index("SGLangServer.update_autoscaler(")
+        < modal_app.index("local_root = _download_run()")
+    )
     assert 'kind = str(getattr(entry, "type", "")).lower()' not in modal_app
     assert os.access(RUN_SH, os.X_OK)
 
@@ -547,6 +560,42 @@ def test_modal_app_imports_from_shallow_remote_path(tmp_path: Path, monkeypatch)
 
     assert namespace["IS_LOCAL"] is False
     assert namespace["ROOT"] == Path("/opt/w8-src")
+
+    payloads = {f"runs/test/file-{index}.txt": f"payload-{index}".encode() for index in range(12)}
+    active = 0
+    max_active = 0
+
+    async def iter_entries(prefix: str, *, recursive: bool):
+        assert prefix == "runs/test"
+        assert recursive is True
+        yield types.SimpleNamespace(path="/runs/test/not-a-file", type=_FileEntryType.DIRECTORY)
+        for path in payloads:
+            yield types.SimpleNamespace(path=f"/{path}", type=_FileEntryType.FILE)
+
+    async def read_file(path: str):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0.01)
+            yield payloads[path]
+        finally:
+            active -= 1
+
+    fake_volume = types.SimpleNamespace(
+        iterdir=types.SimpleNamespace(aio=iter_entries),
+        read_file=types.SimpleNamespace(aio=read_file),
+    )
+    download_root = tmp_path / "parallel-download"
+    downloaded = asyncio.run(
+        namespace["_download_volume_files"](fake_volume, "runs/test", download_root, concurrency=4)
+    )
+    assert downloaded == len(payloads)
+    assert max_active == 4
+    assert not (download_root / "not-a-file").exists()
+    for path, expected in payloads.items():
+        relative = Path(path).relative_to("runs/test")
+        assert (download_root / relative).read_bytes() == expected
 
     secret = "startup-bearer-sentinel"
     log_path = tmp_path / "sglang.log"
