@@ -2603,7 +2603,8 @@ def _validate_gate0_chain(
         or provider_output.get("status") != "RUNNING"
         or not allocation_id
         or not allocation_name
-        or _integer(executor.get("gpu_count")) != 8
+        or type(executor.get("gpu_count")) is not int
+        or executor.get("gpu_count") != 8
         or "H100" not in gpu_label
         or schedule.get("confirmed") is not True
     ):

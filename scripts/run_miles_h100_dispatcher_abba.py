@@ -1686,6 +1686,7 @@ def _validate_gate0_chain(paths: dict[str, Path]) -> dict[str, Any]:
         or provider_output.get("status") != "RUNNING"
         or not allocation_id
         or not allocation_name
+        or type(executor.get("gpu_count")) is not int
         or executor.get("gpu_count") != 8
         or "H100" not in gpu_label
         or executor.get("observed_rate_status") != payload.get("observed_node_hourly_rate_status")
@@ -1695,9 +1696,22 @@ def _validate_gate0_chain(paths: dict[str, Path]) -> dict[str, Any]:
     rate_evidence = (
         executor.get("rate_evidence") if isinstance(executor.get("rate_evidence"), dict) else {}
     )
+    signed_observed_rate = _number(payload.get("observed_node_hourly_rate_usd"))
+    signed_max_rate = _number(payload.get("max_node_hourly_rate_usd"))
+    provider_observed_rate = _number(executor.get("observed_rate_usd_per_hour"))
+    provider_gpu_rate = _number(executor.get("observed_rate_usd_per_gpu_hour"))
+    provider_max_rate = _number(executor.get("max_rate_usd_per_hour"))
     if (
         executor.get("rate_authority") != "provider_raw_price_per_gpu_x_gpu_count/v1"
         or executor.get("observed_rate_status") != "provider_reported_nonzero"
+        or signed_observed_rate is None
+        or signed_max_rate is None
+        or provider_observed_rate is None
+        or provider_gpu_rate is None
+        or provider_max_rate is None
+        or not math.isclose(provider_observed_rate, signed_observed_rate)
+        or not math.isclose(provider_gpu_rate * 8, signed_observed_rate)
+        or not math.isclose(provider_max_rate, signed_max_rate)
         or rate_evidence.get("executor_id") != executor.get("id")
         or type(rate_evidence.get("gpu_count")) is not int
         or rate_evidence.get("gpu_count") != 8

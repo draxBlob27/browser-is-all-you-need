@@ -2016,6 +2016,35 @@ def test_gate0_requires_exact_pre_and_post_rent_boundary_evidence(
     assert "gate0_provider_rent_boundary_invalid" in result["reasons"]
 
 
+def test_gate0_top_level_gpu_count_requires_a_genuine_integer(tmp_path: Path) -> None:
+    security = _test_security(tmp_path)
+    gate0 = _write_gate0_chain(tmp_path, security)
+    contract, hardware, budget, request = _write_preflight_inputs(tmp_path)
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    provider["executor"]["gpu_count"] = 8.0
+    _json(gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    _json(gate0["launch_receipt"], receipt)
+
+    result = evaluate_preflight(
+        contract_path=contract,
+        hardware_path=hardware,
+        budget_path=budget,
+        request_path=request,
+        gate0_permit_path=gate0["permit"],
+        gate0_public_key_path=gate0["public_key"],
+        launch_receipt_path=gate0["launch_receipt"],
+        booking_request_path=gate0["booking_request"],
+        provider_output_path=gate0["provider_output"],
+        security=security,
+    )
+
+    assert result["decision"] == "INVALID"
+    assert "gate0_provider_output_schema_or_hardware_invalid" in result["reasons"]
+
+
 @pytest.mark.parametrize(
     ("surface", "expected_reason"),
     [

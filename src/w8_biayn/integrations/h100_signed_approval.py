@@ -1557,6 +1557,8 @@ def _validate_successful_provider_output(output: bytes, permit: VerifiedPermit) 
         or permit.payload["executor_id"] not in {raw_executor_id, raw_executor_huid}
     ):
         raise PermitVerificationError("provider output executor selector mismatch")
+    if type(executor.get("gpu_count")) is not int:
+        raise PermitVerificationError("provider output executor GPU count is malformed")
     expected = {
         "pod.name": (pod.get("name"), permit.payload["allocation_name"]),
         "executor.gpu_count": (executor.get("gpu_count"), permit.payload["gpu_count"]),

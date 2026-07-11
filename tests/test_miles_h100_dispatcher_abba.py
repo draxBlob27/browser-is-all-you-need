@@ -1635,6 +1635,55 @@ def test_gate0_pre_rent_availability_requires_a_genuine_exact_integer(
         module["_validate_gate0_chain"](gate0)
 
 
+@pytest.mark.parametrize("invalid_gpu_count", [8.0, "8", True])
+def test_gate0_top_level_gpu_count_requires_a_genuine_integer(
+    tmp_path: Path,
+    invalid_gpu_count: object,
+) -> None:
+    module = _module()
+    gate0 = _write_gate0_chain(tmp_path / "gate0")
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    provider["executor"]["gpu_count"] = invalid_gpu_count
+    module["write_json"](gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    module["write_json"](gate0["launch_receipt"], receipt)
+
+    with pytest.raises(RuntimeError, match="running 8x H100 allocation"):
+        module["_validate_gate0_chain"](gate0)
+
+
+@pytest.mark.parametrize("mutation", ["observed-rate", "max-cap"])
+def test_gate0_provider_rate_and_cap_must_match_the_signed_permit(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    module = _module()
+    gate0 = _write_gate0_chain(tmp_path / "gate0")
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    executor = provider["executor"]
+    if mutation == "max-cap":
+        executor["max_rate_usd_per_hour"] = 100.0
+    else:
+        executor["observed_rate_usd_per_hour"] = 16.0
+        executor["observed_rate_usd_per_gpu_hour"] = 2.0
+        executor["rate_evidence"]["price_per_gpu"] = 2.0
+        executor["rate_evidence"]["price_per_hour"] = 16.0
+        executor["rent_boundary"]["before_post"]["price_per_gpu"] = 2.0
+        executor["rent_boundary"]["before_post"]["price_per_hour"] = 16.0
+        executor["rent_boundary"]["after_post"]["price_per_gpu"] = 2.0
+        executor["rent_boundary"]["after_post"]["price_per_hour"] = 16.0
+    module["write_json"](gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    module["write_json"](gate0["launch_receipt"], receipt)
+
+    with pytest.raises(RuntimeError, match="rate authority is invalid"):
+        module["_validate_gate0_chain"](gate0)
+
+
 def test_gate0_ssh_public_key_binding_fails_closed(tmp_path: Path) -> None:
     module = _module()
     gate0 = _write_gate0_chain(tmp_path / "gate0")
