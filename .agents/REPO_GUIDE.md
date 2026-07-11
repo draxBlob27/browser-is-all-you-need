@@ -206,7 +206,8 @@ Docker grader. Dry-run before spending; take `GOOGLE_API_KEY` or
 `GEMINI_API_KEY` from the environment without persisting its value; pin an
 exact model id; expose no oracle/tests; and label the result a cross-model
 sanity check rather than pass@k or an official Aider comparison. Recovery is
-diagnostic only.
+diagnostic only. Preflight a host-writable artifact path before spending the
+paid API request.
 
 ```bash
 bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh

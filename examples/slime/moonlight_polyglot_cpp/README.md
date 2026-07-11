@@ -139,10 +139,14 @@ SLIME container or GPU is required. Use the same task that needs a cross-model
 check, for example `all-your-base`. Dry-run first to inspect the exact request
 without using an API key or making a paid request:
 
+Use a host-owned output path. SLIME run directories can be root-owned when the
+lane container created them, so the host user may be unable to write beneath
+their `eval/` directory.
+
 ```bash
 export SLIME_RUN_ID=<admitted-polyglot-run-id>
 export POLYGLOT_DATA_ROOT="$PWD/.w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/data"
-export GEMINI_SANITY_OUT="$PWD/.w8-biayn/slime/moonlight-polyglot-cpp/runs/${SLIME_RUN_ID}/eval/gemini-sanity/all-your-base"
+export GEMINI_SANITY_OUT="$HOME/.w8-biayn/gemini-sanity/${SLIME_RUN_ID}/all-your-base"
 
 uv run --extra gemini python -m w8_biayn.integrations.slime_polyglot_cpp \
   gemini-sanity \
@@ -186,7 +190,9 @@ model id from the [official Gemini model list](https://ai.google.dev/gemini-api/
 API-key behavior follows the
 [official Gemini key guidance](https://ai.google.dev/gemini-api/docs/generate-content/api-key).
 Use `--force` only for an intentional replacement; otherwise a nonempty output
-directory blocks the paid call.
+directory blocks the paid call. Before making the paid API request, the command
+verifies that both the output directory and its parent are writable, so a
+permission error does not consume a Gemini request.
 
 Artifacts are `prompt.txt` (verbatim admitted prompt), `response.txt` (raw API
 text), `request.json` (redacted request receipt), `record.json` (the normal

@@ -587,6 +587,30 @@ def test_gemini_sanity_api_failure_does_not_create_artifacts(
     assert not output.exists()
 
 
+def test_gemini_sanity_checks_output_path_before_api_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("occupied", encoding="utf-8")
+    generator_called = False
+
+    def forbidden_generate(**_kwargs: object) -> polyglot.GeminiGeneration:
+        nonlocal generator_called
+        generator_called = True
+        raise AssertionError("API generator must not run before output preflight")
+
+    with pytest.raises((FileExistsError, NotADirectoryError)):
+        polyglot.run_polyglot_gemini_sanity(
+            data_root=data_root,
+            task_id="cpp/two-fer",
+            output_dir=blocked_parent / "result",
+            generator=forbidden_generate,
+        )
+
+    assert generator_called is False
+
+
 def test_gemini_sanity_plan_is_one_task_raw_response_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -849,6 +873,7 @@ def test_moonlight_polyglot_cpp_readme_documents_operator_flow() -> None:
     assert "--rollout-skip-special-tokens" in text
     assert "rollout_skip_special_tokens=1" in text
     assert "gemini-sanity" in text
+    assert "host-owned" in text
     assert "GEMINI_API_KEY" in text
     assert "raw response" in text
     assert "not a" in text and "pass@k" in text

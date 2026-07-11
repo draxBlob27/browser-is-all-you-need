@@ -1844,6 +1844,28 @@ def _gemini_sanity_plan_from_row(
     }
 
 
+def _preflight_gemini_output_dir(output: Path, *, force: bool) -> bool:
+    created = False
+    if output.exists():
+        if not output.is_dir():
+            raise FileExistsError(f"Gemini sanity output is not a directory: {output}")
+        if any(output.iterdir()) and not force:
+            raise FileExistsError(
+                f"{output} already exists and is not empty; pass --force to replace it"
+            )
+    else:
+        output.mkdir(parents=True)
+        created = True
+
+    # Exercise both permissions needed after the paid request: writing inside
+    # the result directory and replacing it atomically when --force is used.
+    with TemporaryDirectory(prefix=".gemini-write-check-", dir=output):
+        pass
+    with TemporaryDirectory(prefix=".gemini-parent-write-check-", dir=output.parent):
+        pass
+    return created
+
+
 def run_polyglot_gemini_sanity(
     *,
     data_root: str | Path,
@@ -1858,34 +1880,37 @@ def run_polyglot_gemini_sanity(
     generator: Callable[..., GeminiGeneration] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Path]]:
     output = Path(output_dir).resolve()
-    if output.exists() and any(output.iterdir()) and not force:
-        raise FileExistsError(f"{output} already exists and is not empty; pass --force to replace it")
-
-    _validate_gemini_generation_config(
-        model=model,
-        temperature=temperature,
-        top_p=top_p,
-        max_output_tokens=max_output_tokens,
-    )
-    row, oracle_check = load_admitted_polyglot_eval_row(data_root, task_id)
-    plan = _gemini_sanity_plan_from_row(
-        row=row,
-        oracle_check=oracle_check,
-        model=model,
-        temperature=temperature,
-        top_p=top_p,
-        seed=seed,
-        max_output_tokens=max_output_tokens,
-    )
-    generate = generator or generate_gemini_text
-    generation = generate(
-        prompt=plan["prompt"],
-        model=model,
-        temperature=temperature,
-        top_p=top_p,
-        seed=seed,
-        max_output_tokens=max_output_tokens,
-    )
+    created_output = _preflight_gemini_output_dir(output, force=force)
+    try:
+        _validate_gemini_generation_config(
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            max_output_tokens=max_output_tokens,
+        )
+        row, oracle_check = load_admitted_polyglot_eval_row(data_root, task_id)
+        plan = _gemini_sanity_plan_from_row(
+            row=row,
+            oracle_check=oracle_check,
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            seed=seed,
+            max_output_tokens=max_output_tokens,
+        )
+        generate = generator or generate_gemini_text
+        generation = generate(
+            prompt=plan["prompt"],
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            seed=seed,
+            max_output_tokens=max_output_tokens,
+        )
+    except Exception:
+        if created_output:
+            output.rmdir()
+        raise
 
     metadata = {
         **row["metadata"],
@@ -1898,9 +1923,9 @@ def run_polyglot_gemini_sanity(
     record["sanity_provider"] = "google-gemini-api"
     record["sanity_model"] = model
 
-    if output.exists() and force:
+    if force and not created_output:
         shutil.rmtree(output)
-    output.mkdir(parents=True, exist_ok=True)
+        output.mkdir(parents=True)
     paths = {
         "prompt": output / "prompt.txt",
         "response": output / "response.txt",

@@ -401,7 +401,8 @@ repairs output, or awards recovered diagnostics. Use
 `uv run --extra gemini python -m
 w8_biayn.integrations.slime_polyglot_cpp gemini-sanity --dry-run ...` first;
 the complete credential, artifact, and interpretation contract lives in the
-lane README.
+lane README. The command checks output and parent permissions before the paid
+request; use a host-owned output path rather than a root-owned SLIME run path.
 
 
 ## Moonlight Multi-SWE C++ Base Eval

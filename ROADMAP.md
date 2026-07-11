@@ -286,7 +286,8 @@ through an exact Gemini model id, then the same strict parser and Docker grader.
 It must dry-run before the paid API call, keep the API key in environment only,
 persist prompt/raw-response/request/record/summary artifacts, expose no oracle
 or test content, perform no response repair, and report recovered fields as
-diagnostic only. This is a prompt/parser/grader sanity check, not pass@k or an
+diagnostic only. It must also preflight artifact-path permissions before the
+paid request. This is a prompt/parser/grader sanity check, not pass@k or an
 official Polyglot/Aider comparison.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
