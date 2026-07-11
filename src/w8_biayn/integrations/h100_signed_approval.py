@@ -1649,7 +1649,7 @@ def _validate_raw_rate_snapshot(
     gpu_count = value.get("gpu_count")
     available_gpu_count = value.get("available_gpu_count")
     if (
-        isinstance(gpu_count, bool)
+        type(gpu_count) is not int
         or gpu_count != REQUIRED_GPU_COUNT
         or isinstance(available_gpu_count, bool)
         or not isinstance(available_gpu_count, int)

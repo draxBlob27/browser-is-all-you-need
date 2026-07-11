@@ -226,6 +226,8 @@ def _make_harness(tmp_path: Path) -> dict[str, Any]:
         "record['executor']['rent_boundary']['after_post']['price_per_hour'] = 17\n"
         "elif boundary_tamper == 'after_availability': "
         "record['executor']['rent_boundary']['after_post']['available_gpu_count'] = 9\n"
+        "elif boundary_tamper == 'after_gpu_count_type': "
+        "record['executor']['rent_boundary']['after_post']['gpu_count'] = 8.0\n"
         "elif boundary_tamper == 'aggregate_rate': "
         "record['executor']['rate_evidence']['price_per_hour'] = 17\n"
         "output_mode = os.environ.get('FAKE_PROVIDER_OUTPUT_MODE', 'valid')\n"
@@ -920,7 +922,15 @@ def test_missing_or_partial_provider_output_reconciles_all_attributable_allocati
 
 @pytest.mark.parametrize(
     "tamper",
-    ["missing", "status", "endpoint", "after_rate", "after_availability", "aggregate_rate"],
+    [
+        "missing",
+        "status",
+        "endpoint",
+        "after_rate",
+        "after_availability",
+        "after_gpu_count_type",
+        "aggregate_rate",
+    ],
 )
 def test_outer_wrapper_rejects_tampered_rent_boundary_and_reconciles(
     tmp_path: Path, tamper: str

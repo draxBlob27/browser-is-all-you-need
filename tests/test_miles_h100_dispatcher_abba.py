@@ -1613,6 +1613,28 @@ def test_gate0_post_rent_availability_must_be_a_bounded_decrease(tmp_path: Path)
         module["_validate_gate0_chain"](gate0)
 
 
+@pytest.mark.parametrize("invalid_availability", [8.0, "8", True, -1, 9])
+def test_gate0_pre_rent_availability_requires_a_genuine_exact_integer(
+    tmp_path: Path,
+    invalid_availability: object,
+) -> None:
+    module = _module()
+    gate0 = _write_gate0_chain(tmp_path / "gate0")
+    provider = json.loads(gate0["provider_output"].read_text(encoding="utf-8"))
+    provider["executor"]["rate_evidence"]["available_gpu_count"] = invalid_availability
+    provider["executor"]["rent_boundary"]["before_post"][
+        "available_gpu_count"
+    ] = invalid_availability
+    module["write_json"](gate0["provider_output"], provider)
+    receipt = json.loads(gate0["launch_receipt"].read_text(encoding="utf-8"))
+    receipt["provider_output"]["sha256"] = _sha256(gate0["provider_output"])
+    receipt["provider_output"]["size_bytes"] = gate0["provider_output"].stat().st_size
+    module["write_json"](gate0["launch_receipt"], receipt)
+
+    with pytest.raises(RuntimeError, match="rate authority is invalid"):
+        module["_validate_gate0_chain"](gate0)
+
+
 def test_gate0_ssh_public_key_binding_fails_closed(tmp_path: Path) -> None:
     module = _module()
     gate0 = _write_gate0_chain(tmp_path / "gate0")

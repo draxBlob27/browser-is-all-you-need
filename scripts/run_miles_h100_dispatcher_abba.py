@@ -1699,8 +1699,10 @@ def _validate_gate0_chain(paths: dict[str, Path]) -> dict[str, Any]:
         executor.get("rate_authority") != "provider_raw_price_per_gpu_x_gpu_count/v1"
         or executor.get("observed_rate_status") != "provider_reported_nonzero"
         or rate_evidence.get("executor_id") != executor.get("id")
+        or type(rate_evidence.get("gpu_count")) is not int
         or rate_evidence.get("gpu_count") != 8
-        or rate_evidence.get("available_gpu_count", 0) < 8
+        or type(rate_evidence.get("available_gpu_count")) is not int
+        or rate_evidence.get("available_gpu_count") != 8
         or rate_evidence.get("price_per_hour") != executor.get("observed_rate_usd_per_hour")
         or rate_evidence.get("price_per_gpu") != executor.get("observed_rate_usd_per_gpu_hour")
         or rate_evidence.get("pending_price_change") is not False
