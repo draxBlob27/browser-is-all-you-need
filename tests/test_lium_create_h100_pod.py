@@ -779,6 +779,60 @@ def test_post_rent_rate_mismatch_terminates_attributable_pod_with_evidence(capsy
     assert not any(call[0] in {"schedule_termination", "wait_ready"} for call in client.calls)
 
 
+def test_post_rent_availability_drop_is_expected_and_preserved(capsys) -> None:
+    module = _module()
+    client = FakeLium()
+    stable = [
+        {
+            "id": EXECUTOR_ID,
+            "gpu_count": 8,
+            "available_gpu_count": 8,
+            "price_per_gpu": 2.25,
+            "pending_price_per_hour": None,
+            "price_change_effective_date": None,
+        }
+    ]
+    rented = [{**stable[0], "available_gpu_count": 0}]
+    client.raw_rate_side_effects = [stable, stable, stable, stable, rented]
+
+    exit_code, record = _run(module, client, capsys)
+
+    assert exit_code == 0
+    assert record["status"] == "RUNNING"
+    assert record["executor"]["rent_boundary"]["before_post"]["available_gpu_count"] == 8
+    assert record["executor"]["rent_boundary"]["after_post"]["available_gpu_count"] == 0
+    assert not any(call[0] == "down" for call in client.calls)
+
+
+def test_post_rent_invalid_availability_terminates_attributable_pod(capsys) -> None:
+    module = _module()
+    client = FakeLium()
+    stable = [
+        {
+            "id": EXECUTOR_ID,
+            "gpu_count": 8,
+            "available_gpu_count": 8,
+            "price_per_gpu": 2.25,
+            "pending_price_per_hour": None,
+            "price_change_effective_date": None,
+        }
+    ]
+    malformed = [{**stable[0], "available_gpu_count": 9}]
+    client.raw_rate_side_effects = [stable, stable, stable, stable, malformed]
+
+    exit_code, record = _run(module, client, capsys)
+
+    assert exit_code != 0
+    assert record["error"] == "executor_rate_changed_after_rent"
+    assert record["details"]["cleanup"] == {
+        "cleanup_status": "CONFIRMED",
+        "cleanup_count": 1,
+        "cleanup_pod_ids": ["pod-123"],
+    }
+    assert ("down", "pod-123") in client.calls
+    assert client.active_pods == []
+
+
 def test_missing_raw_rate_and_pending_rate_change_never_create_pod(capsys) -> None:
     module = _module()
     client = FakeLium()

@@ -637,13 +637,18 @@ def _single_attempt_provider_up(
         rent_post_count += 1
         response = direct_request(method, endpoint, *args, **request_kwargs)
         try:
-            after_post = _raw_executor_rate_with_request(direct_request, executor_id)
+            after_post = _raw_executor_rate_with_request(
+                direct_request,
+                executor_id,
+                require_full_availability=False,
+            )
             _validate_rent_boundary_rate(
                 after_post,
                 expected_rate_evidence=before_post,
                 expected_observed_rate=expected_observed_rate,
                 max_rate=max_rate,
                 phase="after_post",
+                allow_availability_decrease=True,
             )
         except ProviderFailure as exc:
             details = {
@@ -870,7 +875,10 @@ def _raw_executor_rate(client: Any, executor_id: str) -> RawRateEvidence:
 
 
 def _raw_executor_rate_with_request(
-    request: Callable[..., Any], executor_id: str
+    request: Callable[..., Any],
+    executor_id: str,
+    *,
+    require_full_availability: bool = True,
 ) -> RawRateEvidence:
     try:
         response = request("GET", "/executors", params={"size": 1000})
@@ -903,10 +911,15 @@ def _raw_executor_rate_with_request(
             "executor_rate_change_pending",
             "Executor has a pending rate change",
         )
-    if gpu_count != 8 or available_gpu_count < 8:
+    availability_is_valid = 0 <= available_gpu_count <= gpu_count
+    if (
+        gpu_count != 8
+        or not availability_is_valid
+        or (require_full_availability and available_gpu_count != gpu_count)
+    ):
         raise ProviderFailure(
             "executor_raw_availability_mismatch",
-            "Raw executor record does not prove eight available GPUs",
+            "Raw executor record has invalid GPU availability for this boundary",
         )
     if price_per_gpu <= 0:
         raise ProviderFailure(
@@ -941,9 +954,25 @@ def _validate_rent_boundary_rate(
     expected_observed_rate: Decimal,
     max_rate: Decimal,
     phase: str,
+    allow_availability_decrease: bool = False,
 ) -> None:
+    same_rate_identity = (
+        evidence.executor_id == expected_rate_evidence.executor_id
+        and evidence.gpu_count == expected_rate_evidence.gpu_count
+        and evidence.price_per_gpu == expected_rate_evidence.price_per_gpu
+        and evidence.price_per_hour == expected_rate_evidence.price_per_hour
+        and evidence.authority == expected_rate_evidence.authority
+    )
+    availability_matches = (
+        evidence.available_gpu_count == expected_rate_evidence.available_gpu_count
+    )
+    if allow_availability_decrease:
+        availability_matches = (
+            0 <= evidence.available_gpu_count <= expected_rate_evidence.available_gpu_count
+        )
     if (
-        evidence != expected_rate_evidence
+        not same_rate_identity
+        or not availability_matches
         or evidence.price_per_hour != expected_observed_rate
         or not Decimal("0") < evidence.price_per_hour <= max_rate
     ):
