@@ -343,6 +343,11 @@ Reject stale remote run artifacts in a CPU-only preflight before model loading
 or GPU admission. After that gate, permit an SGLang container restart only
 when the runner-written config is identity-compatible; it must not mistake its
 own active run artifacts for operator reuse.
+Give the authenticated chat admission probe up to 2048 tokens, bounded by the
+configured benchmark maximum, because a thinking response can exhaust 128
+tokens before emitting editable content. Persist `admission.response.json` on
+success or `admission.failure.json` on failure with response-shape metadata
+only; never persist generated reasoning or answer text in these diagnostics.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

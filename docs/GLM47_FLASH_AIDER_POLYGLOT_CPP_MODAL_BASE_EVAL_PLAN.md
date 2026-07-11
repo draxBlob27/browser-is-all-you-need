@@ -267,6 +267,12 @@ A CPU-only results-Volume preflight must reject every stale run ID before
 model loading or GPU startup. After admission, a restarted SGLang container
 must accept the runner-written config only when its immutable identity remains
 compatible; that active config is not evidence of operator run-ID reuse.
+The authenticated chat probe must use at most 2048 tokens, further bounded by
+the configured benchmark completion budget. This prevents GLM's thinking phase
+from consuming a 128-token probe before editable content appears. Persist
+`admission.response.json` or `admission.failure.json` with response-shape
+metadata only: keys, presence flags, character counts, finish reason, and
+numeric token usage. Do not persist generated reasoning or answer text.
 Do not accept `main`, `latest`, branch names, abbreviated Git commits, or an
 untagged/undigested SGLang image for a full result. A smoke may allow a pinned
 version tag only with an explicitly recorded unsafe-development override.

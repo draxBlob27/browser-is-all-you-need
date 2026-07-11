@@ -33,6 +33,7 @@ TRANSFORMERS_REPO_URL = "https://github.com/huggingface/transformers.git"
 TRANSFORMERS_COMMIT = "76732b4e7120808ff989edbd16401f61fa6a0afa"
 POLYGLOT_REPO_URL = "https://github.com/Aider-AI/polyglot-benchmark.git"
 MODAL_SDK_PIN = "1.5.2"
+SGLANG_ADMISSION_MAX_TOKENS = 2048
 DEFAULT_LOCAL_ROOT = ".w8-biayn/modal/glm47-flash-aider-polyglot-cpp"
 MODEL_SETTINGS_PATH = "/run/glm47_flash.model.settings.yml"
 SENSITIVE_NAMES = (
@@ -756,6 +757,66 @@ def validate_remote_preflight(config: ModalAiderConfig, run_root: str | Path) ->
         status = json.loads(prior_receipt.read_text(encoding="utf-8")).get("status")
         if status == "complete":
             raise ModalAiderError("a completed full run cannot be resumed")
+
+
+def summarize_sglang_admission(
+    completion: Mapping[str, Any], *, requested_max_tokens: int
+) -> dict[str, Any]:
+    """Return a response-shape diagnostic without model-generated text."""
+
+    choices = completion.get("choices")
+    choice = (
+        choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+    )
+    message_value = choice.get("message")
+    message = message_value if isinstance(message_value, dict) else {}
+    content = message.get("content")
+    reasoning = message.get("reasoning_content")
+    usage_value = completion.get("usage")
+    usage = (
+        {
+            str(key): value
+            for key, value in usage_value.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+        if isinstance(usage_value, dict)
+        else {}
+    )
+    return {
+        "requested_max_tokens": requested_max_tokens,
+        "choices_count": len(choices) if isinstance(choices, list) else 0,
+        "choice_keys": sorted(choice),
+        "message_keys": sorted(message),
+        "finish_reason": choice.get("finish_reason"),
+        "content_present": isinstance(content, str) and bool(content.strip()),
+        "content_chars": len(content) if isinstance(content, str) else 0,
+        "reasoning_content_field_present": "reasoning_content" in message,
+        "reasoning_content_present": isinstance(reasoning, str) and bool(reasoning.strip()),
+        "reasoning_content_chars": len(reasoning) if isinstance(reasoning, str) else 0,
+        "usage": usage,
+    }
+
+
+def validate_sglang_admission(summary: Mapping[str, Any]) -> None:
+    """Require separated reasoning metadata and nonempty editable content."""
+
+    missing = []
+    if not summary.get("reasoning_content_field_present"):
+        missing.append("reasoning_content field")
+    if not summary.get("content_present"):
+        missing.append("editable content")
+    if missing:
+        finish = summary.get("finish_reason")
+        used = (
+            summary.get("usage", {}).get("completion_tokens")
+            if isinstance(summary.get("usage"), dict)
+            else None
+        )
+        raise ModalAiderError(
+            "SGLang admission response is missing "
+            + " and ".join(missing)
+            + f" (finish_reason={finish!r}, completion_tokens={used!r})"
+        )
 
 
 def ensure_secret_free(value: Any, secrets: Sequence[str]) -> None:

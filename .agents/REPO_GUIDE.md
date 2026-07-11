@@ -260,6 +260,10 @@ Run stale-result admission on CPU before model loading or GPU startup. A
 server restart may accept only the active run's identity-compatible config;
 do not let the server freshness guard reject artifacts written by its own
 benchmark runner.
+Use up to 2048 configured completion tokens for the authenticated chat probe;
+128 tokens can be consumed entirely by GLM reasoning. Admission diagnostics
+may store only response keys, presence flags, lengths, finish reason, and
+numeric usage, never generated reasoning or answer text.
 
 
 ```bash

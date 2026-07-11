@@ -37,6 +37,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     POLYGLOT_REPO_URL,
     SCHEMA_VERSION,
     SERVED_MODEL_NAME,
+    SGLANG_ADMISSION_MAX_TOKENS,
     TRANSFORMERS_COMMIT,
     TRANSFORMERS_REPO_URL,
     ModalAiderConfig,
@@ -51,11 +52,13 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     render_plan,
     sha256_file,
     sglang_server_command,
+    summarize_sglang_admission,
     utc_now,
     validate_aider_results,
     validate_authoritative_stats,
     validate_model_snapshot,
     validate_remote_preflight,
+    validate_sglang_admission,
     validate_sglang_help,
     write_json,
 )
@@ -605,16 +608,31 @@ def run_aider_benchmark(
         timeout=120,
         payload={
             "model": SERVED_MODEL_NAME,
-            "messages": [
-                {"role": "user", "content": "Think briefly, then reply with exactly READY."}
-            ],
-            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "Reply with exactly READY. Do not explain."}],
+            "max_tokens": min(config.max_tokens, SGLANG_ADMISSION_MAX_TOKENS),
             "temperature": 0,
+            "stream": False,
         },
     )
-    message = completion.get("choices", [{}])[0].get("message", {})
-    if not str(message.get("content") or "").strip() or "reasoning_content" not in message:
-        raise ModalAiderError("SGLang did not separate reasoning while preserving editable content")
+    admission = summarize_sglang_admission(
+        completion,
+        requested_max_tokens=min(config.max_tokens, SGLANG_ADMISSION_MAX_TOKENS),
+    )
+    try:
+        validate_sglang_admission(admission)
+    except ModalAiderError as exc:
+        admission["schema_version"] = SCHEMA_VERSION
+        admission["status"] = "failed"
+        admission["failed_at_utc"] = utc_now()
+        ensure_secret_free(admission, [api_key])
+        write_json(root / "admission.failure.json", admission)
+        results_volume.commit()
+        raise ModalAiderError(f"{exc}; see admission.failure.json") from exc
+    admission["schema_version"] = SCHEMA_VERSION
+    admission["status"] = "passed"
+    admission["completed_at_utc"] = utc_now()
+    ensure_secret_free(admission, [api_key])
+    write_json(root / "admission.response.json", admission)
     results_volume.reload()
     runtime_path = root / "server.runtime.json"
     if not runtime_path.is_file():
@@ -626,6 +644,7 @@ def run_aider_benchmark(
             "model_listing": models,
             "admission_content_present": True,
             "reasoning_content_field_present": True,
+            "admission_probe": admission,
             "model_manifest_sha256": model_cache_receipt["manifest_sha256"],
         }
     )

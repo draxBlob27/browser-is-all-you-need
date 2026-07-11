@@ -76,6 +76,11 @@ A CPU-only results-Volume preflight rejects stale run IDs before model loading
 or GPU startup. Once admitted, a restarted server container accepts only its
 own identity-compatible config instead of rejecting artifacts written by the
 live benchmark runner.
+The authenticated chat admission probe uses up to 2048 of the configured
+completion tokens so GLM reasoning cannot consume the old 128-token allowance
+before producing editable content. It persists only response keys, field
+presence, character counts, finish reason, and numeric usage; generated
+reasoning and answer text are never stored in admission diagnostics.
 
 
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt

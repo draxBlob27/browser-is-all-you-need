@@ -15,6 +15,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     BENCHMARK_LABEL,
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
+    SGLANG_ADMISSION_MAX_TOKENS,
     TRANSFORMERS_COMMIT,
     ModalAiderConfig,
     ModalAiderError,
@@ -28,10 +29,12 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     prepare_local_plan,
     render_plan,
     sglang_server_command,
+    summarize_sglang_admission,
     validate_aider_results,
     validate_authoritative_stats,
     validate_model_snapshot,
     validate_remote_preflight,
+    validate_sglang_admission,
     validate_sglang_help,
     write_json,
 )
@@ -246,6 +249,50 @@ def test_aider_stats_parser_preserves_try_rates_without_pass_at_k_label() -> Non
     assert not any("pass@" in key for key in stats)
 
 
+def test_sglang_admission_diagnostic_is_text_free_and_explains_truncation() -> None:
+    completion = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "content": None,
+                    "reasoning_content": "private chain of thought sentinel",
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 128, "total_tokens": 140},
+    }
+    summary = summarize_sglang_admission(completion, requested_max_tokens=128)
+
+    assert summary["content_present"] is False
+    assert summary["reasoning_content_field_present"] is True
+    assert summary["reasoning_content_chars"] == len("private chain of thought sentinel")
+    assert "private chain of thought sentinel" not in json.dumps(summary)
+    with pytest.raises(ModalAiderError, match="finish_reason='length'.*completion_tokens=128"):
+        validate_sglang_admission(summary)
+
+
+def test_sglang_admission_accepts_separated_reasoning_and_editable_content() -> None:
+    completion = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": "READY", "reasoning_content": "private sentinel"},
+            }
+        ],
+        "usage": {"completion_tokens": 37},
+    }
+    summary = summarize_sglang_admission(
+        completion,
+        requested_max_tokens=SGLANG_ADMISSION_MAX_TOKENS,
+    )
+
+    validate_sglang_admission(summary)
+    assert summary["content_chars"] == 5
+    assert "READY" not in json.dumps(summary)
+    assert "private sentinel" not in json.dumps(summary)
+
+
 def test_smoke_admission_allows_wrong_code_but_rejects_exception_rows(tmp_path: Path) -> None:
     root = tmp_path / "smoke-result"
     write_result(root, "all-your-base")
@@ -378,6 +425,14 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     server_start = modal_app.split("class SGLangServer:", 1)[1].split("def _run_aider_stage", 1)[0]
     assert "assert_resume_compatible(config, prior_config, allow_plan=True)" in server_start
     assert "remote run id already has artifacts" not in server_start
+    assert "SGLANG_ADMISSION_MAX_TOKENS" in modal_app
+    assert 'write_json(root / "admission.failure.json", admission)' in modal_app
+    assert (
+        "completion"
+        not in modal_app.split('write_json(root / "admission.failure.json"', 1)[1].split(
+            "results_volume.commit()", 1
+        )[0]
+    )
     assert "HF_TOKEN" not in modal_app.split("def run_aider_benchmark", 1)[1]
     assert run.index("trap cleanup EXIT") < run.index("modal token info") < run.index("modal run")
     assert "W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN" in run

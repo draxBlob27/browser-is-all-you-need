@@ -151,6 +151,14 @@ process and fails early if it exits. A startup failure prints and commits only
 a bearer-redacted log tail as `server.failure.json`; raw SGLang output remains
 ephemeral.
 
+The authenticated chat admission request uses
+`min(W8_MODAL_AIDER_MAX_TOKENS, 2048)` completion tokens. GLM's thinking phase
+can consume a 128-token probe before producing editable `content`. A passing
+probe writes `admission.response.json`; a failure writes
+`admission.failure.json`. Both contain only response keys, field-presence
+flags, character counts, finish reason, and numeric token usage. Neither file
+contains the generated reasoning or answer text.
+
 ## Full 26-Task Run
 
 The first supported full configuration is:
@@ -236,6 +244,8 @@ runs/<run-id>/
   upstreams.json
   model-cache.receipt.json
   server.failure.json        # failure-only, bearer-redacted
+  admission.failure.json     # failure-only response shape; no generated text
+  admission.response.json    # passing response shape; no generated text
   server.runtime.json
   server.receipt.json
   model-settings.yml
