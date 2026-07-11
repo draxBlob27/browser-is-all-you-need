@@ -252,6 +252,10 @@ complete 26-task stopped-App receipt.
 Allow a 3600-second cold-start ceiling, poll the SGLang child process for early
 exit, and persist/print only a bearer-redacted `server.failure.json` tail on
 startup failure; raw SGLang output stays ephemeral.
+Overlay the SGLang base with official Transformers commit
+`76732b4e7120808ff989edbd16401f61fa6a0afa`, fail image construction unless
+`glm4_moe_lite` is registered, and persist that identity in plans and
+receipts.
 
 
 ```bash

@@ -47,6 +47,9 @@ smoke first; there is no skip-smoke option.
 - Exact immutable commits for the model, Aider, and Polyglot inputs.
 - A digest-pinned SGLang image whose launch help exposes every required GLM
   parser and EAGLE speculative-decoding flag.
+- The official GLM-4.7-Flash Transformers commit
+  `76732b4e7120808ff989edbd16401f61fa6a0afa`, installed over the pinned
+  SGLang base and build-checked for the `glm4_moe_lite` architecture.
 - Capacity for exactly `H100!:4`. The strict `!` prevents Modal from silently
   substituting H200 hardware.
 

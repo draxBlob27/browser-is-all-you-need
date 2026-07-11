@@ -29,6 +29,8 @@ MODEL_REPO = "zai-org/GLM-4.7-Flash"
 SERVED_MODEL_NAME = "glm-4.7-flash"
 AIDER_MODEL_NAME = "openai/glm-4.7-flash"
 AIDER_REPO_URL = "https://github.com/Aider-AI/aider.git"
+TRANSFORMERS_REPO_URL = "https://github.com/huggingface/transformers.git"
+TRANSFORMERS_COMMIT = "76732b4e7120808ff989edbd16401f61fa6a0afa"
 POLYGLOT_REPO_URL = "https://github.com/Aider-AI/polyglot-benchmark.git"
 MODAL_SDK_PIN = "1.5.2"
 DEFAULT_LOCAL_ROOT = ".w8-biayn/modal/glm47-flash-aider-polyglot-cpp"
@@ -302,6 +304,8 @@ class ModalAiderConfig:
                 "schema_version": SCHEMA_VERSION,
                 "benchmark": BENCHMARK_LABEL,
                 "modal_sdk_pin": MODAL_SDK_PIN,
+                "transformers_repo_url": TRANSFORMERS_REPO_URL,
+                "transformers_commit": TRANSFORMERS_COMMIT,
                 "app_name": self.app_name,
                 "remote_run_path": self.remote_run_path,
             }
@@ -330,7 +334,10 @@ class ModalAiderConfig:
             "hf_token",
             "local_root",
         }
-        return {key: value for key, value in asdict(self).items() if key not in excluded}
+        payload = {key: value for key, value in asdict(self).items() if key not in excluded}
+        payload["transformers_repo_url"] = TRANSFORMERS_REPO_URL
+        payload["transformers_commit"] = TRANSFORMERS_COMMIT
+        return payload
 
     def identity_sha256(self) -> str:
         return sha256_json(self.identity_mapping())
@@ -371,6 +378,8 @@ def render_plan(config: ModalAiderConfig) -> dict[str, Any]:
         "blocking_smoke": config.phase == "full",
         "config": config.redacted_mapping(),
         "aider_smoke_argv": aider_benchmark_command(config, stage="smoke"),
+        "transformers_repo_url": TRANSFORMERS_REPO_URL,
+        "transformers_commit": TRANSFORMERS_COMMIT,
         "aider_full_argv": aider_benchmark_command(config, stage="full"),
         "sglang_argv_redacted": [
             "<redacted>" if value == "$SGLANG_API_KEY" else value

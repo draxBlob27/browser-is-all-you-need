@@ -69,6 +69,9 @@ part of the active PIE training stack.
 Its SGLang cold-start gate allows up to 3600 seconds, polls the server child
 process, and persists only a bearer-redacted `server.failure.json` tail when
 startup fails; raw server output stays ephemeral.
+The server image overlays the official pinned Transformers commit
+`76732b4e7120808ff989edbd16401f61fa6a0afa` and build-checks
+`glm4_moe_lite` before any GPU allocation.
 
 
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt

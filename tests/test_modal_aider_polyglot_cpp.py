@@ -15,6 +15,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     BENCHMARK_LABEL,
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
+    TRANSFORMERS_COMMIT,
     ModalAiderConfig,
     ModalAiderError,
     aider_benchmark_command,
@@ -82,6 +83,7 @@ def write_result(root: Path, task: str, *, exception: bool = False) -> None:
     (task_root / ".aider.chat.history.md").write_text("model response\n", encoding="utf-8")
 
 
+
 def authoritative_stats(tasks: int, *, tries: int = 2) -> dict[str, object]:
     stats: dict[str, object] = {
         "test_cases": tasks,
@@ -102,6 +104,9 @@ def test_valid_plan_config_and_redacted_plan_are_deterministic(tmp_path: Path) -
     assert first == second
     assert first["benchmark"] == BENCHMARK_LABEL
     assert first["action"] == "no paid resources"
+    assert first["transformers_commit"] == TRANSFORMERS_COMMIT
+    assert first["config"]["transformers_commit"] == TRANSFORMERS_COMMIT
+    assert cfg.identity_mapping()["transformers_commit"] == TRANSFORMERS_COMMIT
     rendered = json.dumps(first, sort_keys=True)
     assert "ak-test-sentinel" not in rendered
     assert "as-test-sentinel" not in rendered
@@ -354,6 +359,15 @@ def test_modal_images_add_mount_mode_local_source_after_build_steps() -> None:
             block = block.split(f"{next_name} =", 1)[0]
         assert block.count(".add_local_dir(") == 1
         assert block.rfind(".add_local_dir(") > block.rfind(".env(")
+        if name == "server_image":
+            assert "TRANSFORMERS_COMMIT" in block
+            assert "glm4_moe_lite" in block
+            assert (
+                block.index(".pip_install(")
+                < block.index(".run_commands(")
+                < block.index(".env(")
+                < block.index(".add_local_dir(")
+            )
 
 
 def test_aider_runner_uses_python_311_for_pinned_dev_dependencies() -> None:

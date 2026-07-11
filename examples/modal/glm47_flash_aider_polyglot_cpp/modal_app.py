@@ -37,6 +37,8 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     POLYGLOT_REPO_URL,
     SCHEMA_VERSION,
     SERVED_MODEL_NAME,
+    TRANSFORMERS_COMMIT,
+    TRANSFORMERS_REPO_URL,
     ModalAiderConfig,
     ModalAiderError,
     aider_benchmark_command,
@@ -117,6 +119,11 @@ if IS_LOCAL:
     )
     server_image = (
         modal.Image.from_registry(CONFIG.sglang_image)
+        .pip_install(f"git+{TRANSFORMERS_REPO_URL}@{TRANSFORMERS_COMMIT}")
+        .run_commands(
+            'python -c "from transformers.models.auto.configuration_auto import '
+            "CONFIG_MAPPING; assert 'glm4_moe_lite' in CONFIG_MAPPING\""
+        )
         .env({"PYTHONPATH": "/opt/w8-src", "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON})
         .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
     )
@@ -363,6 +370,7 @@ class SGLangServer:
                 "sglang_image": config.sglang_image,
                 "error_type": type(exc).__name__,
                 "error": str(exc),
+                "transformers_commit": TRANSFORMERS_COMMIT,
                 "process_returncode": self.process.poll(),
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "launch_argv": ["<redacted>" if part == api_key else part for part in command],
@@ -391,6 +399,7 @@ class SGLangServer:
             "model_path": f"/models/zai-org--GLM-4.7-Flash/{config.model_revision}",
             "served_model_name": SERVED_MODEL_NAME,
             "sglang_image": config.sglang_image,
+            "transformers_commit": TRANSFORMERS_COMMIT,
             "launch_argv": [
                 "<redacted>" if part == os.environ["SGLANG_API_KEY"] else part for part in command
             ],
@@ -568,6 +577,7 @@ def run_aider_benchmark(
         "upstream_aider_dockerfile_sha256": sha256_file("/opt/aider/benchmark/Dockerfile"),
         "local_aider_dockerfile_sha256": sha256_file("/opt/w8/Dockerfile.aider"),
         "runner_difference": "Modal is already the container; AIDER_DOCKER=1, no Docker-in-Docker; C++ dependencies only.",
+        "transformers": {"url": TRANSFORMERS_REPO_URL, "commit": TRANSFORMERS_COMMIT},
     }
     write_json(root / "upstreams.json", upstreams)
 
@@ -640,6 +650,7 @@ def run_aider_benchmark(
         "sglang_image": config.sglang_image,
         "modal_sdk_pin": MODAL_SDK_PIN,
         "gpu_requested": config.gpu,
+        "transformers_commit": TRANSFORMERS_COMMIT,
         "gpu_observed": server_receipt["observed_gpus"],
         "model_settings_sha256": hashlib.sha256(settings.encode()).hexdigest(),
         "aider_argv": final_admission["argv"],

@@ -335,6 +335,10 @@ Permit up to 3600 seconds for a cold SGLang load, but poll the child process so
 an early exit fails immediately. On failure, require a committed
 bearer-redacted `server.failure.json` tail while raw SGLang output remains
 ephemeral.
+The digest-pinned SGLang image must overlay Transformers commit
+`76732b4e7120808ff989edbd16401f61fa6a0afa`, fail its image build unless
+`glm4_moe_lite` is registered, and record the commit in plans and receipts
+before GPU admission.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
