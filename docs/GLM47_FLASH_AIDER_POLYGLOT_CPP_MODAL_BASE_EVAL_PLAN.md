@@ -347,16 +347,19 @@ greater-than-four-hour values without changing this design and tests.
 export W8_MODAL_AIDER_EDIT_FORMAT='whole'
 export W8_MODAL_AIDER_TRIES='2'
 export W8_MODAL_AIDER_THREADS='8'
-export W8_MODAL_AIDER_MAX_TOKENS='8192'
+export W8_MODAL_AIDER_MAX_TOKENS='32768'
 export W8_MODAL_AIDER_TEMPERATURE='0.7'
 export W8_MODAL_AIDER_TOP_P='1.0'
 export W8_MODAL_AIDER_SMOKE_TESTS='2'
 ```
 
 The first supported result uses `whole`, the edit format Aider recommends for
-an experimental model. Changing edit format, tries, temperature, top-p,
-thinking configuration, or token budget creates a different benchmark
-configuration and must produce a separate run ID.
+an experimental model. A paid smoke demonstrated that GLM can consume an
+8192-token completion entirely in reasoning; 32768 preserves thinking while
+remaining well inside the pinned checkpoint's 202752-position context.
+Changing edit format, tries, temperature, top-p, thinking configuration, or
+token budget creates a different benchmark configuration and must produce a
+separate run ID.
 
 `--tries 2` is intentional: the same full run yields Aider's first-attempt and
 cumulative second-attempt rates. A smoke uses one try and one thread regardless
@@ -567,7 +570,7 @@ exports. The intended first configuration is conceptually:
   use_temperature: true
   streaming: false
   extra_params:
-    max_tokens: 8192
+    max_tokens: 32768
     temperature: 0.7
     top_p: 1.0
 ```
@@ -1104,7 +1107,7 @@ export W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN='1'
 export W8_MODAL_AIDER_GPU='H100!:4'
 export W8_MODAL_AIDER_TRIES='2'
 export W8_MODAL_AIDER_THREADS='8'
-export W8_MODAL_AIDER_MAX_TOKENS='8192'
+export W8_MODAL_AIDER_MAX_TOKENS='32768'
 export W8_MODAL_AIDER_TEMPERATURE='0.7'
 export W8_MODAL_AIDER_TOP_P='1.0'
 

@@ -301,6 +301,11 @@ Keep the Aider checkout at `/aider`, matching its absolute official C++ grader
 path `/aider/benchmark/cpp-test.sh`, and build-check that executable contract.
 On exception-only rows, print and persist only bearer-redacted task names,
 exception types, and final traceback lines in `exception.summary.json`.
+Set the Aider completion budget to 32768: a paid smoke showed that GLM can
+spend all 8192 tokens reasoning without editable content, while the pinned
+checkpoint has a 202752-position context. Admission-failure output may include
+only safe per-task counters; download committed failure artifacts locally
+before re-raising the remote exception.
 Keep `min_containers=0`, but use a 1200-second SGLang scaledown window to span
 Aider generation/compile gaps without repeated four-H100 cold starts. Bind the
 value into plan identity and receipts; explicit stop plus control-plane

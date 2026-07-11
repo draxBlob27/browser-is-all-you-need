@@ -353,6 +353,11 @@ the absolute `/aider/benchmark/cpp-test.sh` path. Fail runner image construction
 unless that script is executable and the pinned dispatcher still references
 it. For any exception-only rows, persist and print a bearer-redacted
 task/type/final-line summary before failing admission.
+Use a 32768-token Aider completion budget. A paid smoke proved that 8192 can be
+consumed entirely by GLM reasoning; the larger bound remains inside the exact
+checkpoint's 202752-position context. On admission failure, print only safe
+per-task counters and download the committed failure subtree locally before
+re-raising the remote error.
 Keep the singleton Server at `min_containers=0`, but set its scaledown window
 to Modal's 1200-second maximum so gaps between generation and C++ compilation
 do not cycle four H100s. Record the window in plan identity and receipts. The

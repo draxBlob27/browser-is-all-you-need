@@ -16,6 +16,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     AIDER_MODEL_NAME,
     ARTIFACT_DOWNLOAD_CONCURRENCY,
     BENCHMARK_LABEL,
+    DEFAULT_MAX_TOKENS,
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
     SGLANG_ADMISSION_MAX_TOKENS,
@@ -35,6 +36,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     render_plan,
     sglang_server_command,
     summarize_aider_exceptions,
+    summarize_aider_result_diagnostics,
     summarize_sglang_admission,
     validate_aider_results,
     validate_authoritative_stats,
@@ -52,6 +54,7 @@ PURE = ROOT / "src/w8_biayn/modal_aider_polyglot_cpp.py"
 MODAL_APP = LANE / "modal_app.py"
 RUN_SH = LANE / "run.sh"
 RUNNER_DOCKERFILE = LANE / "Dockerfile.aider"
+MODEL_SETTINGS_TEMPLATE = LANE / "glm47_flash.model.settings.yml"
 
 
 def valid_env(**overrides: str) -> dict[str, str]:
@@ -121,6 +124,8 @@ def test_valid_plan_config_and_redacted_plan_are_deterministic(tmp_path: Path) -
     assert SGLANG_SCALEDOWN_WINDOW_SECONDS == 20 * 60
     assert SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS == 2
     assert ARTIFACT_DOWNLOAD_CONCURRENCY == 16
+    assert cfg.max_tokens == DEFAULT_MAX_TOKENS == 32_768
+    assert "max_tokens: 32768" in model_settings(cfg)
     rendered = json.dumps(first, sort_keys=True)
     assert "ak-test-sentinel" not in rendered
     assert "as-test-sentinel" not in rendered
@@ -325,6 +330,52 @@ def test_smoke_admission_allows_wrong_code_but_rejects_exception_rows(tmp_path: 
         }
     ]
 
+    diagnostics = summarize_aider_result_diagnostics(root)
+    assert diagnostics == [
+        {
+            "task": "all-your-base",
+            "exception": False,
+            "test_invocations": 2,
+            "exhausted_context_windows": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        },
+        {
+            "task": "bank-account",
+            "exception": False,
+            "test_invocations": 2,
+            "exhausted_context_windows": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        },
+    ]
+
+    exhausted = tmp_path / "exhausted-result"
+    write_result(exhausted, "xorcism")
+    exhausted_path = exhausted / "cpp/exercises/practice/xorcism/.aider.results.json"
+    payload = json.loads(exhausted_path.read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "tests_outcomes": [False],
+            "num_exhausted_context_windows": 1,
+            "prompt_tokens": 321,
+            "completion_tokens": 8192,
+        }
+    )
+    write_json(exhausted_path, payload)
+    with pytest.raises(ModalAiderError, match="exhausted"):
+        validate_aider_results(exhausted, expected_tasks=1)
+    assert summarize_aider_result_diagnostics(exhausted) == [
+        {
+            "task": "xorcism",
+            "exception": False,
+            "test_invocations": 1,
+            "exhausted_context_windows": 1,
+            "prompt_tokens": 321,
+            "completion_tokens": 8192,
+        }
+    ]
+
 
 def test_artifact_manifest_paths_are_relative_and_hashed(tmp_path: Path) -> None:
     (tmp_path / "nested").mkdir()
@@ -425,6 +476,7 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     pure = PURE.read_text(encoding="utf-8")
     modal_app = MODAL_APP.read_text(encoding="utf-8")
     run = RUN_SH.read_text(encoding="utf-8")
+    settings_template = MODEL_SETTINGS_TEMPLATE.read_text(encoding="utf-8")
 
     assert "import modal" not in pure
     assert "slime_polyglot_cpp" not in pure + modal_app
@@ -463,11 +515,14 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert "asyncio.Semaphore(concurrency)" in modal_app
     assert "volume.iterdir.aio(" in modal_app
     assert "volume.read_file.aio(" in modal_app
-    assert (
-        modal_app.index("run_aider_benchmark.remote(")
-        < modal_app.index("SGLangServer.update_autoscaler(")
-        < modal_app.index("local_root = _download_run()")
+    main_body = modal_app.split("def main() -> None:", 1)[1]
+    assert main_body.index("run_aider_benchmark.remote(") < main_body.index(
+        "_prepare_artifact_transfer()"
     )
+    assert "downloaded_failure_artifacts" in main_body
+    assert "result_diagnostics" in modal_app
+    assert "max_tokens: 32768" in settings_template
+    assert "max_tokens: 8192" not in settings_template
     assert 'kind = str(getattr(entry, "type", "")).lower()' not in modal_app
     assert os.access(RUN_SH, os.X_OK)
 

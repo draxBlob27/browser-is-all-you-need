@@ -85,7 +85,11 @@ The Aider checkout stays at upstream's `/aider` container path because the
 pinned benchmark invokes `/aider/benchmark/cpp-test.sh` absolutely. Runner
 image construction verifies that executable path. Exception-only rows emit a
 bearer-redacted task/type/final-line summary instead of only an aggregate
-count.
+count. GLM reasoning can consume an 8192-token completion without reaching
+editable content, so the admitted Aider request budget is 32768 tokens within
+the pinned model's 202752-position context. Failed admission summaries include
+only per-task counters, and committed failure artifacts are downloaded locally
+before the original remote exception is re-raised.
 The singleton SGLang Server keeps `min_containers=0` but uses Modal's
 1200-second maximum scaledown window so compilation gaps do not repeatedly
 cold-start four H100s. The run wrapper still stops and verifies the App

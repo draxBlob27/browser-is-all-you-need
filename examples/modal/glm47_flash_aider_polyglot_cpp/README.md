@@ -192,7 +192,7 @@ export W8_MODAL_AIDER_MAX_RUN_SECONDS='7200'
 export W8_MODAL_AIDER_EDIT_FORMAT='whole'
 export W8_MODAL_AIDER_TRIES='2'
 export W8_MODAL_AIDER_THREADS='8'
-export W8_MODAL_AIDER_MAX_TOKENS='8192'
+export W8_MODAL_AIDER_MAX_TOKENS='32768'
 export W8_MODAL_AIDER_TEMPERATURE='0.7'
 export W8_MODAL_AIDER_TOP_P='1.0'
 export W8_MODAL_AIDER_SMOKE_TESTS='2'
@@ -203,6 +203,11 @@ bash examples/modal/glm47_flash_aider_polyglot_cpp/run.sh
 Changing edit format, tries, threads, sampling, token budget, image, model,
 hardware, or upstream commit makes a different benchmark configuration. Use a
 fresh run ID.
+
+The 32768-token bound is intentional. A paid smoke exhausted both 8192-token
+responses in GLM reasoning before editable content, while the exact pinned
+checkpoint declares a 202752-position context. Do not reuse the failed run ID
+when changing this identity-bound setting.
 
 The script caches weights on CPU, starts one authenticated SGLang replica,
 runs the blocking smoke, executes all C++ tasks through Aider, runs Aider's own
@@ -249,6 +254,10 @@ validates the complete entry list first, then uses the SDK async API with at
 most 16 file reads in flight and prints progress every 250 files. When the
 remote result is committed, the client lowers the server scaledown window to
 two seconds before download so the four H100s can shut down during transfer.
+On remote admission failure, the same bounded downloader copies committed
+diagnostics locally before re-raising the original error. The printed failure
+summary contains only task names and numeric result/token counters, never model
+reasoning or editable content.
 
 Use `W8_MODAL_AIDER_RESUME=1` only for an incomplete, identity-matching run.
 Resume uses Aider's `--cont`, refuses completed runs and changed identities,

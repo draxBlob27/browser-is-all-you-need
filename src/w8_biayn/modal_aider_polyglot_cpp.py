@@ -34,6 +34,7 @@ TRANSFORMERS_COMMIT = "76732b4e7120808ff989edbd16401f61fa6a0afa"
 POLYGLOT_REPO_URL = "https://github.com/Aider-AI/polyglot-benchmark.git"
 MODAL_SDK_PIN = "1.5.2"
 SGLANG_ADMISSION_MAX_TOKENS = 2048
+DEFAULT_MAX_TOKENS = 32_768
 SGLANG_SCALEDOWN_WINDOW_SECONDS = 20 * 60
 SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS = 2
 ARTIFACT_DOWNLOAD_CONCURRENCY = 16
@@ -153,7 +154,7 @@ class ModalAiderConfig:
     edit_format: str = "whole"
     tries: int = 2
     threads: int = 8
-    max_tokens: int = 8192
+    max_tokens: int = DEFAULT_MAX_TOKENS
     temperature: float = 0.7
     top_p: float = 1.0
     smoke_tests: int = 2
@@ -195,7 +196,7 @@ class ModalAiderConfig:
             edit_format=str(env.get("W8_MODAL_AIDER_EDIT_FORMAT", "whole")).strip(),
             tries=_integer(env, "W8_MODAL_AIDER_TRIES", 2),
             threads=_integer(env, "W8_MODAL_AIDER_THREADS", 8),
-            max_tokens=_integer(env, "W8_MODAL_AIDER_MAX_TOKENS", 8192),
+            max_tokens=_integer(env, "W8_MODAL_AIDER_MAX_TOKENS", DEFAULT_MAX_TOKENS),
             temperature=_floating(env, "W8_MODAL_AIDER_TEMPERATURE", 0.7),
             top_p=_floating(env, "W8_MODAL_AIDER_TOP_P", 1.0),
             smoke_tests=_integer(env, "W8_MODAL_AIDER_SMOKE_TESTS", 2),
@@ -718,6 +719,37 @@ def summarize_aider_exceptions(root: str | Path) -> list[dict[str, str]]:
                 "task": path.parent.name,
                 "exception_type": exception_type,
                 "exception_final_line": final_line,
+            }
+        )
+    return rows
+
+
+def summarize_aider_result_diagnostics(root: str | Path) -> list[dict[str, Any]]:
+    """Summarize result counters without copying prompts or model-generated text."""
+
+    def counter(payload: Mapping[str, Any], name: str) -> int:
+        try:
+            return int(payload.get(name, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    rows = []
+    for path in sorted(Path(root).glob("**/.aider.results.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        outcomes = payload.get("tests_outcomes")
+        rows.append(
+            {
+                "task": path.parent.name,
+                "exception": bool(payload.get("exception")),
+                "test_invocations": len(outcomes) if isinstance(outcomes, list) else 0,
+                "exhausted_context_windows": counter(payload, "num_exhausted_context_windows"),
+                "prompt_tokens": counter(payload, "prompt_tokens"),
+                "completion_tokens": counter(payload, "completion_tokens"),
             }
         )
     return rows

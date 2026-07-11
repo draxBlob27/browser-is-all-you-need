@@ -58,6 +58,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     sha256_file,
     sglang_server_command,
     summarize_aider_exceptions,
+    summarize_aider_result_diagnostics,
     summarize_sglang_admission,
     utc_now,
     validate_aider_results,
@@ -512,7 +513,9 @@ def _run_aider_stage(
             "status": "failed",
             "run_id": config.run_id,
             "stage": stage,
+            "admission_error": str(exc),
             "rows": summarize_aider_exceptions(matches[0]),
+            "result_diagnostics": summarize_aider_result_diagnostics(matches[0]),
             "failed_at_utc": utc_now(),
         }
         exception_summary = json.loads(_scrub(json.dumps(exception_summary), api_key))
@@ -520,8 +523,15 @@ def _run_aider_stage(
         write_json(stage_root / "exception.summary.json", exception_summary)
         results_volume.commit()
         print(
-            "Aider exception summary (bearer-redacted):\n"
-            + json.dumps(exception_summary["rows"], indent=2),
+            "Aider admission failure summary (bearer-redacted):\n"
+            + json.dumps(
+                {
+                    "error": exception_summary["admission_error"],
+                    "exceptions": exception_summary["rows"],
+                    "results": exception_summary["result_diagnostics"],
+                },
+                indent=2,
+            ),
             file=sys.stderr,
         )
         raise ModalAiderError(f"{exc}; see {stage}/exception.summary.json") from exc
@@ -802,6 +812,16 @@ def _download_run() -> Path:
     return local_root
 
 
+def _prepare_artifact_transfer() -> None:
+    try:
+        SGLangServer.update_autoscaler(scaledown_window=SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS)
+    except Exception as exc:
+        print(
+            f"warning: could not reduce SGLang scaledown window: {type(exc).__name__}",
+            file=sys.stderr,
+        )
+
+
 @app.local_entrypoint()
 def main() -> None:
     """Cache weights, run the benchmark, and download committed artifacts."""
@@ -809,8 +829,21 @@ def main() -> None:
     preflight_remote_run.remote(RUNTIME)
     cache_receipt = preload_model.remote(RUNTIME)
     server_url = SGLangServer.get_url()
-    result = run_aider_benchmark.remote(RUNTIME, server_url, cache_receipt, app.app_id)
-    SGLangServer.update_autoscaler(scaledown_window=SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS)
+    try:
+        result = run_aider_benchmark.remote(RUNTIME, server_url, cache_receipt, app.app_id)
+    except Exception:
+        _prepare_artifact_transfer()
+        try:
+            local_root = _download_run()
+            print(f"downloaded_failure_artifacts: {local_root}")
+        except Exception as artifact_exc:
+            print(
+                f"warning: failed to download committed failure artifacts: "
+                f"{type(artifact_exc).__name__}: {artifact_exc}",
+                file=sys.stderr,
+            )
+        raise
+    _prepare_artifact_transfer()
     local_root = _download_run()
     print(f"remote_status: {result['status']}")
     print(f"downloaded_artifacts: {local_root}")
