@@ -66,6 +66,10 @@ Use repo-owned wrappers rather than editing `.cache/upstreams/slime` directly.
 The separate official Aider/Modal base-eval surface is
 `examples/modal/glm47_flash_aider_polyglot_cpp/`; it is not a SLIME lane or
 part of the active PIE training stack.
+Its SGLang cold-start gate allows up to 3600 seconds, polls the server child
+process, and persists only a bearer-redacted `server.failure.json` tail when
+startup fails; raw server output stays ephemeral.
+
 
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt
 builder, Docker C++ sandbox, reward function, and eval aggregation through

@@ -404,3 +404,26 @@ def test_modal_app_imports_from_shallow_remote_path(tmp_path: Path, monkeypatch)
 
     assert namespace["IS_LOCAL"] is False
     assert namespace["ROOT"] == Path("/opt/w8-src")
+
+    secret = "startup-bearer-sentinel"
+    log_path = tmp_path / "sglang.log"
+    log_path.write_text(f"old output\nkey={secret}\nfatal startup error\n", encoding="utf-8")
+    log_tail = namespace["_redacted_log_tail"](log_path, secret)
+    assert secret not in log_tail
+    assert "<redacted>" in log_tail
+    assert "fatal startup error" in log_tail
+
+    class _ExitedProcess:
+        @staticmethod
+        def poll() -> int:
+            return 17
+
+    with pytest.raises(ModalAiderError, match="exited during startup with code 17"):
+        namespace["_wait_for_process_json"](
+            "http://127.0.0.1:1/health",
+            secret,
+            60,
+            _ExitedProcess(),
+        )
+
+    assert cfg.startup_timeout_seconds == 3600

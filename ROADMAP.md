@@ -331,6 +331,10 @@ the committed results Volume, and control-plane verification proves the
 ephemeral App stopped. Keep source/offline-test completion distinct from live
 evidence: the implementation exists, but real CPU/Volume, real-weight server,
 two-task smoke, and full-run receipts remain pending.
+Permit up to 3600 seconds for a cold SGLang load, but poll the child process so
+an early exit fails immediately. On failure, require a committed
+bearer-redacted `server.failure.json` tail while raw SGLang output remains
+ephemeral.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

@@ -282,6 +282,10 @@ local artifacts. Preserve official Aider rows/histories/stats; `pass_rate_2`
 is sequential second-try success, never pass@2. Source/offline completion is
 not live evidence: do not report a model result before the two-task smoke and
 complete 26-task stopped-App receipt.
+Allow a 3600-second cold-start ceiling, poll the SGLang child process for early
+exit, and persist/print only a bearer-redacted `server.failure.json` tail on
+startup failure; raw SGLang output stays ephemeral.
+
 
 ```bash
 bash examples/modal/glm47_flash_aider_polyglot_cpp/run.sh

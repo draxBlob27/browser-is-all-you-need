@@ -142,7 +142,7 @@ class ModalAiderConfig:
     gpu: str = SUPPORTED_GPU
     sglang_mem_fraction: float = 0.8
     sglang_max_running_requests: int = 16
-    startup_timeout_seconds: int = 1200
+    startup_timeout_seconds: int = 3600
     max_run_seconds: int = 7200
     edit_format: str = "whole"
     tries: int = 2
@@ -184,7 +184,7 @@ class ModalAiderConfig:
             sglang_max_running_requests=_integer(
                 env, "W8_MODAL_AIDER_SGLANG_MAX_RUNNING_REQUESTS", 16
             ),
-            startup_timeout_seconds=_integer(env, "W8_MODAL_AIDER_STARTUP_TIMEOUT_SECONDS", 1200),
+            startup_timeout_seconds=_integer(env, "W8_MODAL_AIDER_STARTUP_TIMEOUT_SECONDS", 3600),
             max_run_seconds=_integer(env, "W8_MODAL_AIDER_MAX_RUN_SECONDS", 7200),
             edit_format=str(env.get("W8_MODAL_AIDER_EDIT_FORMAT", "whole")).strip(),
             tries=_integer(env, "W8_MODAL_AIDER_TRIES", 2),

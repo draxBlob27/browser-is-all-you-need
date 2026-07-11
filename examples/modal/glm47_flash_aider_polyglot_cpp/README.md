@@ -136,6 +136,12 @@ not an infrastructure failure. Transport/auth failures, exception-only rows,
 missing compiler/test dependencies, all-truncated output, or incomplete
 artifacts block the run.
 
+Cold SGLang initialization may include model loading and kernel compilation, so
+the supported startup ceiling is 3600 seconds. The launcher polls the child
+process and fails early if it exits. A startup failure prints and commits only
+a bearer-redacted log tail as `server.failure.json`; raw SGLang output remains
+ephemeral.
+
 ## Full 26-Task Run
 
 The first supported full configuration is:
@@ -148,7 +154,7 @@ export W8_MODAL_AIDER_EXPECTED_CPP_TASKS='26'
 export W8_MODAL_AIDER_GPU='H100!:4'
 export W8_MODAL_AIDER_SGLANG_MEM_FRACTION='0.8'
 export W8_MODAL_AIDER_SGLANG_MAX_RUNNING_REQUESTS='16'
-export W8_MODAL_AIDER_STARTUP_TIMEOUT_SECONDS='1200'
+export W8_MODAL_AIDER_STARTUP_TIMEOUT_SECONDS='3600'
 export W8_MODAL_AIDER_MAX_RUN_SECONDS='7200'
 
 export W8_MODAL_AIDER_EDIT_FORMAT='whole'
@@ -220,6 +226,7 @@ runs/<run-id>/
   config.redacted.json
   upstreams.json
   model-cache.receipt.json
+  server.failure.json        # failure-only, bearer-redacted
   server.runtime.json
   server.receipt.json
   model-settings.yml

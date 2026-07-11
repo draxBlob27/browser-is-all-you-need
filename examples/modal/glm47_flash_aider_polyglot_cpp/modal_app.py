@@ -97,9 +97,7 @@ secret_payload = {"SGLANG_API_KEY": SGLANG_API_KEY} if IS_LOCAL else {}
 server_secret = modal.Secret.from_dict(secret_payload)
 runner_secret = modal.Secret.from_dict(secret_payload)
 downloader_secrets = (
-    [modal.Secret.from_dict({"HF_TOKEN": CONFIG.hf_token})]
-    if IS_LOCAL and CONFIG.hf_token
-    else []
+    [modal.Secret.from_dict({"HF_TOKEN": CONFIG.hf_token})] if IS_LOCAL and CONFIG.hf_token else []
 )
 
 if IS_LOCAL:
@@ -250,6 +248,38 @@ def _wait_for_json(url: str, api_key: str, timeout_seconds: int) -> dict[str, An
     raise ModalAiderError(f"server admission timed out ({last_error})")
 
 
+def _scrub(value: str, secret: str) -> str:
+    return value.replace(secret, "<redacted>") if secret else value
+
+
+def _redacted_log_tail(path: Path, secret: str, *, max_chars: int = 12_000) -> str:
+    try:
+        value = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"<log unavailable: {type(exc).__name__}>"
+    return _scrub(value, secret)[-max_chars:]
+
+
+def _wait_for_process_json(
+    url: str,
+    api_key: str,
+    timeout_seconds: int,
+    process: subprocess.Popen[Any],
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "not attempted"
+    while time.monotonic() < deadline:
+        returncode = process.poll()
+        if returncode is not None:
+            raise ModalAiderError(f"SGLang process exited during startup with code {returncode}")
+        try:
+            return _request_json(url, api_key=api_key, timeout=10)
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = type(exc).__name__
+            time.sleep(5)
+    raise ModalAiderError(f"SGLang process startup timed out ({last_error})")
+
+
 @app.server(
     image=server_image,
     gpu=CONFIG.gpu,
@@ -274,6 +304,9 @@ class SGLangServer:
     def start(self) -> None:
         config = _remote_config(json.loads(os.environ["W8_MODAL_AIDER_RUNTIME_CONFIG"]))
         run_root = Path("/results") / config.remote_run_path.lstrip("/")
+        run_root.mkdir(parents=True, exist_ok=True)
+        failure_path = run_root / "server.failure.json"
+        failure_path.unlink(missing_ok=True)
         prior_config = run_root / "config.redacted.json"
         if prior_config.is_file():
             if not config.resume:
@@ -312,14 +345,41 @@ class SGLangServer:
         # the command-line bearer can never enter Modal logs or run artifacts.
         self.log_handle = Path("/tmp/sglang.log").open("w", encoding="utf-8")
         self.process = subprocess.Popen(command, stdout=self.log_handle, stderr=subprocess.STDOUT)
-        health = _wait_for_json(
-            "http://127.0.0.1:8000/health",
-            os.environ["SGLANG_API_KEY"],
-            config.startup_timeout_seconds,
-        )
+        api_key = os.environ["SGLANG_API_KEY"]
+        try:
+            health = _wait_for_process_json(
+                "http://127.0.0.1:8000/health",
+                api_key,
+                max(30, config.startup_timeout_seconds - 30),
+                self.process,
+            )
+        except Exception as exc:
+            self.log_handle.flush()
+            log_tail = _redacted_log_tail(Path("/tmp/sglang.log"), api_key)
+            failure = {
+                "schema_version": SCHEMA_VERSION,
+                "status": "failed",
+                "run_id": config.run_id,
+                "sglang_image": config.sglang_image,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "process_returncode": self.process.poll(),
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "launch_argv": ["<redacted>" if part == api_key else part for part in command],
+                "redacted_log_tail": log_tail,
+                "failed_at_utc": utc_now(),
+            }
+            ensure_secret_free(failure, [api_key])
+            write_json(failure_path, failure)
+            results_volume.commit()
+            if log_tail:
+                print(f"SGLang startup failure (redacted tail):\n{log_tail}", file=sys.stderr)
+            raise ModalAiderError(
+                f"SGLang startup failed ({type(exc).__name__}: {exc}); see server.failure.json"
+            ) from exc
         models = _request_json(
             "http://127.0.0.1:8000/v1/models",
-            api_key=os.environ["SGLANG_API_KEY"],
+            api_key=api_key,
         )
         receipt = {
             "schema_version": SCHEMA_VERSION,
@@ -354,10 +414,6 @@ class SGLangServer:
                 self.process.kill()
         if getattr(self, "log_handle", None):
             self.log_handle.close()
-
-
-def _scrub(value: str, secret: str) -> str:
-    return value.replace(secret, "<redacted>") if secret else value
 
 
 def _run_aider_stage(
