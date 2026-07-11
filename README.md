@@ -405,6 +405,11 @@ fine-grained multi-label diagnostic categories. Empirical pass@k is task-level;
 the stacked outcome bars are sample-level. The complete command and artifact
 contract lives in the lane README.
 
+For intentional historical comparisons with different sampling, repeat
+`--allow-config-mismatch` for `eval_temperature` and/or `eval_top_p`.
+Those are the only overridable fields; the result is labeled and persisted as
+a descriptive mixed-sampling comparison, not a controlled pass@k claim.
+
 After admission, an optional one-task Gemini API sanity command can send the
 exact saved prompt to an exact model id and grade the raw response with the
 same strict parser and Docker harness. It is a paid cross-model canary, not a

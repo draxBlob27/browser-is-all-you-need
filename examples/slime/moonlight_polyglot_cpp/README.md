@@ -147,8 +147,29 @@ run receipts to be successful; recomputes each stored summary from its records;
 requires the embedded schema-v2 oracle proof; compares task IDs and immutable
 task/grader/image fingerprints; and checks the model, sampling, response-limit,
 sandbox, and timeout receipt fields. It rejects a comparison when any of those
-inputs differ. Future receipts record `eval_n_samples_per_prompt` explicitly,
-but record-based derivation keeps historical runs reportable.
+inputs differ by default. Future receipts record `eval_n_samples_per_prompt`
+explicitly, but record-based derivation keeps historical runs reportable.
+
+When the intent is to visualize historical runs with deliberately different
+sampling, opt in field-by-field:
+
+```bash
+uv run python -m w8_biayn.integrations.slime_polyglot_cpp compare-runs \
+  --run "$PASS1_RUN" \
+  --run "$PASS8_RUN" \
+  --out "$REPORT_OUT" \
+  --allow-config-mismatch eval_temperature
+```
+
+Only `eval_temperature` and `eval_top_p` can be overridden. Model, task set,
+oracle fingerprint, sandbox, response-limit, timeout, and all other mismatches
+remain blocking. An override changes the report mode to
+`descriptive_mixed_sampling`, records every per-run value and mismatch in
+`comparison.summary.json`, adds a prominent caveat to `report.md`, and puts
+sampling settings directly in chart labels. Temperature 0 with one sample is
+labeled `greedy@1 (T=0)`; eight samples at temperature 0.7 are labeled
+`pass@8 (T=0.7)`. This describes the observed runs and must not be presented
+as the isolated effect of changing `k`.
 
 The generated report is category-first:
 
@@ -188,7 +209,8 @@ For the two July 11 runs, the command shape is:
 uv run python -m w8_biayn.integrations.slime_polyglot_cpp compare-runs \
   --run /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/runs/moonlight_polyglot_p1_smoke_20260711085134 \
   --run /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/runs/moonlight_polyglot_p1_full_20260711091339 \
-  --out /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/reports/moonlight_polyglot_pass1_vs_pass8_20260711
+  --out /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/reports/moonlight_polyglot_pass1_vs_pass8_20260711 \
+  --allow-config-mismatch eval_temperature
 ```
 
 Use `--force` only to overwrite the known files in an intentional report

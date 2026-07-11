@@ -237,6 +237,13 @@ the stored fine-grained multi-label category summary. Keep task-level empirical
 pass@k distinct from sample-level outcome rates, and keep recovered-format
 results diagnostic only.
 
+For intentional historical sampling differences, allow only the explicit
+`--allow-config-mismatch eval_temperature` and/or `eval_top_p` override.
+Persist the mismatched per-run values, switch the report to descriptive mode,
+put sampling settings in series labels, and warn that differences cannot be
+attributed to `k` alone. Model, task, oracle fingerprint, grader, response,
+and timeout mismatches stay blocking.
+
 The optional `gemini-sanity` command is limited to one admitted Polyglot task
 and must reuse the exact saved prompt, raw API response, strict parser, and
 Docker grader. Dry-run before spending; take `GOOGLE_API_KEY` or

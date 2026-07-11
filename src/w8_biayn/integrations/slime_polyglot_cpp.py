@@ -143,6 +143,7 @@ POLYGLOT_COMPARISON_CONFIG_KEYS = (
     "polyglot_sandbox_image",
     "polyglot_test_timeout_seconds",
 )
+POLYGLOT_DESCRIPTIVE_CONFIG_KEYS = ("eval_temperature", "eval_top_p")
 POLYGLOT_OUTCOME_BUCKETS = (
     ("passed", "Passed", "#2ca02c"),
     ("format", "Format/files", "#d62728"),
@@ -1822,9 +1823,18 @@ def _load_polyglot_comparison_run(run_root: str | Path) -> PolyglotComparisonRun
 
 def _require_comparable_polyglot_runs(
     run_roots: Sequence[str | Path],
-) -> list[PolyglotComparisonRun]:
+    *,
+    allowed_config_mismatches: Iterable[str] = (),
+) -> tuple[list[PolyglotComparisonRun], dict[str, dict[str, str]]]:
     if len(run_roots) != 2:
         raise ValueError("Polyglot pass@k comparison requires exactly two run roots")
+    allowed = set(allowed_config_mismatches)
+    unsupported = allowed - set(POLYGLOT_DESCRIPTIVE_CONFIG_KEYS)
+    if unsupported:
+        raise ValueError(
+            "Only sampling configuration mismatches may be descriptive overrides; "
+            f"unsupported keys: {sorted(unsupported)}"
+        )
     runs = sorted(
         (_load_polyglot_comparison_run(root) for root in run_roots),
         key=lambda run: run.k,
@@ -1841,12 +1851,44 @@ def _require_comparable_polyglot_runs(
         )
     if runs[0].oracle_fingerprints != runs[1].oracle_fingerprints:
         raise ValueError("Polyglot comparison task/grader/image fingerprints differ")
+    mismatches: dict[str, dict[str, str]] = {}
     for key in POLYGLOT_COMPARISON_CONFIG_KEYS:
         values = {run.receipt[key] for run in runs}
         if len(values) != 1:
+            mismatches[key] = {run.run_id: run.receipt[key] for run in runs}
+            if key in allowed:
+                continue
             detail = ", ".join(f"{run.run_id}={run.receipt[key]!r}" for run in runs)
-            raise ValueError(f"Polyglot comparison config {key!r} differs: {detail}")
-    return runs
+            hint = (
+                f"; pass --allow-config-mismatch {key} for an explicitly descriptive "
+                "report"
+                if key in POLYGLOT_DESCRIPTIVE_CONFIG_KEYS
+                else ""
+            )
+            raise ValueError(
+                f"Polyglot comparison config {key!r} differs: {detail}{hint}"
+            )
+    unused = allowed - set(mismatches)
+    if unused:
+        raise ValueError(
+            "Requested descriptive overrides do not differ between runs: "
+            f"{sorted(unused)}"
+        )
+    return runs, mismatches
+
+
+def _comparison_display_label(
+    run: PolyglotComparisonRun,
+    mismatches: dict[str, dict[str, str]],
+) -> str:
+    details: list[str] = []
+    temperature = run.receipt["eval_temperature"]
+    if "eval_temperature" in mismatches:
+        details.append(f"T={temperature}")
+    if "eval_top_p" in mismatches:
+        details.append(f"top-p={run.receipt['eval_top_p']}")
+    prefix = "greedy@1" if run.k == 1 and temperature in {"0", "0.0"} else run.label
+    return f"{prefix} ({', '.join(details)})" if details else prefix
 
 
 def _comparison_outcome(record: dict[str, Any]) -> str:
@@ -1913,7 +1955,10 @@ def _comparison_category_rows(
     return rows
 
 
-def _comparison_payload(runs: Sequence[PolyglotComparisonRun]) -> dict[str, Any]:
+def _comparison_payload(
+    runs: Sequence[PolyglotComparisonRun],
+    config_mismatches: dict[str, dict[str, str]],
+) -> dict[str, Any]:
     categories = _comparison_category_rows(runs)
     task_rows = []
     for task_id in runs[0].task_ids:
@@ -1929,14 +1974,25 @@ def _comparison_payload(runs: Sequence[PolyglotComparisonRun]) -> dict[str, Any]
                 },
             }
         )
+    descriptive = bool(config_mismatches)
     return {
         "kind": POLYGLOT_COMPARISON_KIND,
         "schema_version": POLYGLOT_COMPARISON_SCHEMA_VERSION,
         "benchmark": BENCHMARK,
         "language": LANGUAGE,
+        "comparison_mode": (
+            "descriptive_mixed_sampling" if descriptive else "controlled_pass_at_k"
+        ),
+        "config_mismatches": config_mismatches,
         "semantics": {
             "pass_at_k": (
                 "Empirical task-level rate with at least one strict pass among exactly k samples."
+            ),
+            "configuration_caveat": (
+                "Sampling settings differ, so observed differences cannot be attributed "
+                "to k alone."
+                if descriptive
+                else "Compared receipt configuration is identical except for k."
             ),
             "sample_outcomes": "Mutually exclusive strict outcomes over individual samples.",
             "independent_runs": (
@@ -1948,18 +2004,24 @@ def _comparison_payload(runs: Sequence[PolyglotComparisonRun]) -> dict[str, Any]
             ),
         },
         "comparison_config": {
-            key: runs[0].receipt[key] for key in POLYGLOT_COMPARISON_CONFIG_KEYS
+            key: runs[0].receipt[key]
+            for key in POLYGLOT_COMPARISON_CONFIG_KEYS
+            if key not in config_mismatches
         },
         "runs": [
             {
                 "run_id": run.run_id,
                 "run_root": str(run.root),
                 "label": run.label,
+                "display_label": _comparison_display_label(run, config_mismatches),
                 "k": run.k,
                 "task_count": len(run.task_ids),
                 "sample_count": len(run.records),
                 "passed_task_count": len(run.passed_task_ids),
                 "pass_rate": len(run.passed_task_ids) / len(run.task_ids),
+                "evaluation_config": {
+                    key: run.receipt[key] for key in POLYGLOT_COMPARISON_CONFIG_KEYS
+                },
             }
             for run in runs
         ],
@@ -2068,16 +2130,34 @@ def _comparison_grid(
     return parts
 
 
+def _comparison_chart_title(
+    payload: dict[str, Any],
+    *,
+    controlled: str,
+    descriptive: str,
+) -> str:
+    return (
+        descriptive
+        if payload["comparison_mode"] == "descriptive_mixed_sampling"
+        else controlled
+    )
+
+
 def _write_overall_pass_chart(path: Path, payload: dict[str, Any]) -> Path:
     width, height = 820, 330
     left, top, plot_width, plot_height = 165.0, 80.0, 565.0, 150.0
     runs = payload["runs"]
     colors = ("#2563eb", "#f97316")
+    title = _comparison_chart_title(
+        payload,
+        controlled="Overall strict pass@k",
+        descriptive="Descriptive strict success",
+    )
     parts = [
-        '<title>Overall empirical pass at k</title>',
+        f"<title>{_svg_escape(title)}</title>",
         (
             f'<text x="{width / 2}" y="34" text-anchor="middle" font-family="Arial" '
-            'font-size="22" font-weight="700">Overall strict pass@k</text>'
+            f'font-size="22" font-weight="700">{_svg_escape(title)}</text>'
         ),
         *_comparison_grid(
             left=left,
@@ -2092,7 +2172,7 @@ def _write_overall_pass_chart(path: Path, payload: dict[str, Any]) -> Path:
         y = top + 28 + index * 60
         parts.append(
             f'<text x="{left - 14:.1f}" y="{y + 21:.1f}" text-anchor="end" '
-            f'font-family="Arial" font-size="15">{_svg_escape(run["label"])}</text>'
+            f'font-family="Arial" font-size="15">{_svg_escape(run["display_label"])}</text>'
         )
         parts.append(
             f'<rect x="{left}" y="{y:.1f}" width="{bar_width:.1f}" height="28" '
@@ -2117,11 +2197,16 @@ def _write_category_pass_chart(path: Path, payload: dict[str, Any]) -> Path:
     plot_width = width - left - right
     plot_height = row_height * len(categories)
     colors = ("#2563eb", "#f97316")
+    title = _comparison_chart_title(
+        payload,
+        controlled="Strict pass@k by category",
+        descriptive="Descriptive strict success by category",
+    )
     parts = [
-        '<title>Strict pass at k by report category</title>',
+        f"<title>{_svg_escape(title)}</title>",
         (
             f'<text x="{width / 2}" y="32" text-anchor="middle" font-family="Arial" '
-            'font-size="22" font-weight="700">Strict pass@k by category</text>'
+            f'font-size="22" font-weight="700">{_svg_escape(title)}</text>'
         ),
         *_comparison_grid(
             left=left,
@@ -2131,13 +2216,13 @@ def _write_category_pass_chart(path: Path, payload: dict[str, Any]) -> Path:
         ),
     ]
     for run_index, run in enumerate(runs):
-        x = left + run_index * 150
+        x = left + run_index * 290
         parts.append(
             f'<rect x="{x:.1f}" y="51" width="14" height="14" fill="{colors[run_index]}"/>'
         )
         parts.append(
             f'<text x="{x + 20:.1f}" y="63" font-family="Arial" font-size="13">'
-            f'{_svg_escape(run["label"])}</text>'
+            f'{_svg_escape(run["display_label"])}</text>'
         )
     for category_index, category in enumerate(categories):
         center_y = top + category_index * row_height + row_height / 2
@@ -2172,11 +2257,16 @@ def _write_category_outcome_chart(path: Path, payload: dict[str, Any]) -> Path:
     height = int(top + bottom + row_height * len(categories))
     plot_width = width - left - right
     plot_height = row_height * len(categories)
+    title = _comparison_chart_title(
+        payload,
+        controlled="Sample outcomes by category",
+        descriptive="Descriptive sample outcomes by category",
+    )
     parts = [
-        '<title>Individual sample outcomes by report category</title>',
+        f"<title>{_svg_escape(title)}</title>",
         (
             f'<text x="{width / 2}" y="32" text-anchor="middle" font-family="Arial" '
-            'font-size="22" font-weight="700">Sample outcomes by category</text>'
+            f'font-size="22" font-weight="700">{_svg_escape(title)}</text>'
         ),
         (
             f'<text x="{width / 2}" y="54" text-anchor="middle" font-family="Arial" '
@@ -2210,7 +2300,8 @@ def _write_category_outcome_chart(path: Path, payload: dict[str, Any]) -> Path:
             y = center_y - 26 + run_index * 30
             parts.append(
                 f'<text x="{left - 8:.1f}" y="{y + 15:.1f}" text-anchor="end" '
-                f'font-family="Arial" font-size="11">{_svg_escape(run["label"])}</text>'
+                f'font-family="Arial" font-size="11">'
+                f'{_svg_escape(run["display_label"])}</text>'
             )
             x = left
             for key, label, color in POLYGLOT_OUTCOME_BUCKETS:
@@ -2242,11 +2333,16 @@ def _write_category_gain_chart(path: Path, payload: dict[str, Any]) -> Path:
     plot_width = width - left - right
     plot_height = row_height * len(categories)
     colors = ("#2563eb", "#f97316")
+    title = _comparison_chart_title(
+        payload,
+        controlled="Category pass@k change",
+        descriptive="Descriptive category success comparison",
+    )
     parts = [
-        '<title>Category pass at k dumbbell comparison</title>',
+        f"<title>{_svg_escape(title)}</title>",
         (
             f'<text x="{width / 2}" y="32" text-anchor="middle" font-family="Arial" '
-            'font-size="22" font-weight="700">Category pass@k change</text>'
+            f'font-size="22" font-weight="700">{_svg_escape(title)}</text>'
         ),
         *_comparison_grid(
             left=left,
@@ -2256,13 +2352,13 @@ def _write_category_gain_chart(path: Path, payload: dict[str, Any]) -> Path:
         ),
     ]
     for run_index, run in enumerate(runs):
-        x = left + run_index * 150
+        x = left + run_index * 290
         parts.append(
             f'<circle cx="{x + 7:.1f}" cy="58" r="7" fill="{colors[run_index]}"/>'
         )
         parts.append(
             f'<text x="{x + 20:.1f}" y="63" font-family="Arial" font-size="13">'
-            f'{_svg_escape(run["label"])}</text>'
+            f'{_svg_escape(run["display_label"])}</text>'
         )
     for category_index, category in enumerate(categories):
         y = top + category_index * row_height + row_height / 2
@@ -2288,22 +2384,48 @@ def _write_category_gain_chart(path: Path, payload: dict[str, Any]) -> Path:
 
 
 def _render_polyglot_comparison_markdown(payload: dict[str, Any]) -> str:
+    descriptive = payload["comparison_mode"] == "descriptive_mixed_sampling"
+    heading = (
+        "# Aider Polyglot C++ descriptive run comparison"
+        if descriptive
+        else "# Aider Polyglot C++ pass@k comparison"
+    )
     lines = [
-        "# Aider Polyglot C++ pass@k comparison",
+        heading,
         "",
         (
             "This is a repo-owned SLIME whole-file evaluation, not an official "
             "Aider leaderboard result."
         ),
-        "",
-        "## Overall",
-        "",
-        "| Run | Samples/task | Strict passed tasks | Strict pass rate |",
-        "|---|---:|---:|---:|",
     ]
+    if descriptive:
+        mismatch_text = "; ".join(
+            f"{key}: "
+            + ", ".join(f"{run_id}={value}" for run_id, value in values.items())
+            for key, values in payload["config_mismatches"].items()
+        )
+        lines.extend(
+            [
+                "",
+                (
+                    "**Descriptive comparison warning:** sampling settings differ "
+                    f"({mismatch_text}). These charts show the observed runs, but differences "
+                    "cannot be attributed to k alone and this is not a controlled pass@k claim."
+                ),
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Overall",
+            "",
+            "| Series | Run | Samples/task | Strict passed tasks | Strict pass rate |",
+            "|---|---|---:|---:|---:|",
+        ]
+    )
     for run in payload["runs"]:
         lines.append(
-            f'| {run["run_id"]} | {run["k"]} | '
+            f'| {run["display_label"]} | {run["run_id"]} | {run["k"]} | '
             f'{run["passed_task_count"]}/{run["task_count"]} | '
             f'{run["pass_rate"] * 100:.1f}% |'
         )
@@ -2359,6 +2481,15 @@ def _render_polyglot_comparison_markdown(payload: dict[str, Any]) -> str:
                 "- The two evaluations are independent stochastic runs, so pass@k is not "
                 "forced to be monotonic for every category."
             ),
+            (
+                "- Sampling configuration differs between series; this is a descriptive "
+                "run comparison, not an estimate of the effect of changing k alone."
+                if descriptive
+                else (
+                    "- Compared receipt configuration is identical except for k, so the "
+                    "report is in controlled pass@k mode."
+                )
+            ),
             "- Recovered-format diagnostics never count as strict passes.",
             "",
             "Machine-readable sources: [comparison.summary.json](comparison.summary.json), "
@@ -2375,10 +2506,14 @@ def build_polyglot_pass_at_k_report(
     output_dir: str | Path,
     *,
     force: bool = False,
+    allow_config_mismatches: Iterable[str] = (),
 ) -> tuple[dict[str, Any], dict[str, Path]]:
     """Validate two historical runs and write a category-focused pass@k report."""
 
-    runs = _require_comparable_polyglot_runs(run_roots)
+    runs, config_mismatches = _require_comparable_polyglot_runs(
+        run_roots,
+        allowed_config_mismatches=allow_config_mismatches,
+    )
     output = Path(output_dir).expanduser().resolve()
     if output.exists() and not output.is_dir():
         raise FileExistsError(f"Polyglot comparison output is not a directory: {output}")
@@ -2387,7 +2522,7 @@ def build_polyglot_pass_at_k_report(
             f"{output} already exists and is not empty; pass --force to replace report files"
         )
     output.mkdir(parents=True, exist_ok=True)
-    payload = _comparison_payload(runs)
+    payload = _comparison_payload(runs, config_mismatches)
     paths = {
         "summary": output / "comparison.summary.json",
         "category_csv": output / "category_summary.csv",
@@ -2876,12 +3011,15 @@ def _compare_runs_command(args: argparse.Namespace) -> None:
         args.run,
         args.out,
         force=args.force,
+        allow_config_mismatches=args.allow_config_mismatch,
     )
     print(
         json.dumps(
             {
                 "paths": {key: str(path) for key, path in paths.items()},
                 "runs": payload["runs"],
+                "comparison_mode": payload["comparison_mode"],
+                "config_mismatches": payload["config_mismatches"],
             },
             indent=2,
             sort_keys=True,
@@ -2944,6 +3082,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--run", action="append", required=True, help="Completed Polyglot run root; pass twice"
     )
     compare_runs.add_argument("--out", required=True)
+    compare_runs.add_argument(
+        "--allow-config-mismatch",
+        action="append",
+        choices=POLYGLOT_DESCRIPTIVE_CONFIG_KEYS,
+        default=[],
+        help="Allow one differing sampling field and mark the report descriptive",
+    )
     compare_runs.add_argument("--force", action="store_true")
     compare_runs.set_defaults(func=_compare_runs_command)
     return parser

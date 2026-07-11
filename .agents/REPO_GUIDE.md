@@ -210,6 +210,12 @@ README for category bars. Report empirical pass@k at task level and strict
 outcome distributions at sample level; recovered diagnostics never become
 passes.
 
+Only intentional `eval_temperature` or `eval_top_p` differences may use the
+field-specific `--allow-config-mismatch` override. Mark those reports
+descriptive, persist every per-run value and mismatch, label series with the
+sampling settings, and state that differences cannot be attributed to `k`
+alone. Never extend this override to model, task, oracle, or grader identity.
+
 The optional `gemini-sanity` command is limited to one admitted Polyglot task
 and must reuse the exact saved prompt, raw API response, strict parser, and
 Docker grader. Dry-run before spending; take `GOOGLE_API_KEY` or

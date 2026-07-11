@@ -289,6 +289,11 @@ bars and sample-outcome stacked bars while retaining the source summary's
 fine-grained multi-label taxonomy. Keep task-level empirical pass@k distinct
 from sample-level outcome distributions.
 
+Intentional temperature/top-p differences require the explicit
+`--allow-config-mismatch` field override. Such output must record per-run
+sampling, carry descriptive labels and a prominent confounding warning, and
+must not be interpreted as the isolated effect of changing `k`.
+
 Optional cross-model gate: `gemini-sanity` may run exactly one admitted prompt
 through an exact Gemini model id, then the same strict parser and Docker grader.
 It must dry-run before the paid API call, keep the API key in environment only,

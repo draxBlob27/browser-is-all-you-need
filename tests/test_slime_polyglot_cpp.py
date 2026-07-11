@@ -925,6 +925,66 @@ def test_polyglot_pass_at_k_report_rejects_config_mismatch(tmp_path: Path) -> No
         polyglot.build_polyglot_pass_at_k_report([p1, p8], tmp_path / "report")
 
 
+def test_polyglot_pass_at_k_report_allows_explicit_descriptive_temperature_mismatch(
+    tmp_path: Path,
+) -> None:
+    p1 = make_polyglot_comparison_run(
+        tmp_path / "p1",
+        run_id="greedy-run",
+        task_samples={"two-fer": [True]},
+        config_overrides={"eval_temperature": "0"},
+    )
+    p8 = make_polyglot_comparison_run(
+        tmp_path / "p8",
+        run_id="sampled-run",
+        task_samples={"two-fer": [False] * 7 + [True]},
+        config_overrides={"eval_temperature": "0.7"},
+    )
+
+    payload, paths = polyglot.build_polyglot_pass_at_k_report(
+        [p1, p8],
+        tmp_path / "report",
+        allow_config_mismatches=["eval_temperature"],
+    )
+
+    assert payload["comparison_mode"] == "descriptive_mixed_sampling"
+    assert payload["config_mismatches"] == {
+        "eval_temperature": {"greedy-run": "0", "sampled-run": "0.7"}
+    }
+    assert "eval_temperature" not in payload["comparison_config"]
+    assert [run["display_label"] for run in payload["runs"]] == [
+        "greedy@1 (T=0)",
+        "pass@8 (T=0.7)",
+    ]
+    assert payload["runs"][0]["evaluation_config"]["eval_temperature"] == "0"
+    report = paths["report"].read_text(encoding="utf-8")
+    assert "Descriptive comparison warning" in report
+    assert "cannot be attributed to k alone" in report
+    assert "greedy@1 (T=0)" in report
+    assert "pass@8 (T=0.7)" in report
+    category_chart = paths["category_chart"].read_text(encoding="utf-8")
+    assert "Descriptive strict success by category" in category_chart
+    assert "greedy@1 (T=0)" in category_chart
+
+
+def test_polyglot_pass_at_k_report_never_overrides_non_sampling_config(
+    tmp_path: Path,
+) -> None:
+    p1 = make_polyglot_comparison_run(
+        tmp_path / "p1", run_id="p1", task_samples={"two-fer": [True]}
+    )
+    p8 = make_polyglot_comparison_run(
+        tmp_path / "p8", run_id="p8", task_samples={"two-fer": [True] * 8}
+    )
+
+    with pytest.raises(ValueError, match="Only sampling configuration mismatches"):
+        polyglot.build_polyglot_pass_at_k_report(
+            [p1, p8],
+            tmp_path / "report",
+            allow_config_mismatches=["hf_model_id"],
+        )
+
+
 def test_polyglot_pass_at_k_report_rejects_task_set_mismatch(tmp_path: Path) -> None:
     p1 = make_polyglot_comparison_run(
         tmp_path / "p1",
@@ -986,11 +1046,22 @@ def test_polyglot_pass_at_k_report_rejects_failed_receipt(tmp_path: Path) -> Non
 
 def test_polyglot_compare_runs_cli_parses_two_historical_runs() -> None:
     args = polyglot.build_arg_parser().parse_args(
-        ["compare-runs", "--run", "/runs/p1", "--run", "/runs/p8", "--out", "/reports/x"]
+        [
+            "compare-runs",
+            "--run",
+            "/runs/p1",
+            "--run",
+            "/runs/p8",
+            "--out",
+            "/reports/x",
+            "--allow-config-mismatch",
+            "eval_temperature",
+        ]
     )
 
     assert args.run == ["/runs/p1", "/runs/p8"]
     assert args.out == "/reports/x"
+    assert args.allow_config_mismatch == ["eval_temperature"]
 
 
 def test_score_debug_dump_embeds_admitted_oracle_setup_proof(
@@ -1143,4 +1214,5 @@ def test_moonlight_polyglot_cpp_readme_documents_operator_flow() -> None:
     assert "raw response" in text
     assert "not a" in text and "pass@k" in text
     assert "compare-runs" in text
+    assert "--allow-config-mismatch eval_temperature" in text
     assert "correct_and_faster_rate" in text
