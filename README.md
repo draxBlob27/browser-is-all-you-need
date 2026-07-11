@@ -96,7 +96,13 @@ Google Benchmark or an uninitialized submodule use a data-local, SHA-256-pinned
 read-only; the grading container remains network-disabled.
 PR 958 also keeps GCC 7's external-cxxopts `-Weffc++` diagnostics visible but
 non-fatal while preserving all other warning-as-error checks and the full test
-build.
+build: the compatibility flag propagates from the cxxopts interface after
+simdjson's `-Werror`, an ephemeral wrapper demotes the full `-Weffc++` group
+while keeping its diagnostics visible, and only the network-dependent checkperf
+include is removed from the checkout. For nlohmann PR 2099, the image's two opt-in roundtrip cases have
+known float-serialization fixture mismatches unrelated to the PR. Admission
+runs the dataset's other 49 CTests plus the PR-relevant `CBOR` and `MessagePack`
+doctest cases explicitly, rather than dropping those changed test executables.
 
 The GLM agentic SWE-agent lane grades the final edited FILE instead of model
 text: SWE-agent edits `candidate.cpp` over many turns, the hardened Docker

@@ -48,10 +48,20 @@ This directly fixes three misleading setup failures:
   submodule from inside a `--network none` container. Optional benchmarks are
   disabled and the core test data/tool dependency is mounted from the pinned
   host cache.
-- PR 958's GCC 7 build no longer promotes external cxxopts `-Weffc++`
-  diagnostics to errors. The compatibility flag is narrowly
-  `-Wno-error=effc++`; all other warning-as-error checks and the full build
-  remain enabled.
+- PR 958's GCC 7 build no longer promotes diagnostics from the external
+  cxxopts header to errors. The compatibility flag is narrowly
+  `-Wno-error=effc++`, propagated from the cxxopts interface after simdjson's
+  target-level `-Werror`; an ephemeral wrapper demotes the full `-Weffc++`
+  diagnostic group because GCC 7 exposes some subordinate categories
+  separately, while keeping those warnings visible. The checkout removes only
+  the network-dependent checkperf include. All ordinary benchmark
+  binaries, tests, and warning-as-error checks for simdjson sources remain
+  enabled.
+- Nlohmann PR 2099 no longer fails on the image's unrelated opt-in
+  `CBOR roundtrips` and `MessagePack roundtrips` float-fixture mismatches.
+  Admission runs the dataset-recorded 49-test pass set, then explicitly runs
+  the PR-relevant `CBOR` and `MessagePack` doctest cases so its changed tests
+  remain enforced.
 
 For example, Catch2 PR 1608 uses
 `mswebench/catchorg_m_catch2:pr-1608` (all repository components must be
@@ -182,29 +192,17 @@ export SLIME_MULTI_SWE_PULL_IMAGES=0
 bash examples/slime/moonlight_multi_swe_cpp/prepare_data.sh
 ```
 
-To refresh only the four simdjson tasks repaired by the offline dependency
-cache:
-
-```bash
-PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
-  --data-root "$SLIME_MULTI_SWE_DATA_DIR" \
-  --resume \
-  --task-id simdjson__simdjson-958 \
-  --task-id simdjson__simdjson-1615 \
-  --task-id simdjson__simdjson-1712 \
-  --task-id simdjson__simdjson-2016
-```
-
-Then refresh the two observed nlohmann tasks and finish the blocking all-task
-admission:
+After pulling the PR 958 and nlohmann PR 2099 contract fixes, their
+task-specific harness fingerprints make only those two records stale. Refresh
+them together while preserving the other 48 passing records:
 
 ```bash
 PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
   --data-root "$SLIME_MULTI_SWE_DATA_DIR" \
   --no-pull \
   --resume \
-  --task-id nlohmann__json-1323 \
-  --task-id nlohmann__json-2099
+  --task-id nlohmann__json-2099 \
+  --task-id simdjson__simdjson-958
 
 PYTHONPATH="$PWD/src" python3 -m w8_biayn.integrations.slime_multi_swe_cpp preflight \
   --data-root "$SLIME_MULTI_SWE_DATA_DIR" \
@@ -365,11 +363,16 @@ diagnostics, but that path never changes strict reward or pass fields.
 - simdjson reports `file RENAME failed`, missing
   `google_benchmarks_SOURCE_DIR`, or tries to clone
   `dependencies/benchmark`: the task predates the offline dependency receipt
-  or its cache is missing. Pull this fix and rerun the four-task targeted
-  preflight above; do not enable networking in the grading container.
-- simdjson PR 958 fails in `cxxopts.hpp` with `[-Werror=effc++]`: pull the
-  GCC 7 compatibility fix and rerun only `simdjson__simdjson-958`. Do not
-  suppress all warnings or omit the tools/tests.
+  or its cache is missing. Pull this fix and rerun the affected simdjson task
+  preflight; do not enable networking in the grading container.
+- simdjson PR 958 fails in `cxxopts.hpp` with `[-Werror=effc++]` or
+  `[-Werror=non-virtual-dtor]`, or checkperf tries to fetch GitHub: pull the
+  GCC 7/offline compatibility fix and rerun only `simdjson__simdjson-958`.
+  Do not suppress all warnings or omit the ordinary benchmarks/tools/tests.
+- nlohmann PR 2099 alone fails `test-cbor` and `test-msgpack` on roundtrip
+  float fixtures: pull the targeted-test-contract fix and rerun only
+  `nlohmann__json-2099`. The grader still runs the PR-relevant `CBOR` and
+  `MessagePack` cases explicitly.
 - `oracle.summary.json.all_passed` is false: fix the setup before starting the
   model. The lane keeps `manifest.json.admitted` false and exits nonzero.
 - Response truncation: raise `SLIME_EVAL_MAX_RESPONSE_LEN`.

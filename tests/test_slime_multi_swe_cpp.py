@@ -589,6 +589,52 @@ def test_standard_harness_uses_prepared_official_image_without_cloning(
     assert kwargs["timeout"] == 1230
 
 
+def test_nlohmann_2099_runs_dataset_pass_set_and_pr_binary_cases() -> None:
+    instance_id = "nlohmann__json-2099"
+    row = {
+        **cpp_row(instance_id),
+        "org": "nlohmann",
+        "repo": "json",
+        "number": 2099,
+    }
+    harness = multi_swe.REPO_HARNESSES[("nlohmann", "json")]
+    task = multi_swe.normalized_task(row, harness=harness, instance_id=instance_id)
+
+    script = multi_swe._official_instance_script(task, harness, timeout_s=1200)
+
+    assert task["repo_harness_revision"] == multi_swe.NLOHMANN_2099_HARNESS_REVISION
+    assert "bash /home/fix-run.sh" not in script
+    assert "ctest --output-on-failure -E " in script
+    assert "test-cbor|test-msgpack" in script
+    assert "./test/test-cbor --test-case=CBOR" in script
+    assert "./test/test-msgpack --test-case=MessagePack" in script
+
+
+def test_repo_harness_revision_migration_invalidates_only_affected_task(
+    tmp_path: Path,
+) -> None:
+    instance_id = "nlohmann__json-2099"
+    row = {
+        **cpp_row(instance_id),
+        "org": "nlohmann",
+        "repo": "json",
+        "number": 2099,
+    }
+    harness = multi_swe.REPO_HARNESSES[("nlohmann", "json")]
+    task = multi_swe.normalized_task(row, harness=harness, instance_id=instance_id)
+    task.pop("repo_harness_revision")
+    task_path = tmp_path / "tasks" / instance_id / "task.json"
+    task_path.parent.mkdir(parents=True)
+    task_path.write_text(json.dumps(task), encoding="utf-8")
+    stale_key = multi_swe.oracle_setup_cache_key(task)
+
+    multi_swe.prepare_repo_harness_revisions([(task_path, task)])
+
+    persisted = json.loads(task_path.read_text(encoding="utf-8"))
+    assert persisted["repo_harness_revision"] == multi_swe.NLOHMANN_2099_HARNESS_REVISION
+    assert multi_swe.oracle_setup_cache_key(persisted) != stale_key
+
+
 def test_preflight_prepares_checksum_pinned_simdjson_dependencies_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -700,7 +746,13 @@ def test_affected_simdjson_harness_mounts_offline_dependencies_and_disables_down
     assert "-DSIMDJSON_ALLOW_DOWNLOADS=OFF" in script
     assert "-DSIMDJSON_GOOGLE_BENCHMARKS=OFF" in script
     assert "-DSIMDJSON_COMPETITION=OFF" in script
-    assert "-DCMAKE_CXX_FLAGS=-Wno-error=effc++" in script
+    assert "-DCMAKE_CXX_FLAGS=-Wno-error=effc++" not in script
+    assert "target_compile_options(cxxopts INTERFACE -Wno-error=effc++)" in script
+    assert '#pragma GCC diagnostic warning "-Weffc++"' in script
+    assert "tools/cxxopts.hpp" in script
+    assert "include(checkperf.cmake)" in script
+    assert "benchmark/CMakeLists.txt" in script
+    assert "dependencies/CMakeLists.txt" in script
     assert "git clone" not in script
     assert "ctest --output-on-failure" in script
 
@@ -719,6 +771,7 @@ def test_newer_simdjson_harness_keeps_all_warnings_as_errors() -> None:
     script = multi_swe._official_instance_script(task, harness, timeout_s=1200)
 
     assert "-DCMAKE_CXX_FLAGS=-Wno-error=effc++" not in script
+    assert "target_compile_options(cxxopts INTERFACE -Wno-error=effc++)" not in script
 
 
 def test_simdjson_dependency_cache_is_mirrored_once_into_shared_tmpdir(

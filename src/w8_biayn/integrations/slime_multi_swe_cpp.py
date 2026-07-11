@@ -51,7 +51,8 @@ SANDBOX_IMAGES_FILENAME = "sandbox-images.json"
 OFFLINE_DEPENDENCIES_FILENAME = "offline-dependencies.json"
 SIMDJSON_DEPENDENCY_CACHE_RELATIVE = Path("offline-dependencies") / "simdjson"
 SIMDJSON_HARNESS_REVISION = "offline-dependencies-v1"
-SIMDJSON_GCC7_EFFCXX_REVISION = "gcc7-cxxopts-effcxx-v1"
+SIMDJSON_GCC7_EFFCXX_REVISION = "gcc7-cxxopts-effcxx-v5"
+NLOHMANN_2099_HARNESS_REVISION = "pr2099-targeted-binary-tests-v1"
 SIMDJSON_OFFLINE_INSTANCE_IDS = frozenset(
     {
         "simdjson__simdjson-958",
@@ -431,7 +432,7 @@ def safe_task_dir(instance_id: str) -> str:
 def normalized_task(
     row: dict[str, Any], *, harness: MultiSweRepoHarness, instance_id: str
 ) -> dict[str, Any]:
-    return {
+    task = {
         "schema_version": SCHEMA_VERSION,
         "benchmark": BENCHMARK,
         "data_source": DATA_SOURCE,
@@ -462,6 +463,10 @@ def normalized_task(
         "test_patch_result": row.get("test_patch_result") or {},
         "fix_patch_result": row.get("fix_patch_result") or {},
     }
+    harness_revision = _repo_harness_revision(task)
+    if harness_revision is not None:
+        task["repo_harness_revision"] = harness_revision
+    return task
 
 
 def base_ref_from_row(row: dict[str, Any]) -> str | None:
@@ -721,6 +726,27 @@ def _simdjson_repo_harness_revision(task: dict[str, Any]) -> str:
     if str(task.get("instance_id") or "") == "simdjson__simdjson-958":
         return f"{SIMDJSON_HARNESS_REVISION}+{SIMDJSON_GCC7_EFFCXX_REVISION}"
     return SIMDJSON_HARNESS_REVISION
+
+
+def _repo_harness_revision(task: dict[str, Any]) -> str | None:
+    instance_id = str(task.get("instance_id") or task.get("task_id") or "")
+    if instance_id == "nlohmann__json-2099":
+        return NLOHMANN_2099_HARNESS_REVISION
+    if instance_id in SIMDJSON_OFFLINE_INSTANCE_IDS:
+        return _simdjson_repo_harness_revision(task)
+    return None
+
+
+def prepare_repo_harness_revisions(
+    prepared_tasks: Sequence[tuple[Path, dict[str, Any]]],
+) -> None:
+    """Persist task-specific harness fingerprints without rebuilding data."""
+
+    for task_path, task in prepared_tasks:
+        expected = _repo_harness_revision(task)
+        if expected is not None and task.get("repo_harness_revision") != expected:
+            task["repo_harness_revision"] = expected
+            write_json(task_path, task)
 
 
 def simdjson_offline_bundle_sha256() -> str:
@@ -1032,6 +1058,7 @@ def run_multi_swe_oracle_preflight(
     )
     if not os.environ.get(SANDBOX_IMAGE_ENV, "").strip():
         prepare_simdjson_offline_dependencies(root, selected_tasks)
+    prepare_repo_harness_revisions(selected_tasks)
     prepared_tasks = load_prepared_multi_swe_tasks(root)
 
     records_path = root / ORACLE_RECORDS_FILENAME
@@ -1158,6 +1185,13 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
         raise ValueError(f"invalid Multi-SWE sandbox-image receipt under {root}")
 
     tasks = load_prepared_multi_swe_tasks(root)
+    for task_path, task in tasks:
+        expected_revision = _repo_harness_revision(task)
+        if (
+            expected_revision is not None
+            and task.get("repo_harness_revision") != expected_revision
+        ):
+            raise ValueError(f"stale Multi-SWE task harness in {task_path}")
     if oracle_check.get("task_count") != len(tasks):
         raise ValueError(f"Multi-SWE oracle/task-count mismatch in {manifest_path}")
     affected_simdjson_tasks = [
@@ -1595,6 +1629,7 @@ def _official_instance_script(
     expected_test_patch_sha = _sha256_text(task.get("test_patch"))
     quoted_repo = shlex.quote(repo_dir)
     quoted_base = shlex.quote(base_ref)
+    instance_id = str(task.get("instance_id") or "")
     if _uses_simdjson_offline_dependencies(task):
         cmake_args = [
             "cmake",
@@ -1604,12 +1639,49 @@ def _official_instance_script(
             "-DSIMDJSON_COMPETITION=OFF",
             "-DSIMDJSON_CXXOPTS=OFF",
         ]
-        if str(task.get("instance_id") or "") == "simdjson__simdjson-958":
-            # This old release applies -Weffc++ -Werror to external cxxopts.
-            # Preserve the full build while making only that warning class non-fatal.
-            cmake_args.append("-DCMAKE_CXX_FLAGS=-Wno-error=effc++")
         cmake_args.append("..")
         cmake_command = shlex.join(cmake_args)
+        cxxopts_compatibility = ""
+        if instance_id == "simdjson__simdjson-958":
+            # CMAKE_CXX_FLAGS precedes simdjson's target-level -Werror and is
+            # therefore ineffective here. Propagate the narrow exception from
+            # the external cxxopts interface target so it is ordered last for
+            # only the targets that consume cxxopts. GCC 7 reports some
+            # -Weffc++ subdiagnostics under separate names, so a wrapper header
+            # demotes the whole group while keeping every diagnostic visible.
+            cxxopts_compatibility = """
+printf '%s\n' '#pragma GCC diagnostic push' '#pragma GCC diagnostic warning "-Weffc++"' '#include "../dependencies/cxxopts/include/cxxopts.hpp"' '#pragma GCC diagnostic pop' > "$repo_dir/tools/cxxopts.hpp"
+sed -i '/^add_library(cxxopts INTERFACE)$/a target_compile_options(cxxopts INTERFACE -Wno-error=effc++)' "$repo_dir/dependencies/CMakeLists.txt"
+sed -i '/^include(checkperf.cmake)$/d' "$repo_dir/benchmark/CMakeLists.txt"
+grep -Fxq '#pragma GCC diagnostic warning "-Weffc++"' "$repo_dir/tools/cxxopts.hpp"
+grep -Fxq 'target_compile_options(cxxopts INTERFACE -Wno-error=effc++)' "$repo_dir/dependencies/CMakeLists.txt"
+if grep -Fxq 'include(checkperf.cmake)' "$repo_dir/benchmark/CMakeLists.txt"; then
+  echo W8_SIMDJSON_CHECKPERF_DISABLE_ERROR
+  exit 86
+fi
+""".strip()
+        test_body = """
+set -euo pipefail
+if [ -s /home/test.patch ]; then
+  git -C "$repo_dir" apply --whitespace=nowarn /home/test.patch /home/fix.patch
+else
+  git -C "$repo_dir" apply --whitespace=nowarn /home/fix.patch
+fi
+{cxxopts_compatibility}
+cd "$repo_dir/build"
+{cmake_command}
+cmake --build .
+ctest --output-on-failure
+""".format(
+            cmake_command=cmake_command,
+            cxxopts_compatibility=cxxopts_compatibility,
+        ).strip()
+    elif instance_id == "nlohmann__json-2099":
+        # The official image's two opt-in roundtrip cases have nine known
+        # float-serialization fixture mismatches each. The dataset consequently
+        # records the other 49 CTests as its passing set. Keep those 49, then
+        # explicitly run the CBOR/MessagePack cases changed by this PR so the
+        # task's new tests remain part of admission.
         test_body = """
 set -euo pipefail
 if [ -s /home/test.patch ]; then
@@ -1618,10 +1690,12 @@ else
   git -C "$repo_dir" apply --whitespace=nowarn /home/fix.patch
 fi
 cd "$repo_dir/build"
-{cmake_command}
+cmake ..
 cmake --build .
-ctest --output-on-failure
-""".format(cmake_command=cmake_command).strip()
+ctest --output-on-failure -E '^(test-cbor|test-msgpack)$'
+./test/test-cbor --test-case=CBOR
+./test/test-msgpack --test-case=MessagePack
+""".strip()
     else:
         test_body = "bash /home/fix-run.sh"
     quoted_test_body = shlex.quote(test_body)
