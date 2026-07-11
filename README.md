@@ -72,7 +72,10 @@ for the C++ subset of `Aider-AI/polyglot-benchmark`. It uses
 `src/w8_biayn/integrations/slime_polyglot_cpp.py` for whole-file replacement
 prompts and Exercism C++ tests in Docker. Data preparation must first map the
 upstream `files.example` references onto solution files and pass them through
-the same Docker grader; only an all-passing oracle preflight admits the eval
+the same Docker grader. Schema-v2 records are flushed per task and bind the
+copied exercise plus grader configuration to the immutable Docker image ID;
+`verify-data` recomputes the summary and cross-checks records, eval rows,
+fingerprints, mappings, and counts. Only that all-passing proof admits the eval
 manifest. It is not part of the PIE training proof and is not an official
 Aider leaderboard run; keep detailed setup and artifact semantics in
 `examples/slime/moonlight_polyglot_cpp/README.md`.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,13 @@ from w8_biayn.integrations import slime_polyglot_cpp as polyglot
 EXAMPLE_ROOT = Path("examples/slime/moonlight_polyglot_cpp")
 RUNNER = EXAMPLE_ROOT / "moonlight_polyglot_cpp.sh"
 README = EXAMPLE_ROOT / "README.md"
+
+
+@pytest.fixture(autouse=True)
+def stable_polyglot_sandbox_image_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        polyglot, "_polyglot_sandbox_image_id", lambda _image: "sha256:test-polyglot"
+    )
 
 
 def make_polyglot_tree(tmp_path: Path) -> Path:
@@ -42,6 +50,22 @@ def make_polyglot_tree(tmp_path: Path) -> Path:
     (exercise / ".meta" / "example.h").write_text("// oracle header\n", encoding="utf-8")
     (exercise / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.10)\n", encoding="utf-8")
     return tmp_path / "polyglot-benchmark"
+
+
+def make_admitted_polyglot_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, dict[str, Path]]:
+    source = make_polyglot_tree(tmp_path)
+    out = tmp_path / "data"
+    monkeypatch.setattr(
+        polyglot,
+        "run_polyglot_tests",
+        lambda _path: polyglot.PolyglotTestResult(returncode=0, logs="oracle passed"),
+    )
+    paths = polyglot.build_slime_polyglot_cpp_dataset(
+        source, out, eval_limit=None, run_id="r1", force=True
+    )
+    return out, paths
 
 
 def valid_response() -> str:
@@ -113,6 +137,8 @@ def test_build_slime_polyglot_cpp_dataset_writes_eval_rows_and_manifest(
     assert row["metadata"]["oracle_correct_answer_source"] == "files.example"
     assert (out / row["metadata"]["exercise_path"] / "two_fer_test.cpp").exists()
     assert manifest["kind"] == "slime-polyglot-cpp-dataset"
+    assert manifest["schema_version"] == 2
+    assert manifest["admitted"] is True
     assert manifest["counts"] == {
         "copied_exercises": 1,
         "eval": 1,
@@ -125,6 +151,12 @@ def test_build_slime_polyglot_cpp_dataset_writes_eval_rows_and_manifest(
     assert paths["oracle_summary"].exists()
     oracle_record = json.loads(paths["oracle_records"].read_text(encoding="utf-8"))
     assert oracle_record["setup_valid"] is True
+    assert oracle_record["oracle_protocol_version"] == 1
+    assert oracle_record["grader_config"]["sandbox_image"] == "w8-biayn-polyglot-cpp:latest"
+    assert oracle_record["grader_config"]["sandbox_image_id"] == "sha256:test-polyglot"
+    assert oracle_record["grader_config"]["test_timeout_seconds"] == 180
+    assert len(oracle_record["oracle_input_sha256"]) == 64
+    assert oracle_record["test_files"] == ["two_fer_test.cpp"]
     assert oracle_record["reference_file_mappings"] == [
         {"example_file": ".meta/example.cpp", "solution_file": "two_fer.cpp"},
         {"example_file": ".meta/example.h", "solution_file": "two_fer.h"},
@@ -174,6 +206,127 @@ def test_build_data_blocks_failed_oracle_but_preserves_failure_evidence(
     assert oracle_summary["failed_task_ids"] == ["cpp/two-fer"]
     assert oracle_record["reason"] == "tests_failed"
     assert oracle_record["setup_valid"] is False
+
+
+def test_validate_polyglot_dataset_rejects_forged_passing_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    record = json.loads(paths["oracle_records"].read_text(encoding="utf-8"))
+    record["setup_valid"] = False
+    paths["oracle_records"].write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not prove admission"):
+        polyglot.validate_polyglot_dataset(data_root)
+
+
+def test_validate_polyglot_dataset_rejects_stale_task_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    test_file = (
+        data_root
+        / "tasks"
+        / "cpp"
+        / "exercises"
+        / "practice"
+        / "two-fer"
+        / "two_fer_test.cpp"
+    )
+    test_file.write_text("// tampered tests\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="stale Polyglot oracle record"):
+        polyglot.validate_polyglot_dataset(data_root)
+
+
+def test_validate_polyglot_dataset_rejects_changed_sandbox_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        polyglot, "_polyglot_sandbox_image_id", lambda _image: "sha256:changed"
+    )
+
+    with pytest.raises(ValueError, match="does not prove admission"):
+        polyglot.validate_polyglot_dataset(data_root)
+
+
+def test_validate_polyglot_dataset_recomputes_summary_from_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    summary = json.loads(paths["oracle_summary"].read_text(encoding="utf-8"))
+    summary["passed_count"] = 0
+    paths["oracle_summary"].write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="summary does not match records"):
+        polyglot.validate_polyglot_dataset(data_root)
+
+
+def test_validate_polyglot_dataset_rejects_oracle_eval_task_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    row = json.loads(paths["eval"].read_text(encoding="utf-8"))
+    row["task_id"] = "cpp/not-two-fer"
+    row["label"] = row["task_id"]
+    paths["eval"].write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="oracle/eval task mismatch"):
+        polyglot.validate_polyglot_dataset(data_root)
+
+
+def test_validate_polyglot_dataset_rejects_unrecorded_copied_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    tasks_root = paths["tasks"]
+    shutil.copytree(tasks_root / "two-fer", tasks_root / "allergies")
+
+    with pytest.raises(ValueError, match="oracle/copied-task mismatch"):
+        polyglot.validate_polyglot_dataset(data_root)
+
+
+def test_build_data_flushes_each_oracle_record_before_next_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = make_polyglot_tree(tmp_path)
+    practice_root = source / "cpp" / "exercises" / "practice"
+    shutil.copytree(practice_root / "two-fer", practice_root / "allergies")
+    monkeypatch.setattr(
+        polyglot,
+        "run_polyglot_tests",
+        lambda _path: polyglot.PolyglotTestResult(returncode=0, logs="oracle passed"),
+    )
+    original = polyglot.polyglot_oracle_setup_record
+    calls = 0
+
+    def interrupt_second_record(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        polyglot, "polyglot_oracle_setup_record", interrupt_second_record
+    )
+    out = tmp_path / "out"
+
+    with pytest.raises(KeyboardInterrupt):
+        polyglot.build_slime_polyglot_cpp_dataset(
+            source, out, eval_limit=None, run_id="r1", force=True
+        )
+
+    records = [
+        json.loads(line)
+        for line in (out / "oracle.records.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["setup_valid"] is True
+    assert not (out / "oracle.summary.json").exists()
+    assert not (out / "manifest.json").exists()
+    assert not (out / "eval" / "cpp.jsonl").exists()
 
 
 def test_parse_replacements_accepts_path_code_pairs_and_rejects_bad_files() -> None:
@@ -382,7 +535,11 @@ def test_score_debug_dump_writes_polyglot_summary_without_speed_metrics(tmp_path
     assert "missing_runtime_rate" not in summary
 
 
-def test_score_debug_dump_embeds_admitted_oracle_setup_proof(tmp_path: Path) -> None:
+def test_score_debug_dump_embeds_admitted_oracle_setup_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root, paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
+    oracle_check = json.loads(paths["manifest"].read_text(encoding="utf-8"))["oracle_setup_check"]
     debug_jsonl = tmp_path / "debug.jsonl"
     debug_jsonl.write_text(
         json.dumps(
@@ -392,41 +549,6 @@ def test_score_debug_dump_embeds_admitted_oracle_setup_proof(tmp_path: Path) -> 
             }
         )
         + "\n",
-        encoding="utf-8",
-    )
-    data_root = tmp_path / "data"
-    (data_root / "eval").mkdir(parents=True)
-    (data_root / "eval" / "cpp.jsonl").write_text("{}\n", encoding="utf-8")
-    (data_root / "oracle.records.jsonl").write_text("{}\n", encoding="utf-8")
-    (data_root / "oracle.summary.json").write_text("{}\n", encoding="utf-8")
-    oracle_check = {
-        "enabled": True,
-        "blocking": True,
-        "phase": "data_preflight",
-        "correct_answer_source": "files.example",
-        "records_file": "oracle.records.jsonl",
-        "summary_file": "oracle.summary.json",
-        "task_count": 1,
-        "passed_count": 1,
-        "failed_count": 0,
-        "pass_rate": 1.0,
-        "all_passed": True,
-        "reason_counts": {"passed": 1},
-        "failed_task_ids": [],
-    }
-    (data_root / "manifest.json").write_text(
-        json.dumps(
-            {
-                "kind": "slime-polyglot-cpp-dataset",
-                "counts": {"eval": 1},
-                "files": {
-                    "eval": "eval/cpp.jsonl",
-                    "oracle_records": "oracle.records.jsonl",
-                    "oracle_summary": "oracle.summary.json",
-                },
-                "oracle_setup_check": oracle_check,
-            }
-        ),
         encoding="utf-8",
     )
 

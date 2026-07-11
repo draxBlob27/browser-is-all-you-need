@@ -23,11 +23,16 @@ materialized reference through the exact Docker test path used for model
 responses. Header-only references intentionally leave the inert starter
 `.cpp` file in place.
 
-The preflight writes `oracle.records.jsonl` and `oracle.summary.json`. It emits
-the eval JSONL and admitted `manifest.json` only when every selected reference
-passes. This makes a passing `oracle_setup_check` the setup-side proof needed
-to interpret a later model test failure as a model failure rather than an
-uncertified harness failure.
+The schema-v2 preflight flushes each result to `oracle.records.jsonl` before
+starting the next exercise, then rereads those records to produce
+`oracle.summary.json`. Each passing record binds the exact copied exercise
+tree and reference-file mapping to the grader protocol, timeout, test command,
+resource limits, configured image, and immutable local Docker image ID through
+`oracle_input_sha256`.
+
+Before admitting `manifest.json`, validation rereads the records, summary, and
+eval JSONL and rejects any malformed, forged, duplicated, stale, missing, or
+extra evidence.
 
 After admission, the eval JSONL is:
 
@@ -148,11 +153,14 @@ best-effort parsed and tested. Those recovered fields do not change strict
 failures for later SFT data review. The lane deliberately does not report PIE
 speed metrics such as `correct_and_faster_rate`.
 
-`base.summary.json` also embeds the admitted manifest's `oracle_setup_check`.
-Require `oracle_setup_check.all_passed: true` before attributing a failed model
-response to the model. `oracle.records.jsonl` preserves per-exercise mapping,
-return code, timeout/compile/test classification, and a test-log excerpt;
-`oracle.summary.json` provides the aggregate proof.
+`base.summary.json` embeds the oracle check recomputed by `verify-data`, not
+an unverified manifest flag. Require `oracle_setup_check.complete: true`,
+`oracle_setup_check.all_passed: true`, schema version 2, and oracle protocol
+version 1 before attributing a failed model response to the model.
+`oracle.records.jsonl` preserves per-exercise task/grader fingerprints,
+immutable sandbox-image identity, reference mappings, return code, and
+timeout/compile/test classification. `oracle.summary.json` is recomputed from
+those records and provides the aggregate proof.
 
 ## Response Contract
 
@@ -183,7 +191,10 @@ fields.
 - Oracle preflight failure: inspect `data/oracle.records.jsonl` and
   `data/oracle.summary.json`. No `manifest.json` or eval JSONL is admitted when
   any `files.example` reference fails under the current checkout, sandbox
-  image, or timeout. Fix the setup or task before evaluating the model.
+  image, or timeout. A schema-v1 manifest, changed task file, image ID, timeout,
+  mapping, record, summary, or eval task set is also rejected as stale or
+  inconsistent. Re-run `prepare_data.sh` after intentional task/grader changes;
+  otherwise fix the setup or corrupted artifact before evaluating the model.
 - Response truncation: raise `SLIME_EVAL_MAX_RESPONSE_LEN` to `8192`.
 - Many timeouts: inspect `base.records.jsonl` and the sandbox logs. The default
   test timeout is `W8_SLIME_POLYGLOT_TEST_TIMEOUT_SECONDS=180`.
