@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
+import sys
+import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -358,3 +362,45 @@ def test_aider_runner_uses_python_311_for_pinned_dev_dependencies() -> None:
     dockerfile = RUNNER_DOCKERFILE.read_text(encoding="utf-8")
     assert dockerfile.startswith("FROM python:3.11-bookworm\n")
     assert "buildpack-deps:jammy" not in dockerfile
+
+
+def test_modal_app_imports_from_shallow_remote_path(tmp_path: Path, monkeypatch) -> None:
+    """Modal imports mounted user code as /root/modal_app.py on every worker."""
+
+    class _ModalObject:
+        def __getattr__(self, _name):
+            return self
+
+        def __call__(self, *args, **kwargs):
+            del kwargs
+            if len(args) == 1 and callable(args[0]):
+                return args[0]
+            return self
+
+    modal_object = _ModalObject()
+    modal_stub = types.ModuleType("modal")
+
+    def is_local() -> bool:
+        return False
+
+    modal_stub.is_local = is_local
+    for name in ("App", "Image", "Secret", "Volume", "enter", "exit"):
+        setattr(modal_stub, name, modal_object)
+
+    cfg = config(tmp_path)
+    monkeypatch.setenv("W8_MODAL_AIDER_RUNTIME_CONFIG", json.dumps(cfg.runtime_mapping()))
+    monkeypatch.setitem(sys.modules, "modal", modal_stub)
+    monkeypatch.syspath_prepend(str(ROOT / "src"))
+
+    with tempfile.NamedTemporaryFile(
+        prefix="w8-modal-app-", suffix=".py", dir="/tmp", delete=False
+    ) as handle:
+        remote_path = Path(handle.name)
+        handle.write(MODAL_APP.read_bytes())
+    try:
+        namespace = runpy.run_path(remote_path)
+    finally:
+        remote_path.unlink(missing_ok=True)
+
+    assert namespace["IS_LOCAL"] is False
+    assert namespace["ROOT"] == Path("/opt/w8-src")

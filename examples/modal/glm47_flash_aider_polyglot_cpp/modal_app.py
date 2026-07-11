@@ -23,8 +23,10 @@ from urllib.request import Request, urlopen
 import modal
 
 
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "src"))
+IS_LOCAL = modal.is_local()
+ROOT = Path(__file__).resolve().parents[3] if IS_LOCAL else Path("/opt/w8-src")
+if IS_LOCAL:
+    sys.path.insert(0, str(ROOT / "src"))
 
 from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     AIDER_REPO_URL,
@@ -69,14 +71,14 @@ def _config_from_payload(payload: dict[str, Any]) -> ModalAiderConfig:
     return ModalAiderConfig(**values)
 
 
-if modal.is_local():
+if IS_LOCAL:
     CONFIG = ModalAiderConfig.from_env(repo_root=ROOT)
     RUNTIME = CONFIG.runtime_mapping()
 else:
     RUNTIME = json.loads(os.environ["W8_MODAL_AIDER_RUNTIME_CONFIG"])
     CONFIG = _config_from_payload(RUNTIME)
 RUNTIME_JSON = json.dumps(RUNTIME, sort_keys=True)
-SGLANG_API_KEY = secrets.token_urlsafe(48) if modal.is_local() else ""
+SGLANG_API_KEY = secrets.token_urlsafe(48) if IS_LOCAL else ""
 
 app = modal.App(
     CONFIG.app_name,
@@ -91,46 +93,51 @@ app = modal.App(
 model_volume = modal.Volume.from_name(CONFIG.model_volume, create_if_missing=True)
 results_volume = modal.Volume.from_name(CONFIG.results_volume, create_if_missing=True)
 
-secret_payload = {"SGLANG_API_KEY": SGLANG_API_KEY} if modal.is_local() else {}
+secret_payload = {"SGLANG_API_KEY": SGLANG_API_KEY} if IS_LOCAL else {}
 server_secret = modal.Secret.from_dict(secret_payload)
 runner_secret = modal.Secret.from_dict(secret_payload)
 downloader_secrets = (
     [modal.Secret.from_dict({"HF_TOKEN": CONFIG.hf_token})]
-    if modal.is_local() and CONFIG.hf_token
+    if IS_LOCAL and CONFIG.hf_token
     else []
 )
 
-pure_source = str(ROOT / "src" / "w8_biayn")
-downloader_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install("huggingface-hub[hf-transfer]>=0.24", "PyYAML>=6.0")
-    .env(
-        {
-            "PYTHONPATH": "/opt/w8-src",
-            "HF_HUB_ENABLE_HF_TRANSFER": "1",
-            "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON,
-        }
+if IS_LOCAL:
+    pure_source = str(ROOT / "src" / "w8_biayn")
+    downloader_image = (
+        modal.Image.debian_slim(python_version="3.11")
+        .pip_install("huggingface-hub[hf-transfer]>=0.24", "PyYAML>=6.0")
+        .env(
+            {
+                "PYTHONPATH": "/opt/w8-src",
+                "HF_HUB_ENABLE_HF_TRANSFER": "1",
+                "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON,
+            }
+        )
+        # Mount-mode local additions must remain after every image build step.
+        .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
     )
-    # Mount-mode local additions must remain after every image build step.
-    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
-)
-server_image = (
-    modal.Image.from_registry(CONFIG.sglang_image)
-    .env({"PYTHONPATH": "/opt/w8-src", "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON})
-    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
-)
-runner_image = (
-    modal.Image.from_dockerfile(
-        ROOT / "examples/modal/glm47_flash_aider_polyglot_cpp/Dockerfile.aider",
-        context_dir=ROOT / "examples/modal/glm47_flash_aider_polyglot_cpp",
-        build_args={
-            "AIDER_COMMIT": CONFIG.aider_commit,
-            "POLYGLOT_COMMIT": CONFIG.polyglot_commit,
-        },
+    server_image = (
+        modal.Image.from_registry(CONFIG.sglang_image)
+        .env({"PYTHONPATH": "/opt/w8-src", "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON})
+        .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
     )
-    .env({"PYTHONPATH": "/opt/w8-src", "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON})
-    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
-)
+    runner_image = (
+        modal.Image.from_dockerfile(
+            ROOT / "examples/modal/glm47_flash_aider_polyglot_cpp/Dockerfile.aider",
+            context_dir=ROOT / "examples/modal/glm47_flash_aider_polyglot_cpp",
+            build_args={
+                "AIDER_COMMIT": CONFIG.aider_commit,
+                "POLYGLOT_COMMIT": CONFIG.polyglot_commit,
+            },
+        )
+        .env({"PYTHONPATH": "/opt/w8-src", "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON})
+        .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
+    )
+else:
+    downloader_image = modal.Image.debian_slim()
+    server_image = modal.Image.debian_slim()
+    runner_image = modal.Image.debian_slim()
 
 
 def _remote_config(payload: dict[str, Any]) -> ModalAiderConfig:
