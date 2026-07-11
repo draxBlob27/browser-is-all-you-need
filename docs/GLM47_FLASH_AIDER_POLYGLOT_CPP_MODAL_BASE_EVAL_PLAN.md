@@ -273,6 +273,12 @@ from consuming a 128-token probe before editable content appears. Persist
 `admission.response.json` or `admission.failure.json` with response-shape
 metadata only: keys, presence flags, character counts, finish reason, and
 numeric token usage. Do not persist generated reasoning or answer text.
+The runner must clone Aider at `/aider`, matching the pinned official
+benchmark's absolute `/aider/benchmark/cpp-test.sh` command. Image construction
+must verify that script is executable and still referenced by the dispatcher.
+If official rows contain exceptions, commit and print a bearer-redacted
+`<stage>/exception.summary.json` containing only task, exception type, and the
+final traceback line before blocking admission.
 Do not accept `main`, `latest`, branch names, abbreviated Git commits, or an
 untagged/undigested SGLang image for a full result. A smoke may allow a pinned
 version tag only with an explicitly recorded unsafe-development override.

@@ -451,7 +451,7 @@ def aider_benchmark_command(
         raise ModalAiderError("Aider stage must be smoke or full")
     name = result_name or f"{config.run_id}-{stage}"
     command = [
-        "/opt/aider/benchmark/benchmark.py",
+        "/aider/benchmark/benchmark.py",
         name,
         "--model",
         AIDER_MODEL_NAME,
@@ -480,7 +480,7 @@ def aider_benchmark_command(
 
 
 def aider_stats_command(result_dir: str | Path) -> list[str]:
-    return ["/opt/aider/benchmark/benchmark.py", "--stats", str(result_dir)]
+    return ["/aider/benchmark/benchmark.py", "--stats", str(result_dir)]
 
 
 def sglang_server_command(
@@ -692,6 +692,30 @@ def validate_aider_results(
         exhausted_context_windows=exhausted,
         task_names=tuple(sorted(names)),
     )
+
+
+def summarize_aider_exceptions(root: str | Path) -> list[dict[str, str]]:
+    """Summarize official exception rows without copying full tracebacks."""
+
+    rows = []
+    for path in sorted(Path(root).glob("**/.aider.results.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        exception = payload.get("exception")
+        if not isinstance(exception, str) or not exception.strip():
+            continue
+        final_line = exception.strip().splitlines()[-1][-1000:]
+        exception_type = final_line.split(":", 1)[0].strip()
+        rows.append(
+            {
+                "task": path.parent.name,
+                "exception_type": exception_type,
+                "exception_final_line": final_line,
+            }
+        )
+    return rows
 
 
 def validate_authoritative_stats(stats: Mapping[str, Any], *, expected_tasks: int) -> None:

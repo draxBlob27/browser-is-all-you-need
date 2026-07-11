@@ -8,18 +8,20 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 
 RUN test -n "$AIDER_COMMIT" && test -n "$POLYGLOT_COMMIT" \
-    && git clone https://github.com/Aider-AI/aider.git /opt/aider \
-    && git -C /opt/aider checkout --detach "$AIDER_COMMIT" \
-    && test "$(git -C /opt/aider rev-parse HEAD)" = "$AIDER_COMMIT" \
-    && mkdir -p /opt/aider/tmp.benchmarks \
+    && git clone https://github.com/Aider-AI/aider.git /aider \
+    && git -C /aider checkout --detach "$AIDER_COMMIT" \
+    && test "$(git -C /aider rev-parse HEAD)" = "$AIDER_COMMIT" \
+    && test -x /aider/benchmark/cpp-test.sh \
+    && grep -F '"/aider/benchmark/cpp-test.sh"' /aider/benchmark/benchmark.py \
+    && mkdir -p /aider/tmp.benchmarks \
     && git clone https://github.com/Aider-AI/polyglot-benchmark.git \
-       /opt/aider/tmp.benchmarks/polyglot-benchmark \
-    && git -C /opt/aider/tmp.benchmarks/polyglot-benchmark checkout --detach "$POLYGLOT_COMMIT" \
-    && test "$(git -C /opt/aider/tmp.benchmarks/polyglot-benchmark rev-parse HEAD)" = "$POLYGLOT_COMMIT"
+       /aider/tmp.benchmarks/polyglot-benchmark \
+    && git -C /aider/tmp.benchmarks/polyglot-benchmark checkout --detach "$POLYGLOT_COMMIT" \
+    && test "$(git -C /aider/tmp.benchmarks/polyglot-benchmark rev-parse HEAD)" = "$POLYGLOT_COMMIT"
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip uv \
-    && uv pip install --system --no-cache-dir -e '/opt/aider[dev]'
+    && uv pip install --system --no-cache-dir -e '/aider[dev]'
 
 COPY Dockerfile.aider /opt/w8/Dockerfile.aider
-WORKDIR /opt/aider
+WORKDIR /aider
 ENV AIDER_DOCKER=1 PYTHONUNBUFFERED=1

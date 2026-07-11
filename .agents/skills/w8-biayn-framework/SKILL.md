@@ -297,6 +297,10 @@ Use up to 2048 configured completion tokens for the authenticated chat probe;
 128 tokens can be consumed entirely by GLM reasoning. Admission diagnostics
 may store only response keys, presence flags, lengths, finish reason, and
 numeric usage, never generated reasoning or answer text.
+Keep the Aider checkout at `/aider`, matching its absolute official C++ grader
+path `/aider/benchmark/cpp-test.sh`, and build-check that executable contract.
+On exception-only rows, print and persist only bearer-redacted task names,
+exception types, and final traceback lines in `exception.summary.json`.
 
 
 ```bash

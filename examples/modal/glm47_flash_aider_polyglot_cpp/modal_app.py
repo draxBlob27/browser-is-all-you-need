@@ -52,6 +52,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     render_plan,
     sha256_file,
     sglang_server_command,
+    summarize_aider_exceptions,
     summarize_sglang_admission,
     utc_now,
     validate_aider_results,
@@ -445,7 +446,7 @@ def _run_aider_stage(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     stage_root = root / stage
     stage_root.mkdir(parents=True, exist_ok=True)
-    source = Path("/opt/aider/tmp.benchmarks/polyglot-benchmark")
+    source = Path("/aider/tmp.benchmarks/polyglot-benchmark")
     exercises_link = stage_root / "polyglot-benchmark"
     if not exercises_link.exists():
         exercises_link.symlink_to(source, target_is_directory=True)
@@ -486,7 +487,7 @@ def _run_aider_stage(
     )
     started = time.monotonic()
     result = subprocess.run(
-        command, check=False, capture_output=True, text=True, env=env, cwd="/opt/aider"
+        command, check=False, capture_output=True, text=True, env=env, cwd="/aider"
     )
     (stage_root / "stdout.log").write_text(_scrub(result.stdout, api_key), encoding="utf-8")
     (stage_root / "stderr.log").write_text(_scrub(result.stderr, api_key), encoding="utf-8")
@@ -496,7 +497,27 @@ def _run_aider_stage(
     if len(matches) != 1:
         raise ModalAiderError(f"Aider {stage} did not create exactly one official result directory")
     expected = config.smoke_tests if stage == "smoke" else config.expected_cpp_tasks
-    admission = validate_aider_results(matches[0], expected_tasks=expected)
+    try:
+        admission = validate_aider_results(matches[0], expected_tasks=expected)
+    except ModalAiderError as exc:
+        exception_summary = {
+            "schema_version": SCHEMA_VERSION,
+            "status": "failed",
+            "run_id": config.run_id,
+            "stage": stage,
+            "rows": summarize_aider_exceptions(matches[0]),
+            "failed_at_utc": utc_now(),
+        }
+        exception_summary = json.loads(_scrub(json.dumps(exception_summary), api_key))
+        ensure_secret_free(exception_summary, [api_key])
+        write_json(stage_root / "exception.summary.json", exception_summary)
+        results_volume.commit()
+        print(
+            "Aider exception summary (bearer-redacted):\n"
+            + json.dumps(exception_summary["rows"], indent=2),
+            file=sys.stderr,
+        )
+        raise ModalAiderError(f"{exc}; see {stage}/exception.summary.json") from exc
     stats_command = aider_stats_command(matches[0])
     stats_result = subprocess.run(
         stats_command,
@@ -504,7 +525,7 @@ def _run_aider_stage(
         capture_output=True,
         text=True,
         env=env,
-        cwd="/opt/aider",
+        cwd="/aider",
     )
     (stage_root / "stats.txt").write_text(_scrub(stats_result.stdout, api_key), encoding="utf-8")
     (stage_root / "stats.stderr.log").write_text(
@@ -573,9 +594,9 @@ def run_aider_benchmark(
     )
 
     aider_head = subprocess.check_output(
-        ["git", "-C", "/opt/aider", "rev-parse", "HEAD"], text=True
+        ["git", "-C", "/aider", "rev-parse", "HEAD"], text=True
     ).strip()
-    polyglot_root = "/opt/aider/tmp.benchmarks/polyglot-benchmark"
+    polyglot_root = "/aider/tmp.benchmarks/polyglot-benchmark"
     polyglot_head = subprocess.check_output(
         ["git", "-C", polyglot_root, "rev-parse", "HEAD"], text=True
     ).strip()
@@ -589,7 +610,7 @@ def run_aider_benchmark(
     upstreams = {
         "aider": {"url": AIDER_REPO_URL, "commit": aider_head},
         "polyglot": {"url": POLYGLOT_REPO_URL, "commit": polyglot_head},
-        "upstream_aider_dockerfile_sha256": sha256_file("/opt/aider/benchmark/Dockerfile"),
+        "upstream_aider_dockerfile_sha256": sha256_file("/aider/benchmark/Dockerfile"),
         "local_aider_dockerfile_sha256": sha256_file("/opt/w8/Dockerfile.aider"),
         "runner_difference": "Modal is already the container; AIDER_DOCKER=1, no Docker-in-Docker; C++ dependencies only.",
         "transformers": {"url": TRANSFORMERS_REPO_URL, "commit": TRANSFORMERS_COMMIT},

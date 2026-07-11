@@ -29,6 +29,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     prepare_local_plan,
     render_plan,
     sglang_server_command,
+    summarize_aider_exceptions,
     summarize_sglang_admission,
     validate_aider_results,
     validate_authoritative_stats,
@@ -189,7 +190,7 @@ def test_aider_commands_pin_official_harness_semantics(tmp_path: Path) -> None:
     smoke = aider_benchmark_command(cfg, stage="smoke")
     full = aider_benchmark_command(cfg, stage="full")
 
-    assert smoke[0] == "/opt/aider/benchmark/benchmark.py"
+    assert smoke[0] == "/aider/benchmark/benchmark.py"
     assert smoke[smoke.index("--languages") + 1] == "cpp"
     assert smoke[smoke.index("--tries") + 1] == "1"
     assert smoke[smoke.index("--threads") + 1] == "1"
@@ -305,6 +306,14 @@ def test_smoke_admission_allows_wrong_code_but_rejects_exception_rows(tmp_path: 
     write_result(bad, "all-your-base", exception=True)
     with pytest.raises(ModalAiderError, match="exception-only"):
         validate_aider_results(bad, expected_tasks=1)
+    summary = summarize_aider_exceptions(bad)
+    assert summary == [
+        {
+            "task": "all-your-base",
+            "exception_type": "boom",
+            "exception_final_line": "boom",
+        }
+    ]
 
 
 def test_artifact_manifest_paths_are_relative_and_hashed(tmp_path: Path) -> None:
@@ -472,6 +481,10 @@ def test_aider_runner_uses_python_311_for_pinned_dev_dependencies() -> None:
     dockerfile = RUNNER_DOCKERFILE.read_text(encoding="utf-8")
     assert dockerfile.startswith("FROM python:3.11-bookworm\n")
     assert "buildpack-deps:jammy" not in dockerfile
+    assert "git clone https://github.com/Aider-AI/aider.git /aider" in dockerfile
+    assert "test -x /aider/benchmark/cpp-test.sh" in dockerfile
+    assert "WORKDIR /aider" in dockerfile
+    assert "/opt/aider" not in dockerfile
 
 
 def test_modal_app_imports_from_shallow_remote_path(tmp_path: Path, monkeypatch) -> None:

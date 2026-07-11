@@ -348,6 +348,11 @@ configured benchmark maximum, because a thinking response can exhaust 128
 tokens before emitting editable content. Persist `admission.response.json` on
 success or `admission.failure.json` on failure with response-shape metadata
 only; never persist generated reasoning or answer text in these diagnostics.
+Keep the pinned Aider checkout at `/aider`: its official C++ dispatcher uses
+the absolute `/aider/benchmark/cpp-test.sh` path. Fail runner image construction
+unless that script is executable and the pinned dispatcher still references
+it. For any exception-only rows, persist and print a bearer-redacted
+task/type/final-line summary before failing admission.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

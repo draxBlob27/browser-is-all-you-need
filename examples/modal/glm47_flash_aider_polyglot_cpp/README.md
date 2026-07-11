@@ -45,6 +45,9 @@ smoke first; there is no skip-smoke option.
 - A Modal token/profile exported in the current shell.
 - `uv`, installed by `./scripts/bootstrap.sh`.
 - Exact immutable commits for the model, Aider, and Polyglot inputs.
+- The Aider checkout mounted at upstream's `/aider` path. The pinned C++
+  dispatcher invokes `/aider/benchmark/cpp-test.sh` absolutely, so image
+  construction verifies both that reference and the script's executable bit.
 - A digest-pinned SGLang image whose launch help exposes every required GLM
   parser and EAGLE speculative-decoding flag.
 - The official GLM-4.7-Flash Transformers commit
@@ -144,6 +147,10 @@ The generated code may fail to compile or pass tests. That is a model outcome,
 not an infrastructure failure. Transport/auth failures, exception-only rows,
 missing compiler/test dependencies, all-truncated output, or incomplete
 artifacts block the run.
+When official rows contain exceptions, the runner commits and prints
+`<stage>/exception.summary.json` with bearer-redacted task names, exception
+types, and final traceback lines. Full tracebacks remain in the official result
+rows and stage logs on the results Volume.
 
 Cold SGLang initialization may include model loading and kernel compilation, so
 the supported startup ceiling is 3600 seconds. The launcher polls the child
@@ -252,6 +259,7 @@ runs/<run-id>/
   model-settings.sha256
   smoke/
     command.json
+    exception.summary.json   # failure-only, bearer-redacted row summaries
     stdout.log
     stderr.log
     stats.txt

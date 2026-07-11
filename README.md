@@ -81,6 +81,11 @@ completion tokens so GLM reasoning cannot consume the old 128-token allowance
 before producing editable content. It persists only response keys, field
 presence, character counts, finish reason, and numeric usage; generated
 reasoning and answer text are never stored in admission diagnostics.
+The Aider checkout stays at upstream's `/aider` container path because the
+pinned benchmark invokes `/aider/benchmark/cpp-test.sh` absolutely. Runner
+image construction verifies that executable path. Exception-only rows emit a
+bearer-redacted task/type/final-line summary instead of only an aggregate
+count.
 
 
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt
