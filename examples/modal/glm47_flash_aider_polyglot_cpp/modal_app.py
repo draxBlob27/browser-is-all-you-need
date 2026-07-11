@@ -104,7 +104,6 @@ pure_source = str(ROOT / "src" / "w8_biayn")
 downloader_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("huggingface-hub[hf-transfer]>=0.24", "PyYAML>=6.0")
-    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
     .env(
         {
             "PYTHONPATH": "/opt/w8-src",
@@ -112,11 +111,13 @@ downloader_image = (
             "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON,
         }
     )
+    # Mount-mode local additions must remain after every image build step.
+    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
 )
 server_image = (
     modal.Image.from_registry(CONFIG.sglang_image)
-    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
     .env({"PYTHONPATH": "/opt/w8-src", "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON})
+    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
 )
 runner_image = (
     modal.Image.from_dockerfile(
@@ -127,8 +128,8 @@ runner_image = (
             "POLYGLOT_COMMIT": CONFIG.polyglot_commit,
         },
     )
-    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
     .env({"PYTHONPATH": "/opt/w8-src", "W8_MODAL_AIDER_RUNTIME_CONFIG": RUNTIME_JSON})
+    .add_local_dir(pure_source, "/opt/w8-src/w8_biayn")
 )
 
 

@@ -332,3 +332,20 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert "W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN" in run
     assert "modal app stop" in run and "modal app list --json" in run
     assert os.access(RUN_SH, os.X_OK)
+
+
+def test_modal_images_add_mount_mode_local_source_after_build_steps() -> None:
+    """Modal rejects an image build step after a mount-mode add_local_dir call."""
+
+    modal_app = MODAL_APP.read_text(encoding="utf-8")
+    image_section = modal_app.split("pure_source =", 1)[1].split("def _remote_config", 1)[0]
+    for name, next_name in (
+        ("downloader_image", "server_image"),
+        ("server_image", "runner_image"),
+        ("runner_image", None),
+    ):
+        block = image_section.split(f"{name} =", 1)[1]
+        if next_name is not None:
+            block = block.split(f"{next_name} =", 1)[0]
+        assert block.count(".add_local_dir(") == 1
+        assert block.rfind(".add_local_dir(") > block.rfind(".env(")
