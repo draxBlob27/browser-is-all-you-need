@@ -63,6 +63,10 @@ Use repo-owned wrappers rather than editing `.cache/upstreams/slime` directly.
 - Moonlight MoE smoke: `examples/slime/moonlight_moe_smoke/`
 - Generic text-only SLIME smoke: `examples/slime/multi_agent/`
 
+The separate official Aider/Modal base-eval surface is
+`examples/modal/glm47_flash_aider_polyglot_cpp/`; it is not a SLIME lane or
+part of the active PIE training stack.
+
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt
 builder, Docker C++ sandbox, reward function, and eval aggregation through
 `src/w8_biayn/integrations/slime_cpp_perf.py`.
@@ -424,6 +428,30 @@ the complete credential, artifact, and interpretation contract lives in the
 lane README. The command checks output and parent permissions before the paid
 request; use a host-owned output path rather than a root-owned SLIME run path.
 
+
+## GLM-4.7-Flash Official Aider Polyglot C++ Base Eval On Modal
+
+This optional benchmark runs the base `zai-org/GLM-4.7-Flash` checkpoint
+against the C++ subset of `Aider-AI/polyglot-benchmark` through Aider's own
+benchmark harness. Modal hosts one four-H100 SGLang server plus a CPU Aider
+runner. It is neither a SLIME lane nor the custom Moonlight Polyglot evaluator,
+and Aider's cumulative `pass_rate_2` after a repair turn must not be called
+pass@2.
+
+The only operator entrypoint is:
+
+```bash
+bash examples/modal/glm47_flash_aider_polyglot_cpp/run.sh
+```
+
+It is export-only, defaults to a redacted no-spend plan, requires explicit paid
+acknowledgement for smoke/full, always gates full behind the real two-task
+smoke, persists official Aider artifacts in a Modal Volume and ignored local
+state, and verifies the ephemeral App stopped before admitting a result.
+Source and offline tests are implemented; paid validation and the first
+complete 26-task receipt remain pending. The full export contract, artifact
+semantics, security boundaries, and recovery commands live in the
+[canonical lane runbook](examples/modal/glm47_flash_aider_polyglot_cpp/README.md).
 
 ## Moonlight Multi-SWE C++ Base Eval
 
@@ -882,6 +910,8 @@ scripts/prepare_dapo_math_dataset.py         optional SLIME text-smoke data prep
 scripts/wandb_milestone.py                   standalone pipeline-milestone logger (elapsed curve + timeline table)
 examples/slime/moonlight_cpp_perf/           active Moonlight C++ lane
 examples/slime/moonlight_polyglot_cpp/      optional Moonlight base eval on Aider Polyglot C++
+examples/modal/glm47_flash_aider_polyglot_cpp/
+                                             official Aider C++ base eval on Modal
 examples/slime/moonlight_multi_swe_cpp/     optional Moonlight base eval on Multi-SWE C++
 examples/slime/moonlight_lora_cpp_perf/      rank-16 LoRA Moonlight C++ lane
 examples/slime/glm47_cpp_perf/               active GLM C++ lane when present

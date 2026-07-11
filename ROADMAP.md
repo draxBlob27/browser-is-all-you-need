@@ -306,6 +306,32 @@ diagnostic only. It must also preflight artifact-path permissions before the
 paid request. This is a prompt/parser/grader sanity check, not pass@k or an
 official Polyglot/Aider comparison.
 
+## Optional Side Benchmark: Official Aider C++ On Modal
+
+Question:
+
+> How does the base `zai-org/GLM-4.7-Flash` checkpoint perform on the C++
+> subset of Aider Polyglot through Aider's own benchmark harness when both
+> serving and benchmark execution run on Modal?
+
+This result family is separate from PIE training and from the repo-owned
+Moonlight Polyglot prompt/parser/grader. It uses Aider's edit application,
+sequential test-feedback retries, C++ command, and authoritative statistics.
+`pass_rate_2` is cumulative success after the second try, not pass@2. The
+canonical export-only flow is
+`examples/modal/glm47_flash_aider_polyglot_cpp/README.md`; the only entrypoint
+is that directory's `run.sh`.
+
+Decision gate: plan must be redacted and no-spend by default. A paid full run
+requires exact model/Aider/Polyglot/SGLang identities, strict `H100!:4`, one
+authenticated SGLang replica with reasoning separation, and a blocking
+two-task Aider smoke. Admit the result only when all 26 official per-task
+result/history files exist, Aider stats report 26 cases, the local copy matches
+the committed results Volume, and control-plane verification proves the
+ephemeral App stopped. Keep source/offline-test completion distinct from live
+evidence: the implementation exists, but real CPU/Volume, real-weight server,
+two-task smoke, and full-run receipts remain pending.
+
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
 Question:

@@ -6,6 +6,8 @@
 .ruff_cache/
 .mypy_cache/
 .w8-biayn/
+# Official Aider/Modal eval receipts, downloaded benchmark trees, and settings.
+.w8-biayn/modal/glm47-flash-aider-polyglot-cpp/
 .local/
 
 __pycache__/

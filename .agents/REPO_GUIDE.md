@@ -232,6 +232,28 @@ bash examples/slime/moonlight_polyglot_cpp/prepare_data.sh
 bash examples/slime/moonlight_polyglot_cpp/eval_base.sh
 ```
 
+Optional official Aider/Modal C++ base evaluation. This is not active PIE
+training, not a SLIME lane, and not the repo-owned Moonlight Polyglot harness.
+It runs base `zai-org/GLM-4.7-Flash` through Aider's exact edit/test/retry
+benchmark on an ephemeral Modal App. The only entrypoint is export-only
+`examples/modal/glm47_flash_aider_polyglot_cpp/run.sh`; plan is the default
+and no-spend, while smoke/full require explicit acknowledgement and full always
+runs the real two-task smoke first.
+
+Keep Modal tokens local, optional `HF_TOKEN` downloader-only, and the random
+SGLang bearer limited to the server and Aider runner. Pin exact model, Aider,
+Polyglot, SGLang-image, Modal-SDK, settings, and strict `H100!:4` identities.
+Use separate model/results Volumes, one server replica, `min_containers=0`,
+bounded timeouts, explicit stop plus control-plane verification, and ignored
+local artifacts. Preserve official Aider rows/histories/stats; `pass_rate_2`
+is sequential second-try success, never pass@2. Source/offline completion is
+not live evidence: do not report a model result before the two-task smoke and
+complete 26-task stopped-App receipt.
+
+```bash
+bash examples/modal/glm47_flash_aider_polyglot_cpp/run.sh
+```
+
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned
 SLIME rollout-only eval of base Moonlight on C++ issue-resolution tasks from
@@ -401,6 +423,10 @@ scripts/wandb_milestone.py                   standalone pipeline-milestone logge
 examples/slime/moonlight_cpp_perf/           active Moonlight C++ lane
 examples/slime/moonlight_lora_cpp_perf/      rank-16 LoRA Moonlight C++ lane
 examples/slime/moonlight_polyglot_cpp/       optional Moonlight base eval on Aider Polyglot C++
+examples/modal/glm47_flash_aider_polyglot_cpp/
+                                             official Aider C++ base eval on Modal
+src/w8_biayn/modal_aider_polyglot_cpp.py     pure config/receipt/artifact contract (no Modal import)
+tests/test_modal_aider_polyglot_cpp.py       offline Modal/Aider safety and command contract
 examples/slime/moonlight_multi_swe_cpp/      optional Moonlight base eval on Multi-SWE C++
 examples/slime/glm47_cpp_perf/               active GLM C++ lane when present
 examples/slime/glm47_swe_agent_cpp_perf/     agentic SWE-agent file-state C++ lane
