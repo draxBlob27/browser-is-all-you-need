@@ -232,10 +232,13 @@ pass@k visualization. Require exactly two successful, oracle-clean runs with
 uniform samples per task, identical task and immutable oracle-fingerprint sets,
 and matching model/sampling/grader receipt fields. The report uses six
 mutually-exclusive medium-grained presentation categories for grouped pass@k
-bars, stacked sample outcomes, and a compact dumbbell view; it does not replace
-the stored fine-grained multi-label category summary. Keep task-level empirical
-pass@k distinct from sample-level outcome rates, and keep recovered-format
-results diagnostic only.
+bars, stacked outcomes, and a compact dot/range view; it does not replace the
+stored fine-grained multi-label category summary. Include the admitted
+`files.example` answer in every overall and category view as a 100%-passing
+same-grader setup reference, never as a generated model series or official
+Aider score. Keep task-level empirical pass@k distinct from model-sample outcome
+rates and oracle setup-preflight outcomes, and keep recovered-format results
+diagnostic only.
 
 For intentional historical sampling differences, allow only the explicit
 `--allow-config-mismatch eval_temperature` and/or `eval_top_p` override.

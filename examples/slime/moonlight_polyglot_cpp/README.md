@@ -173,12 +173,13 @@ as the isolated effect of changing `k`.
 
 The generated report is category-first:
 
-- `category_pass_at_k.svg`: the primary grouped horizontal bar chart;
-- `category_sample_outcomes.svg`: 100% stacked bars for strict individual
-  sample outcomes;
-- `overall_pass_at_k.svg`: the two overall task-level bars;
-- `category_gain.svg`: a compact dumbbell view of the same category pass
-  rates;
+- `category_pass_at_k.svg`: the primary grouped horizontal bar chart for both
+  model runs and the oracle reference;
+- `category_sample_outcomes.svg`: 100% stacked bars for model-sample outcomes
+  plus the separate oracle-setup outcome row;
+- `overall_pass_at_k.svg`: both model task-level bars and the oracle reference;
+- `category_gain.svg`: a compact dot/range view of the same category pass
+  rates, including the oracle;
 - `comparison.summary.json`, `category_summary.csv`, and
   `task_outcomes.csv`: machine-readable chart sources;
 - `report.md`: an index that embeds all charts and records interpretation
@@ -203,6 +204,13 @@ diagnostic and never count as strict passes. The two runs are independently
 sampled, so the reporter does not force pass@8 to be monotonic over pass@1 for
 every category.
 
+Every view also includes the admitted `files.example` answer as a 100%-passing
+oracle reference. That answer was required to pass each task's blocking
+same-Docker-grader preflight before either model run was admitted. It is a
+grader-verified setup ceiling, not a generated model series, a competing model
+baseline, or an official Aider score. In the stacked chart its row represents
+one setup preflight per task, not sampled generations.
+
 For the two July 11 runs, the command shape is:
 
 ```bash
@@ -210,7 +218,9 @@ uv run python -m w8_biayn.integrations.slime_polyglot_cpp compare-runs \
   --run /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/runs/moonlight_polyglot_p1_smoke_20260711085134 \
   --run /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/runs/moonlight_polyglot_p1_full_20260711091339 \
   --out /home/pipeshift/browser-is-all-you-need-sanil/browser-is-all-you-need/.w8-biayn/slime/moonlight-polyglot-cpp/reports/moonlight_polyglot_pass1_vs_pass8_20260711 \
-  --allow-config-mismatch eval_temperature
+  --allow-config-mismatch eval_temperature \
+  --allow-config-mismatch eval_top_p \
+  --force
 ```
 
 Use `--force` only to overwrite the known files in an intentional report

@@ -206,9 +206,11 @@ receipts and passing embedded oracle proofs, recompute summaries, and match task
 sets, immutable oracle fingerprints, and relevant run configuration before
 writing local evidence. Keep the source fine-grained multi-label categories,
 but use the six mutually-exclusive presentation groups documented in the lane
-README for category bars. Report empirical pass@k at task level and strict
-outcome distributions at sample level; recovered diagnostics never become
-passes.
+README for category bars. Include the admitted `files.example` answer in every
+overall and category view as a 100%-passing same-grader setup reference, never
+as a generated model series or official Aider score. Report empirical pass@k at
+task level, model outcome distributions at sample level, and the oracle outcome
+row as blocking setup preflights; recovered diagnostics never become passes.
 
 Only intentional `eval_temperature` or `eval_top_p` differences may use the
 field-specific `--allow-config-mismatch` override. Mark those reports

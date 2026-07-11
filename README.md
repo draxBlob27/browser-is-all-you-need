@@ -399,11 +399,14 @@ Completed Polyglot runs can be compared without rerunning inference:
 successful receipts, recomputed summaries, passing oracle proof, identical
 task/fingerprint sets, uniform per-task sample counts, and comparable model,
 sampling, sandbox, and timeout settings. It produces category-focused grouped
-and stacked bar charts plus a compact dumbbell view, JSON, CSV, and Markdown.
-The six mutually-exclusive presentation groups are separate from the existing
-fine-grained multi-label diagnostic categories. Empirical pass@k is task-level;
-the stacked outcome bars are sample-level. The complete command and artifact
-contract lives in the lane README.
+and stacked bar charts plus a compact dot/range view, JSON, CSV, and Markdown.
+All views include the admitted `files.example` oracle as a 100%-passing
+same-grader setup ceiling; it is explicitly labeled as reference setup, not a
+model run or official Aider score. The six mutually-exclusive presentation
+groups are separate from the existing fine-grained multi-label diagnostic
+categories. Empirical pass@k is task-level; model outcome bars are sample-level,
+while the oracle outcome row records setup preflights. The complete command and
+artifact contract lives in the lane README.
 
 For intentional historical comparisons with different sampling, repeat
 `--allow-config-mismatch` for `eval_temperature` and/or `eval_top_p`.

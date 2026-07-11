@@ -126,19 +126,23 @@ def make_polyglot_tree(tmp_path: Path) -> Path:
                     "solution": ["two_fer.cpp", "two_fer.h"],
                     "test": ["two_fer_test.cpp"],
                     "example": [".meta/example.cpp", ".meta/example.h"],
-                }
+                },
             }
         ),
         encoding="utf-8",
     )
     (exercise / ".docs" / "introduction.md").write_text("Intro text.", encoding="utf-8")
     (exercise / ".docs" / "instructions.md").write_text("Return a phrase.", encoding="utf-8")
-    (exercise / "two_fer.cpp").write_text("std::string two_fer() { return \"\"; }\n", encoding="utf-8")
+    (exercise / "two_fer.cpp").write_text(
+        'std::string two_fer() { return ""; }\n', encoding="utf-8"
+    )
     (exercise / "two_fer.h").write_text("#pragma once\n", encoding="utf-8")
     (exercise / "two_fer_test.cpp").write_text("// tests\n", encoding="utf-8")
     (exercise / ".meta" / "example.cpp").write_text("// oracle cpp\n", encoding="utf-8")
     (exercise / ".meta" / "example.h").write_text("// oracle header\n", encoding="utf-8")
-    (exercise / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.10)\n", encoding="utf-8")
+    (exercise / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.10)\n", encoding="utf-8"
+    )
     return tmp_path / "polyglot-benchmark"
 
 
@@ -207,7 +211,9 @@ def test_build_slime_polyglot_cpp_dataset_writes_eval_rows_and_manifest(
 
     monkeypatch.setattr(polyglot, "run_polyglot_tests", fake_runner)
 
-    paths = polyglot.build_slime_polyglot_cpp_dataset(source, out, eval_limit=None, run_id="r1", force=True)
+    paths = polyglot.build_slime_polyglot_cpp_dataset(
+        source, out, eval_limit=None, run_id="r1", force=True
+    )
 
     rows = [json.loads(line) for line in paths["eval"].read_text(encoding="utf-8").splitlines()]
     manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
@@ -315,13 +321,7 @@ def test_validate_polyglot_dataset_rejects_stale_task_fingerprint(
 ) -> None:
     data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
     test_file = (
-        data_root
-        / "tasks"
-        / "cpp"
-        / "exercises"
-        / "practice"
-        / "two-fer"
-        / "two_fer_test.cpp"
+        data_root / "tasks" / "cpp" / "exercises" / "practice" / "two-fer" / "two_fer_test.cpp"
     )
     test_file.write_text("// tampered tests\n", encoding="utf-8")
 
@@ -333,9 +333,7 @@ def test_validate_polyglot_dataset_rejects_changed_sandbox_image(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_root, _paths = make_admitted_polyglot_data(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        polyglot, "_polyglot_sandbox_image_id", lambda _image: "sha256:changed"
-    )
+    monkeypatch.setattr(polyglot, "_polyglot_sandbox_image_id", lambda _image: "sha256:changed")
 
     with pytest.raises(ValueError, match="does not prove admission"):
         polyglot.validate_polyglot_dataset(data_root)
@@ -398,9 +396,7 @@ def test_build_data_flushes_each_oracle_record_before_next_task(
             raise KeyboardInterrupt
         return original(*args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(
-        polyglot, "polyglot_oracle_setup_record", interrupt_second_record
-    )
+    monkeypatch.setattr(polyglot, "polyglot_oracle_setup_record", interrupt_second_record)
     out = tmp_path / "out"
 
     with pytest.raises(KeyboardInterrupt):
@@ -425,13 +421,17 @@ def test_parse_replacements_accepts_path_code_pairs_and_rejects_bad_files() -> N
     assert parsed["two_fer.h"].startswith("#pragma once")
 
     with pytest.raises(polyglot.PolyglotResponseError, match="unexpected prose"):
-        polyglot.parse_replacements("Here is the fix.\n" + valid_response(), ["two_fer.cpp", "two_fer.h"])
+        polyglot.parse_replacements(
+            "Here is the fix.\n" + valid_response(), ["two_fer.cpp", "two_fer.h"]
+        )
 
     with pytest.raises(polyglot.PolyglotResponseError, match="unexpected prose"):
         polyglot.parse_replacements(valid_response() + "<|im_end|>", ["two_fer.cpp", "two_fer.h"])
 
     with pytest.raises(polyglot.PolyglotResponseError, match="unknown or forbidden"):
-        polyglot.parse_replacements(valid_response().replace("two_fer.h", "two_fer_test.cpp"), ["two_fer.cpp", "two_fer.h"])
+        polyglot.parse_replacements(
+            valid_response().replace("two_fer.h", "two_fer_test.cpp"), ["two_fer.cpp", "two_fer.h"]
+        )
 
     with pytest.raises(polyglot.PolyglotResponseError, match="missing replacement"):
         polyglot.parse_replacements(
@@ -447,7 +447,9 @@ ok
         )
 
 
-def test_recover_replacements_diagnoses_unlabeled_code_blocks_without_changing_strict_parser() -> None:
+def test_recover_replacements_diagnoses_unlabeled_code_blocks_without_changing_strict_parser() -> (
+    None
+):
     response = recoverable_unlabeled_response()
 
     with pytest.raises(polyglot.PolyglotResponseError, match="unexpected prose"):
@@ -550,7 +552,9 @@ def test_reward_func_records_recovered_diagnostics_without_awarding_strict_pass(
     assert record["recovered_candidate_bytes"] > 0
 
 
-def test_reward_func_applies_replacements_and_records_test_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reward_func_applies_replacements_and_records_test_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = make_polyglot_tree(tmp_path)
     exercise = source / "cpp" / "exercises" / "practice" / "two-fer"
     calls: list[Path] = []
@@ -806,7 +810,9 @@ def test_score_debug_dump_writes_polyglot_summary_without_speed_metrics(tmp_path
         encoding="utf-8",
     )
 
-    _records, summary, paths = polyglot.score_debug_dump(label="base", debug_samples_path=debug_jsonl, output_dir=tmp_path / "eval")
+    _records, summary, paths = polyglot.score_debug_dump(
+        label="base", debug_samples_path=debug_jsonl, output_dir=tmp_path / "eval"
+    )
 
     assert paths["records"].exists()
     assert paths["summary"].exists()
@@ -852,9 +858,7 @@ def test_build_polyglot_pass_at_k_report_writes_category_visuals(tmp_path: Path)
         "yacht": True,
         "allergies": True,
     }
-    p8_samples = {
-        exercise: [False] * 7 + [passed] for exercise, passed in p8_passes.items()
-    }
+    p8_samples = {exercise: [False] * 7 + [passed] for exercise, passed in p8_passes.items()}
     p1 = make_polyglot_comparison_run(
         tmp_path / "p1",
         run_id="polyglot-p1",
@@ -871,9 +875,19 @@ def test_build_polyglot_pass_at_k_report_writes_category_visuals(tmp_path: Path)
         tmp_path / "report",
     )
 
+    assert payload["schema_version"] == 2
     assert [run["label"] for run in payload["runs"]] == ["pass@1", "pass@8"]
     assert payload["runs"][0]["passed_task_count"] == 2
     assert payload["runs"][1]["passed_task_count"] == 5
+    assert payload["oracle_reference"]["display_label"] == "files.example oracle"
+    assert payload["oracle_reference"]["role"] == "reference_setup"
+    assert payload["oracle_reference"]["correct_answer_source"] == "files.example"
+    assert payload["oracle_reference"]["passed_task_count"] == 6
+    assert payload["oracle_reference"]["pass_rate"] == 1.0
+    assert all(
+        category["oracle_reference"]["pass_rate"] == 1.0 for category in payload["categories"]
+    )
+    assert all(task["oracle_reference"]["passed"] for task in payload["tasks"])
     assert len(payload["categories"]) == 6
     assert {category["category"] for category in payload["categories"]} == set(
         polyglot.POLYGLOT_REPORT_CATEGORY_EXERCISES
@@ -881,15 +895,24 @@ def test_build_polyglot_pass_at_k_report_writes_category_visuals(tmp_path: Path)
     assert all(path.exists() for path in paths.values())
     for key in ("overall_chart", "category_chart", "outcome_chart", "gain_chart"):
         chart = paths[key]
-        assert "<svg" in chart.read_text(encoding="utf-8")
+        chart_text = chart.read_text(encoding="utf-8")
+        assert "<svg" in chart_text
+        assert "files.example oracle" in chart_text
         assert ET.parse(chart).getroot().tag.endswith("svg")
     report = paths["report"].read_text(encoding="utf-8")
     assert "Strict pass@k by category" in report
-    assert "dumbbell" in report
+    assert "dot/range" in report
     assert "not an official Aider leaderboard result" in report
+    assert "files.example oracle" in report
+    assert "not a model generation" in report
     category_csv = paths["category_csv"].read_text(encoding="utf-8")
     assert "pass_at_1_pass_rate" in category_csv
     assert "pass_at_8_pass_rate" in category_csv
+
+    assert "oracle_reference_pass_rate" in category_csv
+    task_csv = paths["task_csv"].read_text(encoding="utf-8")
+    assert "oracle_reference_passed" in task_csv
+    assert ",True" in task_csv
 
 
 def test_polyglot_pass_at_k_report_rejects_nonuniform_sample_counts(tmp_path: Path) -> None:
@@ -965,6 +988,9 @@ def test_polyglot_pass_at_k_report_allows_explicit_descriptive_temperature_misma
     category_chart = paths["category_chart"].read_text(encoding="utf-8")
     assert "Descriptive strict success by category" in category_chart
     assert "greedy@1 (T=0)" in category_chart
+
+    assert "files.example oracle" in category_chart
+    assert payload["oracle_reference"]["pass_rate"] == 1.0
 
 
 def test_polyglot_pass_at_k_report_never_overrides_non_sampling_config(
@@ -1127,7 +1153,9 @@ def test_aggregate_reports_recovery_diagnostics_without_changing_strict_pass_rat
     assert summary["category_summary"]["conditionals"]["recovered_task_pass_rate"] == 1.0
 
 
-def test_run_polyglot_tests_preserves_exercise_dir_basename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_polyglot_tests_preserves_exercise_dir_basename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     exercise = tmp_path / "knapsack"
     exercise.mkdir()
     commands: list[list[str]] = []
@@ -1174,12 +1202,15 @@ def test_moonlight_polyglot_cpp_runner_is_base_eval_only() -> None:
     assert "sft" not in text.lower()
     assert "grpo" not in text.lower()
     assert 'RUN_ID="${SLIME_RUN_ID:-moonlight_polyglot_cpp}"' in text
-    assert 'POLYGLOT_SOURCE="${SLIME_POLYGLOT_SOURCE:-${REPO_ROOT}/.w8-biayn/data/polyglot-benchmark}"' in text
+    assert (
+        'POLYGLOT_SOURCE="${SLIME_POLYGLOT_SOURCE:-${REPO_ROOT}/.w8-biayn/data/polyglot-benchmark}"'
+        in text
+    )
     assert 'EVAL_MAX_RESPONSE_LEN="${SLIME_EVAL_MAX_RESPONSE_LEN:-4096}"' in text
     assert "w8_biayn.integrations.slime_polyglot_cpp build-data" in text
     assert "w8_biayn.integrations.slime_polyglot_cpp verify-data" in text
-    assert 'oracle_records_path=${DATA_DIR}/oracle.records.jsonl' in text
-    assert 'oracle_summary_path=${DATA_DIR}/oracle.summary.json' in text
+    assert "oracle_records_path=${DATA_DIR}/oracle.records.jsonl" in text
+    assert "oracle_summary_path=${DATA_DIR}/oracle.summary.json" in text
     assert '--data-root "${DATA_DIR}"' in text
     assert "--eval-prompt-data polyglot_cpp" in text
     assert "--rollout-skip-special-tokens" in text
@@ -1207,6 +1238,7 @@ def test_moonlight_polyglot_cpp_readme_documents_operator_flow() -> None:
     assert "files.example" in text
     assert "recovered_pass_rate" in text
     assert "--rollout-skip-special-tokens" in text
+    assert "setup ceiling" in text
     assert "rollout_skip_special_tokens=1" in text
     assert "gemini-sanity" in text
     assert "host-owned" in text

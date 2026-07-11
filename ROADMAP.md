@@ -286,8 +286,11 @@ gate: derive a uniform `k` from records, require successful and comparable
 receipts, recompute summaries, and match task plus oracle fingerprints before
 charting. Use the six mutually-exclusive report categories for grouped pass@k
 bars and sample-outcome stacked bars while retaining the source summary's
-fine-grained multi-label taxonomy. Keep task-level empirical pass@k distinct
-from sample-level outcome distributions.
+fine-grained multi-label taxonomy. Include the admitted `files.example` oracle
+as a 100%-passing same-grader setup ceiling in overall and category views, and
+label it as reference setup rather than a model or official Aider result. Keep
+task-level empirical pass@k distinct from model-sample outcome distributions
+and from the oracle's blocking setup outcomes.
 
 Intentional temperature/top-p differences require the explicit
 `--allow-config-mismatch` field override. Such output must record per-run
