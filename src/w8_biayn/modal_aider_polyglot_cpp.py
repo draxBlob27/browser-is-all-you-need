@@ -34,6 +34,7 @@ TRANSFORMERS_COMMIT = "76732b4e7120808ff989edbd16401f61fa6a0afa"
 POLYGLOT_REPO_URL = "https://github.com/Aider-AI/polyglot-benchmark.git"
 MODAL_SDK_PIN = "1.5.2"
 SGLANG_ADMISSION_MAX_TOKENS = 2048
+SGLANG_SCALEDOWN_WINDOW_SECONDS = 20 * 60
 DEFAULT_LOCAL_ROOT = ".w8-biayn/modal/glm47-flash-aider-polyglot-cpp"
 MODEL_SETTINGS_PATH = "/run/glm47_flash.model.settings.yml"
 SENSITIVE_NAMES = (
@@ -307,6 +308,7 @@ class ModalAiderConfig:
                 "modal_sdk_pin": MODAL_SDK_PIN,
                 "transformers_repo_url": TRANSFORMERS_REPO_URL,
                 "transformers_commit": TRANSFORMERS_COMMIT,
+                "sglang_scaledown_window_seconds": SGLANG_SCALEDOWN_WINDOW_SECONDS,
                 "app_name": self.app_name,
                 "remote_run_path": self.remote_run_path,
             }
@@ -338,6 +340,7 @@ class ModalAiderConfig:
         payload = {key: value for key, value in asdict(self).items() if key not in excluded}
         payload["transformers_repo_url"] = TRANSFORMERS_REPO_URL
         payload["transformers_commit"] = TRANSFORMERS_COMMIT
+        payload["sglang_scaledown_window_seconds"] = SGLANG_SCALEDOWN_WINDOW_SECONDS
         return payload
 
     def identity_sha256(self) -> str:

@@ -301,6 +301,10 @@ Keep the Aider checkout at `/aider`, matching its absolute official C++ grader
 path `/aider/benchmark/cpp-test.sh`, and build-check that executable contract.
 On exception-only rows, print and persist only bearer-redacted task names,
 exception types, and final traceback lines in `exception.summary.json`.
+Keep `min_containers=0`, but use a 1200-second SGLang scaledown window to span
+Aider generation/compile gaps without repeated four-H100 cold starts. Bind the
+value into plan identity and receipts; explicit stop plus control-plane
+verification still ends billing immediately on every exit.
 
 
 ```bash

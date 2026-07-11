@@ -158,6 +158,14 @@ process and fails early if it exits. A startup failure prints and commits only
 a bearer-redacted log tail as `server.failure.json`; raw SGLang output remains
 ephemeral.
 
+The singleton server remains scale-to-zero with `min_containers=0`, but its
+scaledown window is 1200 seconds. This keeps the loaded four-H100 replica warm
+across model-generation and C++ compile/test gaps instead of repeating CUDA
+banners and tunnel cold starts. The wrapper explicitly stops and verifies the
+App as soon as the run succeeds or fails, so it does not wait 20 minutes to
+tear down. The window is immutable run identity and appears in plans and
+receipts.
+
 The authenticated chat admission request uses
 `min(W8_MODAL_AIDER_MAX_TOKENS, 2048)` completion tokens. GLM's thinking phase
 can consume a 128-token probe before producing editable `content`. A passing

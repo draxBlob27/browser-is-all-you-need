@@ -86,6 +86,11 @@ pinned benchmark invokes `/aider/benchmark/cpp-test.sh` absolutely. Runner
 image construction verifies that executable path. Exception-only rows emit a
 bearer-redacted task/type/final-line summary instead of only an aggregate
 count.
+The singleton SGLang Server keeps `min_containers=0` but uses Modal's
+1200-second maximum scaledown window so compilation gaps do not repeatedly
+cold-start four H100s. The run wrapper still stops and verifies the App
+immediately on every success or failure; the 20-minute window is not a teardown
+delay.
 
 
 The Moonlight and GLM C++ lanes reuse the project PIE task schema, prompt

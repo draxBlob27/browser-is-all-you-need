@@ -279,6 +279,12 @@ must verify that script is executable and still referenced by the dispatcher.
 If official rows contain exceptions, commit and print a bearer-redacted
 `<stage>/exception.summary.json` containing only task, exception type, and the
 final traceback line before blocking admission.
+The singleton SGLang Server must retain `min_containers=0` and use a fixed
+1200-second scaledown window, Modal's maximum, to remain loaded across Aider's
+generation and C++ compile/test gaps. Plans, resume identity, server receipts,
+and final receipts must record this value. The wrapper's explicit stop and
+control-plane verification must still tear the App down immediately on every
+exit rather than waiting for the idle window.
 Do not accept `main`, `latest`, branch names, abbreviated Git commits, or an
 untagged/undigested SGLang image for a full result. A smoke may allow a pinned
 version tag only with an explicitly recorded unsafe-development override.

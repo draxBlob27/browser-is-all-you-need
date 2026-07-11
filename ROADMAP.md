@@ -353,6 +353,10 @@ the absolute `/aider/benchmark/cpp-test.sh` path. Fail runner image construction
 unless that script is executable and the pinned dispatcher still references
 it. For any exception-only rows, persist and print a bearer-redacted
 task/type/final-line summary before failing admission.
+Keep the singleton Server at `min_containers=0`, but set its scaledown window
+to Modal's 1200-second maximum so gaps between generation and C++ compilation
+do not cycle four H100s. Record the window in plan identity and receipts. The
+local wrapper must still stop and verify the App immediately when the run exits.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

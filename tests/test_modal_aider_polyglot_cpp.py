@@ -16,6 +16,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
     SGLANG_ADMISSION_MAX_TOKENS,
+    SGLANG_SCALEDOWN_WINDOW_SECONDS,
     TRANSFORMERS_COMMIT,
     ModalAiderConfig,
     ModalAiderError,
@@ -110,7 +111,10 @@ def test_valid_plan_config_and_redacted_plan_are_deterministic(tmp_path: Path) -
     assert first["action"] == "no paid resources"
     assert first["transformers_commit"] == TRANSFORMERS_COMMIT
     assert first["config"]["transformers_commit"] == TRANSFORMERS_COMMIT
+    assert first["config"]["sglang_scaledown_window_seconds"] == 1200
     assert cfg.identity_mapping()["transformers_commit"] == TRANSFORMERS_COMMIT
+    assert cfg.identity_mapping()["sglang_scaledown_window_seconds"] == 1200
+    assert SGLANG_SCALEDOWN_WINDOW_SECONDS == 20 * 60
     rendered = json.dumps(first, sort_keys=True)
     assert "ak-test-sentinel" not in rendered
     assert "as-test-sentinel" not in rendered
@@ -421,6 +425,8 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert "@app.server(" in modal_app
     assert "min_containers=0" in modal_app
     assert "max_containers=1" in modal_app
+    assert "scaledown_window=SGLANG_SCALEDOWN_WINDOW_SECONDS" in modal_app
+    assert "scaledown_window=60" not in modal_app
     assert "gpu=CONFIG.gpu" in modal_app
     assert 'volumes={"/models": model_volume}' in modal_app
     assert 'volumes={"/results": results_volume}' in modal_app
