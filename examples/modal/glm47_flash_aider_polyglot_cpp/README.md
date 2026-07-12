@@ -318,10 +318,14 @@ matrices plus `pass-at-1-and-8-by-try.json`, CSV, `samples.jsonl`, and Markdown.
 Every sample row records the seed, attempts made, raw outcomes, try-1 success,
 cumulative try-2 success, hashes, token usage, and immutable config identity.
 
-Resume remains scoped to one exact `(sample_index, task_id)` trajectory. It may
-repair missing infrastructure work but must not regenerate model failures or
-cross trajectory state. The extra paid acknowledgement, bounded timeout, early
-GPU scale-down, artifact reconciliation, and verified App stop remain mandatory.
+Resume remains scoped to one exact sample index and its task set. A sample is
+reused only when its official result directory, every required row/history, and
+`stats.json` all validate. An interrupted sample is preserved under
+`incomplete-attempts/`, then only that sample is recreated from the pinned
+Polyglot tree with its original seed; completed model failures are never
+regenerated and state never crosses trajectories. The extra paid
+acknowledgement, bounded timeout, early GPU scale-down, artifact reconciliation,
+and verified App stop remain mandatory.
 Paid acknowledgements are operator safety gates, not benchmark identity fields:
 they may change from false in a no-spend plan to true for the paid launch without
 forcing a new run ID or `W8_MODAL_AIDER_RESUME=1`.
@@ -360,9 +364,18 @@ summary contains only task names and numeric result/token counters, never model
 reasoning or editable content.
 
 Use `W8_MODAL_AIDER_RESUME=1` only for an incomplete, identity-matching run.
-Resume uses Aider's `--cont`, refuses completed runs and changed identities,
-and never fabricates completed task rows. A fresh run ID remains the normal
-path.
+Sequential mode uses Aider's `--cont`. Independent mode validates and reuses
+complete samples, archives only the interrupted sample, and restarts it fresh
+with the same seed. Resumed local download first moves the prior failure tree
+under `resume-download-archives/`, then downloads into an empty canonical run
+path for exact manifest reconciliation. Completed runs and changed identities
+remain rejected; a fresh run ID remains the normal path.
+
+The runner commits `runner.identity.json` before Aider execution. A Modal
+worker restart with `W8_MODAL_AIDER_RESUME=0` may re-enter only when that file
+binds the artifacts to the same active App ID and immutable config. A different
+App still requires explicit compatible resume, and CPU preflight continues to
+reject stale IDs before GPU startup.
 
 Do not launch the same run ID concurrently. One run has one results writer.
 
@@ -374,6 +387,7 @@ Remote Volume subtree and local copy:
 runs/<run-id>/
   plan.json
   config.redacted.json
+  runner.identity.json
   upstreams.json
   model-cache.receipt.json
   server.failure.json        # failure-only, bearer-redacted
@@ -391,11 +405,18 @@ runs/<run-id>/
     stats.txt
     stats.json
     <timestamp>--<run-id>-smoke/
-  independent-pass-at-1-and-8/sampling-smoke-v1/
+  independent-pass-at-1-and-8/
     sample-01/ ... sample-08/
+    incomplete-attempts/   # preserved interrupted full-sample attempts
     success-matrix.try1.json
     success-matrix.try2.json
     pass-at-1-and-8-by-try.json
+    sampling-smoke-v1/
+      sample-01/ ... sample-08/
+      incomplete-attempts/ # preserved interrupted sampling-smoke attempts
+      success-matrix.try1.json
+      success-matrix.try2.json
+      pass-at-1-and-8-by-try.json
   full/
     command.json
     stdout.log

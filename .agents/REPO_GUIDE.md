@@ -310,6 +310,18 @@ Aider's `num_exhausted_context_windows` field counts provider
 `finish_reason=length` output-limit events. Keep it diagnostic; never reject
 otherwise complete non-exception rows with C++ test invocations solely because
 that counter is nonzero.
+Persist `runner.identity.json` before benchmark work and bind non-resume
+worker re-entry to the same Modal App plus immutable config. Explicit
+independent resume must validate and reuse only completed samples, archive an
+interrupted sample under `incomplete-attempts/`, and restart only that sample
+from the pinned tree and seed. Preserve the prior local failure download under
+`resume-download-archives/` before exact resumed transfer.
+Persist `runner.identity.json` before benchmark work and bind non-resume
+worker re-entry to the same Modal App plus immutable config. Explicit
+independent resume must validate and reuse only completed sample rows with
+stats, archive an interrupted sample under `incomplete-attempts/`, and restart
+only that sample from the pinned tree and seed. Preserve the prior local failure
+download under `resume-download-archives/` before exact resumed transfer.
 
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned

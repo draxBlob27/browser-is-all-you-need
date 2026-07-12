@@ -512,6 +512,22 @@ Aider's `num_exhausted_context_windows` field records provider
 infrastructure failure. Preserve it as a diagnostic, but never reject an
 otherwise complete non-exception row with a test invocation solely because the
 counter is nonzero.
+The runner commits `runner.identity.json` before benchmark work, binding the
+immutable config to one Modal App so a platform worker restart can re-enter
+without rejecting its own artifacts. Explicit independent resume reuses only
+samples with complete official rows and `stats.json`; it preserves an
+interrupted sample under `incomplete-attempts/` and recreates only that sample
+from the pinned tree and seed. The previous local failure download moves under
+`resume-download-archives/` before exact resumed transfer.
+The runner now commits `runner.identity.json` before benchmark work, binding
+the immutable config to one Modal App so a platform worker restart can re-enter
+without confusing its own artifacts for a stale run. Explicit independent
+resume validates and reuses only samples with complete official rows plus
+`stats.json`; it archives an interrupted sample under `incomplete-attempts/`
+and recreates that sample from the pinned tree and seed. Before resumed artifact
+transfer, the prior local failure download is moved under
+`resume-download-archives/` so strict reconciliation sees a fresh target
+without deleting diagnostics.
 
 ## Moonlight Multi-SWE C++ Base Eval
 

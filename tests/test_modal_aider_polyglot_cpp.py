@@ -23,6 +23,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     INDEPENDENT_SMOKE_DIR,
     INDEPENDENT_SMOKE_TASKS,
     INDEPENDENT_TRIES,
+    RUNNER_IDENTITY_FILENAME,
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
     SGLANG_ADMISSION_MAX_TOKENS,
@@ -31,7 +32,10 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     TRANSFORMERS_COMMIT,
     ModalAiderConfig,
     ModalAiderError,
+    admit_completed_independent_sample,
     aider_benchmark_command,
+    archive_incomplete_independent_sample,
+    archive_local_run_before_resume,
     build_independent_pass_report,
     build_artifact_manifest,
     ensure_secret_free,
@@ -39,6 +43,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     modal_app_is_stopped,
     model_settings,
     independent_sample_command,
+    independent_config_fingerprint,
     parse_aider_stats,
     prepare_local_plan,
     render_plan,
@@ -54,6 +59,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     validate_local_artifacts,
     validate_model_snapshot,
     validate_remote_preflight,
+    validate_runner_invocation,
     validate_sglang_admission,
     validate_sglang_help,
     write_json,
@@ -826,6 +832,119 @@ def test_remote_preflight_allows_only_compatible_incomplete_resume(tmp_path: Pat
         validate_remote_preflight(resumed, run_root)
 
 
+def test_runner_restart_requires_same_app_identity_or_explicit_resume(tmp_path: Path) -> None:
+    run_root = tmp_path / "remote-run"
+    run_root.mkdir()
+    cfg = config(
+        tmp_path,
+        W8_MODAL_AIDER_PHASE="smoke",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+    )
+    identity = validate_runner_invocation(cfg, run_root, modal_app_id="ap-first")
+    write_json(run_root / "config.redacted.json", cfg.redacted_mapping())
+    write_json(run_root / RUNNER_IDENTITY_FILENAME, identity)
+
+    restarted = validate_runner_invocation(cfg, run_root, modal_app_id="ap-first")
+    assert restarted["modal_app_id"] == "ap-first"
+    assert restarted["same_app_restart"] is True
+    assert restarted["completed_run"] is False
+    with pytest.raises(ModalAiderError, match="active Modal App/config"):
+        validate_runner_invocation(cfg, run_root, modal_app_id="ap-other")
+
+    resumed = config(
+        tmp_path,
+        W8_MODAL_AIDER_PHASE="smoke",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+        W8_MODAL_AIDER_RESUME="1",
+    )
+    assert (
+        validate_runner_invocation(resumed, run_root, modal_app_id="ap-resume")["modal_app_id"]
+        == "ap-resume"
+    )
+
+    write_json(run_root / "run_receipt.json", {"status": "complete"})
+    completed_restart = validate_runner_invocation(cfg, run_root, modal_app_id="ap-first")
+    assert completed_restart["completed_run"] is True
+    with pytest.raises(ModalAiderError, match="completed full run"):
+        validate_runner_invocation(resumed, run_root, modal_app_id="ap-resume")
+
+
+def test_independent_resume_reuses_complete_and_archives_only_incomplete(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path, W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE)
+
+    def write_metadata(sample_root: Path, sample_index: int) -> None:
+        sample_root.mkdir(parents=True)
+        write_json(
+            sample_root / "command.json",
+            {
+                "sample_index": sample_index,
+                "seed": sample_seed(cfg, sample_index),
+                "tries": INDEPENDENT_TRIES,
+                "config_fingerprint": independent_config_fingerprint(cfg),
+            },
+        )
+        write_json(
+            sample_root / "request-metadata.json",
+            {
+                "sample_index": sample_index,
+                "seed": sample_seed(cfg, sample_index),
+            },
+        )
+        (sample_root / "model-settings.yml").write_text(
+            model_settings(cfg, sample_index=sample_index),
+            encoding="utf-8",
+        )
+
+    complete = tmp_path / "sample-01"
+    write_metadata(complete, 1)
+    result = complete / f"stamp--{cfg.run_id}-smoke-sample-01"
+    for task in INDEPENDENT_SMOKE_TASKS:
+        write_independent_result(result, task, outcomes=[False, True])
+    write_json(complete / "stats.json", authoritative_stats(2, tries=2))
+    admitted = admit_completed_independent_sample(
+        cfg, complete, sample_index=1, smoke=True
+    )
+    assert admitted is not None
+    assert Path(admitted["result_dir"]) == result
+    with pytest.raises(ModalAiderError, match="completed"):
+        archive_incomplete_independent_sample(
+            cfg,
+            complete,
+            sample_index=1,
+            smoke=True,
+            archive_id="incident",
+        )
+
+    incomplete = tmp_path / "sample-02"
+    write_metadata(incomplete, 2)
+    (incomplete / "polyglot-benchmark").mkdir()
+    (incomplete / "polyglot-benchmark/dirty.cpp").write_text(
+        "partial edit\n", encoding="utf-8"
+    )
+    archived = archive_incomplete_independent_sample(
+        cfg,
+        incomplete,
+        sample_index=2,
+        smoke=False,
+        archive_id="incident",
+    )
+    assert not incomplete.exists()
+    assert (archived / "polyglot-benchmark/dirty.cpp").is_file()
+    receipt = json.loads((archived / "resume.archive.json").read_text(encoding="utf-8"))
+    assert receipt["sample_index"] == 2
+    assert receipt["seed"] == sample_seed(cfg, 2)
+
+    local_run = tmp_path / "runs" / cfg.run_id
+    local_run.mkdir(parents=True)
+    (local_run / "failure.txt").write_text("preserved\n", encoding="utf-8")
+    local_archive = archive_local_run_before_resume(local_run, archive_id="incident")
+    assert local_archive is not None
+    assert (local_archive / "failure.txt").read_text(encoding="utf-8") == "preserved\n"
+    assert not local_run.exists()
+
+
 def test_runtime_mapping_keeps_only_hf_token_presence(tmp_path: Path) -> None:
     cfg = config(tmp_path, HF_TOKEN="hf-sentinel")
     runtime = cfg.runtime_mapping()
@@ -890,6 +1009,12 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     server_start = modal_app.split("class SGLangServer:", 1)[1].split("def _run_aider_stage", 1)[0]
     assert "assert_resume_compatible(config, prior_config, allow_plan=True)" in server_start
     assert "remote run id already has artifacts" not in server_start
+    benchmark_body = modal_app.split("def run_aider_benchmark", 1)[1]
+    assert "validate_runner_invocation(" in benchmark_body
+    assert 'recover_existing = config.resume or runner_identity["same_app_restart"]' in benchmark_body
+    assert 'write_json(root / "runner.identity.json", runner_identity)' in benchmark_body
+    assert "archive_incomplete_independent_sample(" in modal_app
+    assert "archive_local_run_before_resume(local_root)" in modal_app
     assert "SGLANG_ADMISSION_MAX_TOKENS" in modal_app
     assert 'write_json(root / "admission.failure.json", admission)' in modal_app
     assert (

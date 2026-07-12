@@ -33,8 +33,10 @@ INDEPENDENT_SAMPLES_PER_TASK = 8
 INDEPENDENT_TRIES = 2
 INDEPENDENT_SMOKE_TASKS = ("binary-search-tree", "grade-school")
 INDEPENDENT_SMOKE_DIR = "sampling-smoke-v1"
+INCOMPLETE_SAMPLE_ARCHIVE_DIR = "incomplete-attempts"
 INDEPENDENT_FULL_MAX_RUN_SECONDS = 14_400
 PASS_AT_ESTIMATOR_VERSION = "independent-aider-two-try-v3"
+RUNNER_IDENTITY_FILENAME = "runner.identity.json"
 MODEL_REPO = "zai-org/GLM-4.7-Flash"
 SERVED_MODEL_NAME = "glm-4.7-flash"
 AIDER_MODEL_NAME = "openai/glm-4.7-flash"
@@ -958,6 +960,206 @@ def independent_config_fingerprint(config: ModalAiderConfig) -> str:
             "estimator_version": PASS_AT_ESTIMATOR_VERSION,
         }
     )
+
+
+def runner_identity_mapping(config: ModalAiderConfig, *, modal_app_id: str) -> dict[str, Any]:
+    """Bind restart admission to one active Modal App and immutable run identity."""
+
+    if not modal_app_id.startswith("ap-") or not SAFE_NAME_RE.fullmatch(modal_app_id):
+        raise ModalAiderError("invalid Modal App id for runner identity")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": config.run_id,
+        "modal_app_id": modal_app_id,
+        "config_fingerprint": sha256_json(config.identity_mapping()),
+        "resume": config.resume,
+    }
+
+
+def validate_runner_invocation(
+    config: ModalAiderConfig,
+    run_root: str | Path,
+    *,
+    modal_app_id: str,
+) -> dict[str, Any]:
+    """Admit a first worker, same-App restart, or explicit compatible resume."""
+
+    root = Path(run_root)
+    identity = runner_identity_mapping(config, modal_app_id=modal_app_id)
+    prior_config = root / "config.redacted.json"
+    prior_receipt = root / "run_receipt.json"
+    prior_identity = root / RUNNER_IDENTITY_FILENAME
+    same_app_restart = False
+    completed_run = False
+    if prior_config.is_file():
+        assert_resume_compatible(config, prior_config, allow_plan=True)
+        if not config.resume:
+            if not prior_identity.is_file():
+                raise ModalAiderError(
+                    "existing runner artifacts lack same active Modal App restart proof"
+                )
+            try:
+                saved_identity = json.loads(prior_identity.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                raise ModalAiderError("runner restart identity is malformed") from exc
+            if (
+                saved_identity.get("run_id") != config.run_id
+                or saved_identity.get("modal_app_id") != modal_app_id
+                or saved_identity.get("config_fingerprint") != identity["config_fingerprint"]
+            ):
+                raise ModalAiderError(
+                    "runner artifacts do not belong to this active Modal App/config"
+                )
+            same_app_restart = True
+        if prior_receipt.is_file():
+            prior_status = json.loads(prior_receipt.read_text(encoding="utf-8")).get("status")
+            if prior_status == "complete":
+                if not same_app_restart:
+                    raise ModalAiderError("a completed full run cannot be resumed")
+                completed_run = True
+    elif config.resume:
+        raise ModalAiderError("resume requested but the remote run has no prior config")
+    identity["same_app_restart"] = same_app_restart
+    identity["completed_run"] = completed_run
+    return identity
+
+
+def _validate_independent_sample_resume_metadata(
+    config: ModalAiderConfig,
+    sample_root: Path,
+    *,
+    sample_index: int,
+) -> None:
+    expected_seed = sample_seed(config, sample_index)
+    expected_fingerprint = independent_config_fingerprint(config)
+    command_path = sample_root / "command.json"
+    if command_path.is_file():
+        try:
+            command = json.loads(command_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ModalAiderError("independent sample command metadata is malformed") from exc
+        if (
+            command.get("sample_index") != sample_index
+            or command.get("seed") != expected_seed
+            or command.get("tries") != INDEPENDENT_TRIES
+            or command.get("config_fingerprint") != expected_fingerprint
+        ):
+            raise ModalAiderError("independent sample resume metadata does not match config")
+    request_path = sample_root / "request-metadata.json"
+    if request_path.is_file():
+        try:
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ModalAiderError("independent sample request metadata is malformed") from exc
+        if request.get("sample_index") != sample_index or request.get("seed") != expected_seed:
+            raise ModalAiderError("independent sample request metadata does not match config")
+    settings_path = sample_root / "model-settings.yml"
+    if settings_path.is_file() and settings_path.read_text(encoding="utf-8") != model_settings(
+        config, sample_index=sample_index
+    ):
+        raise ModalAiderError("independent sample settings changed on resume")
+
+
+def admit_completed_independent_sample(
+    config: ModalAiderConfig,
+    sample_root: str | Path,
+    *,
+    sample_index: int,
+    smoke: bool,
+) -> dict[str, Any] | None:
+    """Return validated completed sample evidence, or None for an incomplete sample."""
+
+    root = Path(sample_root)
+    if not root.is_dir():
+        return None
+    _validate_independent_sample_resume_metadata(config, root, sample_index=sample_index)
+    result_name = f"{config.run_id}-{'smoke-' if smoke else ''}sample-{sample_index:02d}"
+    matches = sorted(root.glob(f"*--{result_name}"))
+    stats_path = root / "stats.json"
+    if not stats_path.is_file():
+        return None
+    if len(matches) != 1:
+        raise ModalAiderError("completed independent sample has no unique official result")
+    expected = config.smoke_tests if smoke else config.expected_cpp_tasks
+    admission = validate_independent_aider_results(
+        matches[0],
+        expected_tasks=expected,
+        expected_task_ids=INDEPENDENT_SMOKE_TASKS if smoke else None,
+    )
+    try:
+        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ModalAiderError("completed independent sample stats are malformed") from exc
+    validate_independent_authoritative_stats(
+        stats, result_dir=matches[0], expected_tasks=expected
+    )
+    return {
+        "result_dir": str(matches[0]),
+        "stats": stats,
+        "admission": admission.as_mapping(),
+    }
+
+
+def archive_incomplete_independent_sample(
+    config: ModalAiderConfig,
+    sample_root: str | Path,
+    *,
+    sample_index: int,
+    smoke: bool,
+    archive_id: str | None = None,
+) -> Path:
+    """Preserve an interrupted sample before its deterministic fresh restart."""
+
+    root = Path(sample_root)
+    if not root.is_dir():
+        raise ModalAiderError("cannot archive a missing independent sample")
+    if admit_completed_independent_sample(
+        config, root, sample_index=sample_index, smoke=smoke
+    ) is not None:
+        raise ModalAiderError("refusing to archive a completed independent sample")
+    suffix = archive_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    if not SAFE_NAME_RE.fullmatch(suffix):
+        raise ModalAiderError("invalid incomplete-sample archive id")
+    archive_parent = root.parent / INCOMPLETE_SAMPLE_ARCHIVE_DIR
+    archive_parent.mkdir(parents=True, exist_ok=True)
+    archived = archive_parent / f"{root.name}-{suffix}"
+    if archived.exists():
+        raise ModalAiderError("incomplete-sample archive path already exists")
+    root.rename(archived)
+    write_json(
+        archived / "resume.archive.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": config.run_id,
+            "sample_index": sample_index,
+            "seed": sample_seed(config, sample_index),
+            "smoke": smoke,
+            "reason": "interrupted sample lacked validated stats",
+            "config_fingerprint": independent_config_fingerprint(config),
+            "archived_at_utc": utc_now(),
+        },
+    )
+    return archived
+
+
+def archive_local_run_before_resume(
+    run_root: str | Path, *, archive_id: str | None = None
+) -> Path | None:
+    """Move a prior local failure download aside before exact resumed transfer."""
+
+    root = Path(run_root)
+    if not root.exists():
+        return None
+    suffix = archive_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    if not SAFE_NAME_RE.fullmatch(suffix):
+        raise ModalAiderError("invalid local resume archive id")
+    archive_parent = root.parent / "resume-download-archives"
+    archive_parent.mkdir(parents=True, exist_ok=True)
+    archived = archive_parent / f"{root.name}-{suffix}"
+    if archived.exists():
+        raise ModalAiderError("local resume archive path already exists")
+    root.rename(archived)
+    return archived
 
 
 def build_independent_pass_report(

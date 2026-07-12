@@ -1129,9 +1129,12 @@ The happy path uses a fresh run ID. Idempotency rules:
 
 - model cache: reuse by exact model revision and complete manifest;
 - Image builds: reuse only when every build input and pin is unchanged;
+- worker restart: commit `runner.identity.json` before benchmark work and
+  accept non-resume re-entry only from the same Modal App and immutable config;
 - smoke: do not repeat after an identity-matching successful smoke receipt;
 - full: do not overwrite a completed result;
-- artifacts: local download may resume or replace only hash-matching files;
+- artifacts: preserve the prior local failure tree under
+  `resume-download-archives/`, then download into an empty canonical path;
 - teardown: stopping an already stopped App is successful.
 
 For `W8_MODAL_AIDER_RESUME=1`:
@@ -1140,9 +1143,14 @@ For `W8_MODAL_AIDER_RESUME=1`:
 2. compare every immutable and behavioral field;
 3. reject any mismatch;
 4. require the prior status to be incomplete or failed infrastructure;
-5. use Aider's supported `--cont` flow on the single matching full directory;
-6. never manufacture completed rows or rerun already completed task results;
-7. rerun stats and completeness checks after continuation.
+5. in sequential mode, use Aider's supported `--cont` flow on the single
+   matching full directory;
+6. in independent mode, reuse only samples whose official rows, histories, and
+   stats all validate;
+7. archive an incomplete independent sample under `incomplete-attempts/` and
+   recreate only that sample from the pinned tree and original seed;
+8. never manufacture completed rows or rerun already completed task results;
+9. rerun stats and completeness checks after continuation.
 
 Do not resume across changes to commits, model revision, Image, hardware,
 thinking behavior, edit format, tries, threads, sampling, or token limits.
@@ -1188,6 +1196,10 @@ No unit test may contact Modal, Hugging Face, GitHub, or allocate a GPU.
 - [ ] exception-only result rows fail admission;
 - [ ] raw Aider pass-rate fields are preserved without pass@k relabeling;
 - [ ] resume rejects identity/config mismatch;
+- [ ] same-App worker restart accepts its own committed runner identity while a
+      different App is rejected without explicit resume;
+- [ ] independent resume reuses complete samples, preserves an incomplete
+      sample, and restarts only that sample with the same seed;
 - [ ] artifact manifest uses relative safe paths and hashes;
 - [ ] receipts never contain credentials or bearer tokens.
 

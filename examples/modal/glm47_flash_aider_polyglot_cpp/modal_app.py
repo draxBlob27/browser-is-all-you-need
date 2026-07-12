@@ -53,7 +53,10 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     TRANSFORMERS_REPO_URL,
     ModalAiderConfig,
     ModalAiderError,
+    admit_completed_independent_sample,
     aider_benchmark_command,
+    archive_incomplete_independent_sample,
+    archive_local_run_before_resume,
     assert_resume_compatible,
     aider_stats_command,
     build_artifact_manifest,
@@ -77,6 +80,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     validate_independent_authoritative_stats,
     validate_model_snapshot,
     validate_remote_preflight,
+    validate_runner_invocation,
     validate_sglang_admission,
     validate_sglang_help,
     write_json,
@@ -580,6 +584,7 @@ def _run_independent_sample(
     *,
     sample_index: int,
     smoke: bool,
+    recover_existing: bool,
 ) -> tuple[Path, dict[str, Any]]:
     """Run one isolated Aider trajectory with up to two sequential tries."""
 
@@ -588,19 +593,54 @@ def _run_independent_sample(
         if smoke
         else protocol_root / f"sample-{sample_index:02d}"
     )
-    sample_root.mkdir(parents=True, exist_ok=True)
     source = Path("/aider/tmp.benchmarks/polyglot-benchmark")
     exercise_root = sample_root / "polyglot-benchmark"
-    if exercise_root.exists():
-        if not config.resume:
-            raise ModalAiderError(f"independent sample tree already exists: {exercise_root}")
-    else:
-        shutil.copytree(
-            source,
-            exercise_root,
-            symlinks=False,
-            ignore=shutil.ignore_patterns(".git", "__pycache__"),
+    settings_path = sample_root / "model-settings.yml"
+    settings = model_settings(config, sample_index=sample_index)
+    command = independent_sample_command(
+        config,
+        sample_index=sample_index,
+        smoke=smoke,
+        settings_path=str(settings_path),
+        exercises_dir=str(exercise_root),
+    )
+    if sample_root.exists():
+        if not recover_existing:
+            raise ModalAiderError(f"independent sample artifacts already exist: {sample_root}")
+        completed = admit_completed_independent_sample(
+            config,
+            sample_root,
+            sample_index=sample_index,
+            smoke=smoke,
         )
+        if completed is not None:
+            if exercise_root.exists():
+                shutil.rmtree(exercise_root)
+            return Path(completed["result_dir"]), {
+                **completed["admission"],
+                "stats": completed["stats"],
+                "argv": command,
+                "sample_index": sample_index,
+                "reused": True,
+            }
+        archived = archive_incomplete_independent_sample(
+            config,
+            sample_root,
+            sample_index=sample_index,
+            smoke=smoke,
+        )
+        results_volume.commit()
+        print(
+            f"resume_archived_incomplete_sample: {archived.relative_to(protocol_root)}",
+            flush=True,
+        )
+    sample_root.mkdir(parents=True, exist_ok=False)
+    shutil.copytree(
+        source,
+        exercise_root,
+        symlinks=False,
+        ignore=shutil.ignore_patterns(".git", "__pycache__"),
+    )
     write_json(
         sample_root / "fresh-tree.receipt.json",
         {
@@ -611,20 +651,9 @@ def _run_independent_sample(
             "copy_isolated_from_other_samples": True,
         },
     )
-    settings_path = sample_root / "model-settings.yml"
-    settings = model_settings(config, sample_index=sample_index)
-    if settings_path.exists() and settings_path.read_text(encoding="utf-8") != settings:
-        raise ModalAiderError(f"sample {sample_index:02d} settings changed on resume")
     settings_path.write_text(settings, encoding="utf-8")
     (sample_root / "model-settings.sha256").write_text(
         hashlib.sha256(settings.encode()).hexdigest() + "\n", encoding="utf-8"
-    )
-    command = independent_sample_command(
-        config,
-        sample_index=sample_index,
-        smoke=smoke,
-        settings_path=str(settings_path),
-        exercises_dir=str(exercise_root),
     )
     seed = sample_seed(config, sample_index)
     write_json(
@@ -660,24 +689,6 @@ def _run_independent_sample(
     result_name = f"{config.run_id}-{'smoke-' if smoke else ''}sample-{sample_index:02d}"
     matches = sorted(sample_root.glob(f"*--{result_name}"))
     stats_path = sample_root / "stats.json"
-    if config.resume and len(matches) == 1 and stats_path.is_file():
-        admission = validate_independent_aider_results(
-            matches[0],
-            expected_tasks=expected,
-            expected_task_ids=INDEPENDENT_SMOKE_TASKS if smoke else None,
-        )
-        stats = json.loads(stats_path.read_text(encoding="utf-8"))
-        validate_independent_authoritative_stats(
-            stats, result_dir=matches[0], expected_tasks=expected
-        )
-        shutil.rmtree(exercise_root)
-        return matches[0], {
-            **admission.as_mapping(),
-            "stats": stats,
-            "argv": command,
-            "sample_index": sample_index,
-            "reused": True,
-        }
     env = dict(os.environ)
     api_key = env.pop("SGLANG_API_KEY")
     for name in ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "HF_TOKEN"):
@@ -736,7 +747,11 @@ def _run_independent_sample(
 
 
 def _run_independent_protocol(
-    config: ModalAiderConfig, root: Path, *, smoke: bool
+    config: ModalAiderConfig,
+    root: Path,
+    *,
+    smoke: bool,
+    recover_existing: bool,
 ) -> dict[str, Any]:
     started = time.monotonic()
     protocol_root = root / INDEPENDENT_EVAL_MODE
@@ -744,7 +759,11 @@ def _run_independent_protocol(
     sample_runs: list[dict[str, Any]] = []
     for sample_index in range(1, config.samples_per_task + 1):
         result_dir, sample_run = _run_independent_sample(
-            config, protocol_root, sample_index=sample_index, smoke=smoke
+            config,
+            protocol_root,
+            sample_index=sample_index,
+            smoke=smoke,
+            recover_existing=recover_existing,
         )
         result_dirs[sample_index] = result_dir
         sample_runs.append(sample_run)
@@ -784,22 +803,25 @@ def run_aider_benchmark(
     api_key = os.environ["SGLANG_API_KEY"]
     root = Path("/results") / config.remote_run_path.lstrip("/")
     root.mkdir(parents=True, exist_ok=True)
-    prior_config = root / "config.redacted.json"
-    prior_receipt = root / "run_receipt.json"
-    if prior_config.is_file():
-        if not config.resume:
-            raise ModalAiderError("remote run id already has artifacts; use a fresh run id")
-        assert_resume_compatible(config, prior_config)
-        if prior_receipt.is_file():
-            prior_status = json.loads(prior_receipt.read_text(encoding="utf-8")).get("status")
-            if prior_status == "complete":
-                raise ModalAiderError("a completed full run cannot be resumed")
-    elif config.resume:
-        raise ModalAiderError("resume requested but the remote run has no prior config")
+    runner_identity = validate_runner_invocation(
+        config,
+        root,
+        modal_app_id=app_id,
+    )
+    if runner_identity["completed_run"]:
+        receipt = json.loads((root / "run_receipt.json").read_text(encoding="utf-8"))
+        return {
+            "status": receipt["status"],
+            "stats": receipt.get("independent_pass_at_1_and_8")
+            or receipt.get("authoritative_aider_stats"),
+            "receipt": receipt,
+        }
+    recover_existing = config.resume or runner_identity["same_app_restart"]
     started_utc = utc_now()
     total_started = time.monotonic()
     write_json(root / "plan.json", render_plan(config))
     write_json(root / "config.redacted.json", config.redacted_mapping())
+    write_json(root / "runner.identity.json", runner_identity)
     write_json(root / "model-cache.receipt.json", model_cache_receipt)
     settings = model_settings(config)
     Path(MODEL_SETTINGS_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -808,6 +830,8 @@ def run_aider_benchmark(
     (root / "model-settings.sha256").write_text(
         hashlib.sha256(settings.encode()).hexdigest() + "\n", encoding="utf-8"
     )
+    # Make same-App worker restart proof durable before benchmark execution.
+    results_volume.commit()
 
     aider_head = subprocess.check_output(
         ["git", "-C", "/aider", "rev-parse", "HEAD"], text=True
@@ -894,10 +918,20 @@ def run_aider_benchmark(
     final_admission = smoke_admission
     independent_report = None
     if config.eval_mode == INDEPENDENT_EVAL_MODE:
-        independent_report = _run_independent_protocol(config, root, smoke=True)
+        independent_report = _run_independent_protocol(
+            config,
+            root,
+            smoke=True,
+            recover_existing=recover_existing,
+        )
         results_volume.commit()
         if config.phase == "full":
-            independent_report = _run_independent_protocol(config, root, smoke=False)
+            independent_report = _run_independent_protocol(
+                config,
+                root,
+                smoke=False,
+                recover_existing=recover_existing,
+            )
             results_volume.commit()
     elif config.phase == "full":
         final_stats, final_admission = _run_aider_stage(config, root, "full")
@@ -1053,6 +1087,10 @@ async def _download_volume_files(
 def _download_run() -> Path:
     prefix = f"runs/{CONFIG.run_id}"
     local_root = CONFIG.local_run_path(ROOT)
+    if CONFIG.resume:
+        archived = archive_local_run_before_resume(local_root)
+        if archived is not None:
+            print(f"local_pre_resume_artifacts_archived: {archived}")
     local_root.mkdir(parents=True, exist_ok=True)
     downloaded = asyncio.run(_download_volume_files(results_volume, prefix, local_root))
     if not downloaded:

@@ -392,6 +392,18 @@ Treat Aider's misleading `num_exhausted_context_windows` counter as an
 output-limit model diagnostic: a length-finished response can still apply an
 edit and pass tests. It must not independently turn complete non-exception rows
 with C++ test invocations into an infrastructure failure.
+Commit an App-bound `runner.identity.json` before Aider work so Modal worker
+re-entry accepts only the same App and immutable config. Explicit independent
+resume must reuse only validated complete samples, preserve an interrupted
+sample under `incomplete-attempts/`, and restart only that sample from the
+pinned tree and original seed. Archive the previous local failure download
+before pulling the resumed exact artifact tree.
+Commit an App-bound `runner.identity.json` before Aider work so Modal worker
+re-entry accepts only the same App and immutable config. For explicit
+independent resume, reuse only fully validated sample rows plus stats, preserve
+an interrupted sample under `incomplete-attempts/`, and restart that one
+sample from the pinned tree with its original seed. Archive the previous local
+failure download before pulling the resumed exact artifact tree.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
