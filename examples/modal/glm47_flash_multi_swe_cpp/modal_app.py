@@ -34,7 +34,6 @@ from w8_biayn.integrations.slime_multi_swe_cpp import (  # noqa: E402
     build_prompt,
     load_multi_swe_rows,
     normalized_task,
-    official_instance_script,
     prepare_repo_harness_revisions,
     prepare_simdjson_offline_dependencies,
     repo_harness_for_row,
@@ -60,9 +59,11 @@ from w8_biayn.modal_multi_swe_cpp import (  # noqa: E402
     ModalMultiSweConfig,
     ModalMultiSweError,
     SIMDJSON_MODAL_MOUNT_LAYOUT,
+    SIMDJSON_MODAL_MOUNT_PATH,
     SIMDJSON_MODAL_MOUNT_RELATIVE,
     assert_resume_compatible,
     build_artifact_manifest,
+    modal_sandbox_instance_script,
     resume_identity_mismatches,
     response_metadata,
     utc_now,
@@ -303,7 +304,7 @@ def prepare_dataset(payload: dict[str, Any], lock: dict[str, Any]) -> dict[str, 
         modal_sandbox_dependencies = {
             "layout": SIMDJSON_MODAL_MOUNT_LAYOUT,
             "sub_path": SIMDJSON_MODAL_MOUNT_RELATIVE,
-            "mount_path": "/home/simdjson/dependencies",
+            "mount_path": SIMDJSON_MODAL_MOUNT_PATH,
             "simdjson_bundle_sha256": bundle_sha256,
             "read_only": True,
         }
@@ -479,9 +480,7 @@ def _sandbox_volumes(task: dict[str, Any]) -> dict[str, Any]:
         return {}
     prefix = "revisions/" + CONFIG.dataset_revision + "/prepared/" + SIMDJSON_MODAL_MOUNT_RELATIVE
     return {
-        "/home/simdjson/dependencies": data_volume.with_mount_options(
-            read_only=True, sub_path=prefix
-        )
+        SIMDJSON_MODAL_MOUNT_PATH: data_volume.with_mount_options(read_only=True, sub_path=prefix)
     }
 
 
@@ -489,7 +488,11 @@ def grade_patch(task: dict[str, Any], patch: str) -> dict[str, Any]:
     """Create a fresh secret-free network-blocked Sandbox for one patch."""
 
     harness = REPO_HARNESSES[(task["org"].lower(), task["repo"].lower())]
-    script = official_instance_script(task, harness, timeout_s=CONFIG.test_timeout_seconds)
+    script = modal_sandbox_instance_script(
+        task,
+        harness,
+        timeout_s=CONFIG.test_timeout_seconds,
+    )
     sandbox = None
     started = time.monotonic()
     try:

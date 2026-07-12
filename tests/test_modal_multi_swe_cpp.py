@@ -84,6 +84,20 @@ def task() -> dict[str, object]:
     }
 
 
+def simdjson_task() -> dict[str, object]:
+    row = task()
+    row.update(
+        {
+            "instance_id": "simdjson__simdjson-958",
+            "org": "simdjson",
+            "repo": "simdjson",
+            "repo_full_name": "simdjson/simdjson",
+            "offline_dependency_bundle_sha256": "d" * 64,
+        }
+    )
+    return row
+
+
 def valid_patch() -> str:
     return """diff --git a/include/fmt/core.h b/include/fmt/core.h
 --- a/include/fmt/core.h
@@ -128,6 +142,11 @@ def test_config_plan_is_deterministic_redacted_and_no_spend(tmp_path: Path) -> N
     assert plan["action"] == "no paid resources"
     assert plan["grader"]["block_network"] is True
     assert plan["grader"]["secrets"] == []
+    assert plan["grader"]["simdjson_dependency_mount"] == {
+        "layout": "detached-parent-symlinks-v2",
+        "path": "/mnt/w8-biayn-simdjson-dependencies-v2",
+        "read_only": True,
+    }
     assert plan["blocking_oracle"] is False
     rendered = json.dumps(plan)
     for secret in ("modal-id-sentinel", "modal-secret-sentinel", "hf-secret-sentinel"):
@@ -252,9 +271,46 @@ def test_simdjson_mount_layout_is_bound_only_to_affected_oracle_keys(
     modal_contract.oracle_cache_key(cfg, row, lock_row)
     assert "offline_dependency_mount_layout" not in identities[-1]
 
-    row["offline_dependency_bundle_sha256"] = "d" * 64
-    modal_contract.oracle_cache_key(cfg, row, lock_row)
-    assert identities[-1]["offline_dependency_mount_layout"] == "single-parent-v1"
+    affected = simdjson_task()
+    modal_contract.oracle_cache_key(cfg, affected, lock_row)
+    assert identities[-1]["offline_dependency_mount_layout"] == "detached-parent-symlinks-v2"
+
+
+def test_simdjson_modal_script_wires_fresh_mount_after_patch_preflight() -> None:
+    row = simdjson_task()
+    harness = modal_contract.REPO_HARNESSES[("simdjson", "simdjson")]
+    script = modal_contract.modal_sandbox_instance_script(row, harness, timeout_s=1200)
+
+    assert "mount_root=/mnt/w8-biayn-simdjson-dependencies-v2" in script
+    assert "rm -rf /home/simdjson/dependencies/cxxopts" in script
+    assert 'ln -s "$mount_root/cxxopts" /home/simdjson/dependencies/cxxopts' in script
+    assert (
+        'ln -s "$mount_root/.cache/simdjson-data" /home/simdjson/dependencies/.cache/simdjson-data'
+    ) in script
+    assert script.index('git -C "$repo_dir" apply --check') < script.index("mount_root=/mnt/")
+    assert script.index("mount_root=/mnt/") < script.index("timeout 1200s bash -lc")
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+
+    regular_script = modal_contract.modal_sandbox_instance_script(
+        task(),
+        modal_contract.REPO_HARNESSES[("fmtlib", "fmt")],
+        timeout_s=1200,
+    )
+    assert regular_script == modal_contract.official_instance_script(
+        task(),
+        modal_contract.REPO_HARNESSES[("fmtlib", "fmt")],
+        timeout_s=1200,
+    )
+    assert "w8-biayn-simdjson-dependencies" not in regular_script
+
+    missing_bundle = simdjson_task()
+    missing_bundle.pop("offline_dependency_bundle_sha256")
+    with pytest.raises(ModalMultiSweError, match="pinned dependency bundle"):
+        modal_contract.modal_sandbox_instance_script(
+            missing_bundle,
+            harness,
+            timeout_s=1200,
+        )
 
 
 def test_request_is_secret_free_and_uses_one_prompt() -> None:
@@ -420,15 +476,15 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     subprocess.run(["bash", "-n", str(RUN_SH)], check=True)
 
 
-def test_modal_152_simdjson_uses_one_read_only_parent_volume_mount() -> None:
+def test_modal_152_simdjson_uses_one_fresh_read_only_parent_volume_mount() -> None:
     app = MODAL_APP.read_text(encoding="utf-8")
     mount_section = app.split("def _sandbox_volumes", 1)[1].split("def grade_patch", 1)[0]
 
     assert mount_section.count("data_volume.with_mount_options") == 1
-    assert '"/home/simdjson/dependencies"' in mount_section
+    assert "SIMDJSON_MODAL_MOUNT_PATH: data_volume.with_mount_options" in mount_section
     assert "read_only=True, sub_path=prefix" in mount_section
-    assert '"/home/simdjson/dependencies/cxxopts"' not in mount_section
-    assert '"/home/simdjson/dependencies/.cache/simdjson-data"' not in mount_section
+    assert "/home/simdjson/dependencies" not in mount_section
+    assert 'SIMDJSON_MODAL_MOUNT_PATH = "/mnt/' in PURE.read_text(encoding="utf-8")
     assert 'mount_root / "cxxopts"' in app
     assert 'mount_root / ".cache" / "simdjson-data"' in app
 

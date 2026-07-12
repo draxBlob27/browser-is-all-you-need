@@ -576,11 +576,15 @@ uses one secret-free network-blocked Modal Sandbox per patch, and releases the
 one strict H100!:4 SGLang replica before artifact transfer. Only
 message.content enters the existing strict parser. Sandboxes must receive no
 credentials/model/results Volumes, must stage affected simdjson dependencies
-under one checksum-pinned parent and mount that data-Volume subpath once
-read-only, and must terminate with wait plus detach in finally. Modal SDK 1.5.2
-rejects mounting the same Volume object at multiple Sandbox paths. Source-only
-resume migration is allowed solely before any model/server artifact exists;
-passing oracle reuse remains exact-cache-key only and is audit-recorded.
+under one checksum-pinned parent, mount that data-Volume subpath once read-only
+at a fresh /mnt path, and must terminate with wait plus detach in finally.
+Modal SDK 1.5.2 rejects both mounting the same Volume object at multiple
+Sandbox paths and mounting over the official image's non-empty dependency
+directory. After patch preflight, trusted shell setup may replace only the two
+expected dependency locations with symlinks into the detached mount before
+tests. Source-only resume migration is allowed solely before any model/server
+artifact exists; passing oracle reuse remains exact-cache-key only and is
+audit-recorded.
 
 Source and offline tests are implemented; paid validation remains pending.
 Never print or document a score until 50 responses/records, passing oracle

@@ -95,10 +95,14 @@ The candidate is written to /home/fix.patch through Modal's filesystem API.
 The shared official-image shell verifies the base ref and trusted test.patch,
 applies the candidate, runs the prepared build/tests, and requires positive
 CTest discovery. The simdjson dependency trees are checksum-pinned and staged
-beneath one dedicated parent that is mounted once, read-only, from the data
-Volume. This single-parent layout is required because Modal SDK 1.5.2 rejects
-mounting the same Volume object at multiple Sandbox paths. Every Sandbox is
-terminated with wait and detached in finally.
+beneath one dedicated parent that is mounted once, read-only, at the fresh
+/mnt/w8-biayn-simdjson-dependencies-v2 path. The trusted grader shell runs
+after patch preflight and replaces only the expected cxxopts and
+.cache/simdjson-data locations with symlinks into that mount before the test
+body. This detached-parent layout is required because Modal SDK 1.5.2 rejects
+both mounting the same Volume object at multiple paths and mounting over the
+official image's already non-empty /home/simdjson/dependencies directory.
+Every Sandbox is terminated with wait and detached in finally.
 
 Strict model output is exactly one fenced diff and nothing else. Reasoning is
 kept separate by SGLang; only message.content enters the parser. Recovery is

@@ -576,8 +576,11 @@ proof, artifacts reconcile byte-for-byte, every Sandbox terminated/detached,
 and the App receipt says modal_app_stopped: true. Label the result repo-owned,
 correctness-only, and modal-sandbox; never call it an official leaderboard
 score or report PIE speed metrics. Stage the two simdjson dependency trees
-beneath one checksum-pinned read-only parent mount; Modal SDK 1.5.2 forbids
-mounting the same Volume at two Sandbox paths. An interrupted oracle-only run
-may migrate source commit/file hashes for an infrastructure fix and reuse only
-records with exact oracle cache keys. Any persisted model-cache, SGLang,
-admission, smoke, full, or final artifact makes source identity strict again.
+beneath one checksum-pinned read-only parent mounted at a fresh /mnt path;
+Modal SDK 1.5.2 forbids both mounting the same Volume at two Sandbox paths and
+mounting over the official image's non-empty dependency directory. After patch
+preflight, the trusted grader links only the two expected dependency subtrees
+into the checkout before tests. An interrupted oracle-only run may migrate
+source commit/file hashes for an infrastructure fix and reuse only records
+with exact oracle cache keys. Any persisted model-cache, SGLang, admission,
+smoke, full, or final artifact makes source identity strict again.

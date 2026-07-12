@@ -22,6 +22,7 @@ from w8_biayn.integrations.slime_multi_swe_cpp import (
     BENCHMARK as MULTI_SWE_BENCHMARK,
     ORACLE_PROTOCOL_VERSION,
     REPO_HARNESSES,
+    SIMDJSON_OFFLINE_INSTANCE_IDS,
     aggregate_multi_swe_records,
     classify_official_test_result,
     load_multi_swe_rows,
@@ -72,7 +73,8 @@ SOURCE_IDENTITY_PATHS = (
     "examples/modal/glm47_flash_multi_swe_cpp/modal_app.py",
     "examples/modal/glm47_flash_multi_swe_cpp/run.sh",
 )
-SIMDJSON_MODAL_MOUNT_LAYOUT = "single-parent-v1"
+SIMDJSON_MODAL_MOUNT_LAYOUT = "detached-parent-symlinks-v2"
+SIMDJSON_MODAL_MOUNT_PATH = "/mnt/w8-biayn-simdjson-dependencies-v2"
 SIMDJSON_MODAL_MOUNT_RELATIVE = "modal-sandbox-dependencies"
 ORACLE_SOURCE_MIGRATION_FIELDS = frozenset({"source_commit", "source_file_hashes"})
 
@@ -646,10 +648,52 @@ def classify_response(
     }
 
 
+def modal_sandbox_instance_script(
+    task: Mapping[str, Any],
+    harness: Any,
+    *,
+    timeout_s: int,
+) -> str:
+    """Build the official script plus Modal-only read-only dependency wiring."""
+
+    script = official_instance_script(dict(task), harness, timeout_s=timeout_s)
+    if str(task.get("instance_id") or "") not in SIMDJSON_OFFLINE_INSTANCE_IDS:
+        return script
+    if not str(task.get("offline_dependency_bundle_sha256") or "").strip():
+        raise ModalMultiSweError("simdjson Modal grader requires its pinned dependency bundle")
+    marker = f"timeout {timeout_s}s bash -lc "
+    if script.count(marker) != 1:
+        raise ModalMultiSweError("official grader timeout marker changed")
+    setup = f"""
+mount_root={SIMDJSON_MODAL_MOUNT_PATH}
+if [ ! -d "$mount_root/cxxopts" ] || [ ! -d "$mount_root/.cache/simdjson-data" ]; then
+  echo W8_OFFICIAL_IMAGE_CONTRACT_ERROR
+  exit 83
+fi
+if [ -L /home/simdjson/dependencies ] || [ -L /home/simdjson/dependencies/.cache ]; then
+  echo W8_OFFICIAL_IMAGE_CONTRACT_ERROR
+  exit 83
+fi
+rm -rf /home/simdjson/dependencies/cxxopts
+rm -rf /home/simdjson/dependencies/.cache/simdjson-data
+mkdir -p /home/simdjson/dependencies/.cache
+ln -s "$mount_root/cxxopts" /home/simdjson/dependencies/cxxopts
+ln -s "$mount_root/.cache/simdjson-data" /home/simdjson/dependencies/.cache/simdjson-data
+test -L /home/simdjson/dependencies/cxxopts
+test -L /home/simdjson/dependencies/.cache/simdjson-data
+""".strip()
+    return script.replace(marker, setup + "\n" + marker)
+
+
 def oracle_cache_key(
     config: ModalMultiSweConfig, task: Mapping[str, Any], lock_row: Mapping[str, Any]
 ) -> str:
     harness = REPO_HARNESSES[(str(task["org"]).lower(), str(task["repo"]).lower())]
+    script = modal_sandbox_instance_script(
+        task,
+        harness,
+        timeout_s=config.test_timeout_seconds,
+    )
     identity = {
         "backend": "modal-sandbox-v1",
         "protocol_version": ORACLE_PROTOCOL_VERSION,
@@ -661,17 +705,13 @@ def oracle_cache_key(
         "platform": "linux/amd64",
         "repo_harness_revision": task.get("repo_harness_revision"),
         "offline_dependency_bundle_sha256": task.get("offline_dependency_bundle_sha256"),
-        "script_sha256": hashlib.sha256(
-            official_instance_script(
-                dict(task), harness, timeout_s=config.test_timeout_seconds
-            ).encode()
-        ).hexdigest(),
+        "script_sha256": hashlib.sha256(script.encode()).hexdigest(),
         "cpu": config.sandbox_cpu,
         "memory_mib": config.sandbox_memory_mib,
         "timeout_seconds": config.test_timeout_seconds,
         "network": "blocked",
     }
-    if task.get("offline_dependency_bundle_sha256"):
+    if str(task.get("instance_id") or "") in SIMDJSON_OFFLINE_INSTANCE_IDS:
         identity["offline_dependency_mount_layout"] = SIMDJSON_MODAL_MOUNT_LAYOUT
     return sha256_json(identity)
 
@@ -731,6 +771,11 @@ def render_plan(
             "exec_timeout_seconds": config.test_timeout_seconds,
             "concurrency": config.grader_concurrency,
             "secrets": [],
+            "simdjson_dependency_mount": {
+                "layout": SIMDJSON_MODAL_MOUNT_LAYOUT,
+                "path": SIMDJSON_MODAL_MOUNT_PATH,
+                "read_only": True,
+            },
         },
         "teardown_command": modal_stop_command(config),
     }

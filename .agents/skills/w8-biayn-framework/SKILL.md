@@ -648,11 +648,16 @@ regular-file-only bounded artifact download; explicit App stop and
 control-plane verification before any score.
 
 Under Modal SDK 1.5.2, stage the affected simdjson dependency trees beneath one
-checksum-pinned parent and mount that one data-Volume subpath read-only; the SDK
-rejects mounting the same Volume object at multiple Sandbox paths. Permit
-source commit/file-hash migration only for incomplete oracle-only runs with no
-model/server artifacts, persist the migration receipt, and reuse passing oracle
-records only by exact cache key. All later resume identity stays strict.
+checksum-pinned parent and mount that one data-Volume subpath read-only at a
+fresh /mnt path; the SDK rejects both mounting the same Volume object at
+multiple Sandbox paths and mounting over the official image's non-empty
+dependency directory. After patch preflight, trusted shell setup may replace
+only the expected cxxopts and simdjson-data locations with symlinks into the
+detached mount. Bind the setup script and layout version into the oracle cache
+key. Permit source commit/file-hash migration only for incomplete oracle-only
+runs with no model/server artifacts, persist the migration receipt, and reuse
+passing oracle records only by exact cache key. All later resume identity stays
+strict.
 
 The source/no-spend/offline-test path is implemented, while paid validation is
 pending. Require the paid ladder and a complete stopped-App receipt before

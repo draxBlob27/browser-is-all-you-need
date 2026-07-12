@@ -584,8 +584,13 @@ For every oracle or model patch:
 7. Do not attach model or results Volumes.
 8. For affected simdjson tasks only, stage the two exact checksum-pinned
    dependency trees beneath one dedicated parent and attach that single data
-   Volume subpath read-only at /home/simdjson/dependencies. Modal SDK 1.5.2
-   rejects mounting the same Volume object at multiple Sandbox paths.
+   Volume subpath read-only at a fresh /mnt path. Modal SDK 1.5.2 rejects both
+   mounting the same Volume object at multiple Sandbox paths and mounting over
+   the official image's non-empty /home/simdjson/dependencies directory.
+   After patch preflight, trusted shell setup must replace only the expected
+   cxxopts and .cache/simdjson-data locations with symlinks into the detached
+   mount before running the test body. Fingerprint the setup script and mount
+   layout in affected oracle and grader cache keys.
 9. Write the candidate patch to `/home/fix.patch` through the Sandbox
    filesystem API.
 10. Execute the shared official-instance shell script with an exec timeout.
