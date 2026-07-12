@@ -78,10 +78,58 @@ SIMDJSON_MODAL_MOUNT_PATH = "/mnt/w8-biayn-simdjson-dependencies-v2"
 SIMDJSON_MODAL_MOUNT_RELATIVE = "modal-sandbox-dependencies"
 MODAL_PR958_OUTPUT_CAPTURE = "split-stream-tail-full-ctest-v1"
 ORACLE_SOURCE_MIGRATION_FIELDS = frozenset({"source_commit", "source_file_hashes"})
+SOURCE_MIGRATION_BLOCKING_ARTIFACTS = (
+    "admission.response.json",
+    "server.receipt.json",
+    "server.runtime.json",
+    "run_receipt.json",
+    "smoke",
+    "full",
+)
+RETRYABLE_SGLANG_HTTP_STATUSES = frozenset({404, 408, 409, 425, 429, 500, 502, 503, 504})
+SGLANG_MODELS_PROBE_TIMEOUT_SECONDS = 120
+SGLANG_CHAT_PROBE_TIMEOUT_SECONDS = 900
+SGLANG_ADMISSION_RETRY_INTERVAL_SECONDS = 5
 
 
 class ModalMultiSweError(RuntimeError):
     """A benchmark configuration, admission, or artifact contract failed."""
+
+
+def pre_benchmark_source_migration_allowed(root: str | Path) -> bool:
+    """Allow source repair only before successful admission or benchmark work."""
+
+    path = Path(root)
+    return not any((path / relative).exists() for relative in SOURCE_MIGRATION_BLOCKING_ARTIFACTS)
+
+
+def summarize_http_error(
+    *,
+    status: int,
+    captured_body: bytes,
+    body_truncated: bool,
+) -> dict[str, Any]:
+    """Describe an HTTP failure without retaining response text."""
+
+    json_keys: list[str] = []
+    try:
+        payload = json.loads(captured_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = None
+    if isinstance(payload, dict):
+        json_keys = sorted(str(key) for key in payload)
+    return {
+        "error_type": "HTTPError",
+        "status": status,
+        "captured_body_bytes": len(captured_body),
+        "captured_body_sha256": hashlib.sha256(captured_body).hexdigest(),
+        "body_truncated": body_truncated,
+        "json_keys": json_keys,
+    }
+
+
+def sglang_http_status_is_retryable(status: int) -> bool:
+    return status in RETRYABLE_SGLANG_HTTP_STATUSES
 
 
 def _required(env: Mapping[str, str], name: str) -> str:
@@ -817,6 +865,15 @@ def render_plan(
             "<redacted>" if item == "$SGLANG_API_KEY" else item
             for item in sglang_server_command(config, api_key="$SGLANG_API_KEY")
         ],
+        "server_admission": {
+            "zero_to_one_retry": True,
+            "health_timeout_seconds": config.startup_timeout_seconds,
+            "models_timeout_seconds": SGLANG_MODELS_PROBE_TIMEOUT_SECONDS,
+            "chat_timeout_seconds": min(config.max_run_seconds, SGLANG_CHAT_PROBE_TIMEOUT_SECONDS),
+            "retry_interval_seconds": SGLANG_ADMISSION_RETRY_INTERVAL_SECONDS,
+            "retryable_http_statuses": sorted(RETRYABLE_SGLANG_HTTP_STATUSES),
+            "http_error_body_policy": "byte-count+sha256+json-keys-only",
+        },
         "grader": {
             "backend": "modal-sandbox",
             "block_network": True,

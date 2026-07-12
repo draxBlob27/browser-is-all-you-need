@@ -113,6 +113,14 @@ Strict model output is exactly one fenced diff and nothing else. Reasoning is
 kept separate by SGLang; only message.content enters the parser. Recovery is
 diagnostic only.
 
+The SGLang Server keeps min_containers=0. Modal rejects the first request with
+HTTP 503 while zero-to-one scaling starts, so the launcher polls the externally
+routed /health endpoint through the 3,600-second startup ceiling before
+checking /v1/models and authenticated chat admission. Models polling is bounded
+to 120 seconds and chat admission to 900 seconds, with five-second retries for
+the checked-in transient HTTP status set. Failure artifacts retain only status,
+body byte count/SHA-256/truncation, and JSON keys—never response text.
+
 ## Artifacts and resume
 
 Artifacts live under:
@@ -126,14 +134,15 @@ only exact FileEntryType.FILE entries, validates all paths, uses 16 concurrent
 reads, and reconciles bytes.
 
 Resume is normally only for an incomplete exact-identity run. One narrow
-recovery exception exists for a run that has only oracle artifacts and has not
-persisted any model-cache, SGLang, admission, smoke, full, or final receipt:
-source commit and file hashes may migrate so an infrastructure fix can continue
-the same paid oracle run. The migration is audit-recorded, and passing oracle
-records still reuse only by their exact cache keys. Once model/server work has
-begun, source identity is strict again. Saved responses and grader records
-always require their exact identities and cache keys. Completed runs are
-immutable. A fresh run ID remains the normal path.
+recovery exception exists before successful server admission or benchmark
+work: source commit and file hashes may migrate when the remote tree contains
+only preparation proof, an exact model-cache receipt, and failure artifacts.
+The migration is audit-recorded, passing oracle records still reuse only by
+their exact cache keys, and model cache is revalidated against the exact
+revision. Any admission.response, server receipt/runtime, smoke/full directory,
+or final receipt restores strict source identity. Saved responses and grader
+records always require their exact identities and cache keys. Completed runs
+are immutable. A fresh run ID remains the normal path.
 
 ## Teardown and failure recovery
 

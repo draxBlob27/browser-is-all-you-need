@@ -1088,3 +1088,9 @@ exact-cache-key only and any persisted model/server artifact restores strict
 source identity. The grader parses positive CTest discovery from complete
 in-memory stdout/stderr before retaining bounded tails from both streams, so
 large non-fatal compiler stderr cannot erase the numeric test proof.
+With min_containers=0, external health polling absorbs Modal Server zero-to-one
+HTTP 503 responses before models/chat admission. Retry receipts contain only
+endpoint/status/count/hash/key metadata, never HTTP response text. Source-only
+repair may continue a preparation or admission-failure run with an exact
+model-cache receipt, but successful admission or any benchmark-stage artifact
+restores strict identity.

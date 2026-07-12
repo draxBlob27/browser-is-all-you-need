@@ -147,6 +147,15 @@ def test_config_plan_is_deterministic_redacted_and_no_spend(tmp_path: Path) -> N
         "path": "/mnt/w8-biayn-simdjson-dependencies-v2",
         "read_only": True,
     }
+    assert plan["server_admission"] == {
+        "zero_to_one_retry": True,
+        "health_timeout_seconds": 3600,
+        "models_timeout_seconds": 120,
+        "chat_timeout_seconds": 900,
+        "retry_interval_seconds": 5,
+        "retryable_http_statuses": [404, 408, 409, 425, 429, 500, 502, 503, 504],
+        "http_error_body_policy": "byte-count+sha256+json-keys-only",
+    }
     assert plan["blocking_oracle"] is False
     rendered = json.dumps(plan)
     for secret in ("modal-id-sentinel", "modal-secret-sentinel", "hf-secret-sentinel"):
@@ -210,7 +219,7 @@ def test_resume_identity_survives_json_round_trip(tmp_path: Path) -> None:
     modal_contract.assert_resume_compatible(resumed, prior)
 
 
-def test_oracle_only_resume_allows_only_source_identity_migration(tmp_path: Path) -> None:
+def test_pre_benchmark_resume_allows_only_source_identity_migration(tmp_path: Path) -> None:
     resumed = config(tmp_path, W8_MODAL_MULTI_SWE_RESUME="1")
     prior_mapping = resumed.redacted_mapping()
     prior_mapping["source_commit"] = "0" * 40
@@ -234,6 +243,41 @@ def test_oracle_only_resume_allows_only_source_identity_migration(tmp_path: Path
             prior,
             allow_oracle_source_migration=True,
         )
+
+
+def test_pre_benchmark_source_migration_allows_only_failure_artifacts(tmp_path: Path) -> None:
+    root = tmp_path / "remote-run"
+    root.mkdir()
+    for name in (
+        "model-cache.receipt.json",
+        "admission.failure.json",
+        "server.failure.json",
+    ):
+        (root / name).write_text("{}\n", encoding="utf-8")
+    assert modal_contract.pre_benchmark_source_migration_allowed(root) is True
+
+    for name in (
+        "admission.response.json",
+        "server.receipt.json",
+        "server.runtime.json",
+        "run_receipt.json",
+        "smoke",
+        "full",
+    ):
+        candidate = tmp_path / name.replace("/", "-")
+        candidate.mkdir()
+        for failure_name in (
+            "model-cache.receipt.json",
+            "admission.failure.json",
+            "server.failure.json",
+        ):
+            (candidate / failure_name).write_text("{}\n", encoding="utf-8")
+        target = candidate / name
+        if "." in Path(name).name:
+            target.write_text("{}\n", encoding="utf-8")
+        else:
+            target.mkdir()
+        assert modal_contract.pre_benchmark_source_migration_allowed(candidate) is False
 
 
 def test_local_oracle_only_plan_accepts_source_migration_without_other_artifacts(
@@ -372,6 +416,25 @@ def test_modal_output_capture_parses_full_ctest_before_bounding_streams() -> Non
     assert no_tests["no_tests_collected"] is True
 
 
+def test_http_error_diagnostics_never_retain_body_text() -> None:
+    secret = "generated-reasoning-sentinel"
+    body = json.dumps({"error": secret, "detail": "not persisted"}).encode()
+    diagnostics = modal_contract.summarize_http_error(
+        status=503,
+        captured_body=body,
+        body_truncated=False,
+    )
+
+    assert diagnostics["status"] == 503
+    assert diagnostics["json_keys"] == ["detail", "error"]
+    assert diagnostics["captured_body_bytes"] == len(body)
+    assert len(diagnostics["captured_body_sha256"]) == 64
+    assert secret not in json.dumps(diagnostics)
+    assert "not persisted" not in json.dumps(diagnostics)
+    assert modal_contract.sglang_http_status_is_retryable(503) is True
+    assert modal_contract.sglang_http_status_is_retryable(401) is False
+
+
 def test_shared_server_command_keeps_glm_and_auth_contract(tmp_path: Path) -> None:
     argv = sglang_server_command(config(tmp_path), api_key="bearer-sentinel")
 
@@ -508,8 +571,16 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     assert "summarize_modal_execution_output(" in app
     grader_section = app.split("def grade_patch", 1)[1].split("def grade_with_retry", 1)[0]
     assert "raw[-65536:]" not in grader_section
-    assert "allow_oracle_source_migration=oracle_only" in app
+    assert "allow_oracle_source_migration=pre_benchmark_only" in app
     assert "model-cache.receipt.json" in app
+    assert "sglang_http_status_is_retryable(" in app
+    assert app.index("_, health_probe = _wait_for_json(") < app.index(
+        "models_response, models_probe = _wait_for_json("
+    )
+    assert app.index("models_response, models_probe = _wait_for_json(") < app.index(
+        "admission_response, admission_request_probe = _wait_for_json("
+    )
+    assert "captured = exc.read(65_537)" in app
     assert "generate-lock" in pure
     assert "docker" not in run
     assert "min_containers=0" in app and "max_containers=1" in app

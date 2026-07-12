@@ -589,6 +589,13 @@ before persistence truncation, store the numeric count and per-stream
 hashes/sizes, and retain bounded tails from both streams. Large non-fatal
 compiler stderr must not hide the stdout test summary or weaken the
 positive-test gate.
+Keep the Server at min_containers=0 and poll external health through Modal's
+zero-to-one HTTP 503 window before models/chat admission. Bound every stage,
+retry only the checked-in transient statuses, and persist HTTP status/body
+size/hash/truncation/JSON keys without body text. Source-only migration may
+cross preparation and admission-failure artifacts with exact oracle/model
+identities, but successful admission or any benchmark-stage artifact restores
+strict identity.
 
 Source and offline tests are implemented; paid validation remains pending.
 Never print or document a score until 50 responses/records, passing oracle

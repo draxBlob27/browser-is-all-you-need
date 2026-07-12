@@ -587,3 +587,9 @@ smoke, full, or final artifact makes source identity strict again. Parse CTest
 discovery from complete in-memory stdout/stderr before truncation, persist the
 numeric count plus per-stream hashes/sizes, and retain bounded tails from both
 streams; compiler-warning volume must never erase positive test evidence.
+Keep min_containers=0 but poll the externally routed health endpoint through
+Modal's zero-to-one HTTP 503 window before models/chat admission. Persist only
+status/count/body-size/hash/JSON-key diagnostics, never HTTP body text. Permit
+source-only repair through preparation and admission failures—including an
+exact model-cache receipt—but block it after successful admission or any
+smoke/full/final artifact.

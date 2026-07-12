@@ -662,6 +662,13 @@ truncation, persist the numeric count and per-stream hashes/sizes, and retain
 bounded tails from both streams. Large compiler-warning stderr must not hide
 positive stdout test evidence; bind the PR 958 capture strategy into its cache
 key.
+Keep min_containers=0 and poll the externally routed health endpoint through
+Modal Server's zero-to-one HTTP 503 window before models/chat admission. Use
+bounded stage timeouts and the checked-in transient status set. Failure
+diagnostics may retain endpoint/status/count/body-size/hash/truncation/JSON
+keys, never HTTP body text. Permit source-only migration through preparation
+and admission failures with exact oracle/model identities; block it after
+successful admission or any benchmark-stage artifact.
 
 The source/no-spend/offline-test path is implemented, while paid validation is
 pending. Require the paid ladder and a complete stopped-App receipt before

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import modal
@@ -58,14 +59,20 @@ from w8_biayn.modal_multi_swe_cpp import (  # noqa: E402
     DATASET_REPO,
     ModalMultiSweConfig,
     ModalMultiSweError,
+    SGLANG_ADMISSION_RETRY_INTERVAL_SECONDS,
+    SGLANG_CHAT_PROBE_TIMEOUT_SECONDS,
+    SGLANG_MODELS_PROBE_TIMEOUT_SECONDS,
     SIMDJSON_MODAL_MOUNT_LAYOUT,
     SIMDJSON_MODAL_MOUNT_PATH,
     SIMDJSON_MODAL_MOUNT_RELATIVE,
     assert_resume_compatible,
     build_artifact_manifest,
     modal_sandbox_instance_script,
+    pre_benchmark_source_migration_allowed,
     resume_identity_mismatches,
     response_metadata,
+    sglang_http_status_is_retryable,
+    summarize_http_error,
     summarize_modal_execution_output,
     utc_now,
     validate_image_lock,
@@ -81,6 +88,14 @@ def _config(payload: dict[str, Any]) -> ModalMultiSweConfig:
     values["modal_token_secret"] = "<not-attached>"
     values["hf_token"] = "<downloader-only>" if payload.get("hf_token_present") else ""
     return ModalMultiSweConfig(**values)
+
+
+class AdmissionRequestError(ModalMultiSweError):
+    """A bounded external server probe failed with safe diagnostics."""
+
+    def __init__(self, message: str, diagnostics: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 if IS_LOCAL:
@@ -149,24 +164,13 @@ def preflight_remote_run(payload: dict[str, Any]) -> dict[str, Any]:
         raise ModalMultiSweError("remote run id already has artifacts")
     if not present:
         return {}
-    post_oracle_paths = (
-        "model-cache.receipt.json",
-        "server.failure.json",
-        "server.receipt.json",
-        "server.runtime.json",
-        "admission.failure.json",
-        "admission.response.json",
-        "run_receipt.json",
-        "smoke",
-        "full",
-    )
-    oracle_only = not any((root / relative).exists() for relative in post_oracle_paths)
+    pre_benchmark_only = pre_benchmark_source_migration_allowed(root)
     prior_config = root / "config.redacted.json"
     mismatches = resume_identity_mismatches(config, prior_config)
     assert_resume_compatible(
         config,
         prior_config,
-        allow_oracle_source_migration=oracle_only,
+        allow_oracle_source_migration=pre_benchmark_only,
     )
     receipt = root / "run_receipt.json"
     if receipt.is_file() and json.loads(receipt.read_text()).get("status") in {
@@ -179,11 +183,12 @@ def preflight_remote_run(payload: dict[str, Any]) -> dict[str, Any]:
         prior = json.loads(prior_config.read_text(encoding="utf-8"))
         state["oracle_source_migration"] = {
             "schema_version": 1,
-            "kind": "oracle-only-source-migration",
+            "kind": "pre-benchmark-source-migration",
             "mismatched_fields": mismatches,
             "prior_source_commit": prior.get("source_commit"),
             "current_source_commit": config.source_commit,
             "exact_oracle_cache_keys_required": True,
+            "model_cache_identity_must_match": True,
             "migrated_at_utc": utc_now(),
         }
     dataset_receipt = root / "dataset.receipt.json"
@@ -390,18 +395,95 @@ def persist_files(payload: dict[str, Any], files: dict[str, Any]) -> None:
     results_volume.commit()
 
 
-def _request(url: str, key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def _request(
+    url: str,
+    key: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float = 120,
+) -> dict[str, Any]:
     request = Request(
         url,
         data=None if payload is None else json.dumps(payload).encode(),
         method="GET" if payload is None else "POST",
         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
     )
-    with urlopen(request, timeout=CONFIG.max_run_seconds) as response:
+    with urlopen(request, timeout=timeout_seconds) as response:
         value = json.loads(response.read() or b"{}")
     if not isinstance(value, dict):
         raise ModalMultiSweError("server response is not a JSON object")
     return value
+
+
+def _request_error_diagnostics(exc: BaseException) -> dict[str, Any]:
+    if isinstance(exc, HTTPError):
+        captured = exc.read(65_537)
+        return summarize_http_error(
+            status=int(exc.code),
+            captured_body=captured[:65_536],
+            body_truncated=len(captured) > 65_536,
+        )
+    if isinstance(exc, URLError):
+        return {
+            "error_type": "URLError",
+            "reason_type": type(exc.reason).__name__,
+        }
+    return {"error_type": type(exc).__name__}
+
+
+def _wait_for_json(
+    endpoint: str,
+    url: str,
+    key: str,
+    *,
+    timeout_seconds: int,
+    request_timeout_seconds: int,
+    payload: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    attempts = 0
+    error_counts: dict[str, int] = {}
+    last_error: dict[str, Any] | None = None
+    while True:
+        attempts += 1
+        try:
+            response = _request(
+                url,
+                key,
+                payload,
+                timeout_seconds=request_timeout_seconds,
+            )
+            return response, {
+                "endpoint": endpoint,
+                "attempts": attempts,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "transient_errors": dict(sorted(error_counts.items())),
+                "response_keys": sorted(response),
+            }
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = _request_error_diagnostics(exc)
+            label = str(last_error["error_type"])
+            if last_error.get("status") is not None:
+                label += ":" + str(last_error["status"])
+            error_counts[label] = error_counts.get(label, 0) + 1
+            retryable = not isinstance(exc, HTTPError) or sglang_http_status_is_retryable(
+                int(exc.code)
+            )
+            now = time.monotonic()
+            if not retryable or now >= deadline:
+                diagnostics = {
+                    "endpoint": endpoint,
+                    "attempts": attempts,
+                    "elapsed_seconds": round(now - started, 3),
+                    "transient_errors": dict(sorted(error_counts.items())),
+                    "last_error": last_error,
+                }
+                raise AdmissionRequestError(
+                    "external SGLang admission request failed",
+                    diagnostics,
+                ) from None
+            time.sleep(min(SGLANG_ADMISSION_RETRY_INTERVAL_SECONDS, max(0, deadline - now)))
 
 
 @app.server(
@@ -440,7 +522,11 @@ class SGLangServer:
                 if self.process.poll() is not None:
                     raise ModalMultiSweError("SGLang exited during startup")
                 try:
-                    _request("http://127.0.0.1:8000/health", os.environ["SGLANG_API_KEY"])
+                    _request(
+                        "http://127.0.0.1:8000/health",
+                        os.environ["SGLANG_API_KEY"],
+                        timeout_seconds=10,
+                    )
                     return
                 except Exception:
                     time.sleep(5)
@@ -620,8 +706,24 @@ def main() -> None:
     key = SGLANG_API_KEY
     admission_response = None
     models_response = None
+    health_probe = None
+    models_probe = None
+    admission_request_probe = None
     try:
-        models_response = _request(url.rstrip("/") + "/v1/models", key)
+        _, health_probe = _wait_for_json(
+            "health",
+            url.rstrip("/") + "/health",
+            key,
+            timeout_seconds=CONFIG.startup_timeout_seconds,
+            request_timeout_seconds=10,
+        )
+        models_response, models_probe = _wait_for_json(
+            "models",
+            url.rstrip("/") + "/v1/models",
+            key,
+            timeout_seconds=SGLANG_MODELS_PROBE_TIMEOUT_SECONDS,
+            request_timeout_seconds=30,
+        )
         model_rows = models_response.get("data")
         model_ids = (
             [row.get("id") for row in model_rows if isinstance(row, dict)]
@@ -630,10 +732,13 @@ def main() -> None:
         )
         if model_ids != [SERVED_MODEL_NAME]:
             raise ModalMultiSweError("SGLang served-model identity mismatch")
-        admission_response = _request(
+        admission_response, admission_request_probe = _wait_for_json(
+            "chat-completions",
             url.rstrip("/") + "/v1/chat/completions",
             key,
-            {
+            timeout_seconds=min(CONFIG.max_run_seconds, SGLANG_CHAT_PROBE_TIMEOUT_SECONDS),
+            request_timeout_seconds=min(CONFIG.max_run_seconds, SGLANG_CHAT_PROBE_TIMEOUT_SECONDS),
+            payload={
                 "model": SERVED_MODEL_NAME,
                 "messages": [{"role": "user", "content": "Reply with exactly READY."}],
                 "max_tokens": min(CONFIG.max_tokens, SGLANG_ADMISSION_MAX_TOKENS),
@@ -655,6 +760,10 @@ def main() -> None:
             ),
             "models_response_keys": sorted(models_response) if models_response else [],
             "served_model_count": len(model_ids) if models_response else 0,
+            "health_probe": health_probe,
+            "models_probe": models_probe,
+            "admission_request_probe": admission_request_probe,
+            "request_failure": getattr(exc, "diagnostics", None),
             "failed_at_utc": utc_now(),
         }
         ensure_secret_free(failure, [key])
@@ -678,6 +787,9 @@ def main() -> None:
                 "scaledown_window_seconds": SGLANG_SCALEDOWN_WINDOW_SECONDS,
                 "served_models": model_ids,
                 "post_generation_window_seconds": SGLANG_POST_GENERATION_WINDOW_SECONDS,
+                "health_probe": health_probe,
+                "models_probe": models_probe,
+                "admission_request_probe": admission_request_probe,
                 "server_argv": sglang_server_command(CONFIG, api_key="<redacted>"),
                 "transformers_commit": TRANSFORMERS_COMMIT,
             },

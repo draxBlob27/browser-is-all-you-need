@@ -560,8 +560,13 @@ Reuse the existing Modal GLM-4.7-Flash server invariants:
 - per-run random bearer passed only to server and local orchestrator;
 - startup ceiling 3,600 seconds with child-process early-exit polling;
 - `/health`, `/v1/models`, and authenticated chat admission;
+- externally poll `/health` through Modal Server zero-to-one 503 responses
+  before `/v1/models` and chat; use bounded stage timeouts and the checked-in
+  transient HTTP status set;
 - served model list exactly `glm-4.7-flash`;
 - response-shape diagnostics never containing the bearer;
+- HTTP failure diagnostics containing only endpoint/status/count, body
+  size/SHA-256/truncation, and JSON keys, never body text;
 - raw SGLang log remains ephemeral;
 - only a bearer-redacted bounded tail may enter `server.failure.json`.
 
@@ -851,7 +856,7 @@ committed.
 ## Resume And Idempotency
 
 Fresh run IDs are the normal path. W8_MODAL_MULTI_SWE_RESUME=1 is normally only
-for an incomplete exact-identity run. An oracle-only infrastructure recovery
+for an incomplete exact-identity run. A pre-benchmark infrastructure recovery
 may migrate source commit/file hashes under the narrow rules below.
 
 Identity comparison must cover:
@@ -871,9 +876,10 @@ Identity comparison must cover:
 Resume rules:
 
 - completed runs are immutable and cannot resume;
-- source commit/file hashes may migrate only when no model-cache, SGLang,
-  admission, smoke, full, or final receipt exists; persist an
-  oracle-source-migration.json audit record;
+- source commit/file hashes may migrate across preparation, exact model-cache,
+  server-failure, and admission-failure artifacts only; successful admission,
+  server receipt/runtime, smoke, full, or final artifacts block migration;
+  persist an oracle-source-migration.json audit record;
 - successful oracle records reuse only by exact oracle cache key;
 - saved model responses reuse only by exact request hash and model identity;
 - complete model-outcome grader records reuse only by response hash and grader
@@ -987,7 +993,7 @@ Use a fake Sandbox object to assert:
 - recovered diagnostics never alter strict metrics;
 - no PIE speed metrics appear;
 - resume rejects every identity mismatch listed above except the audited
-  source-only migration of an incomplete oracle-only run;
+  source-only migration of an incomplete pre-benchmark failure run;
 - completed run cannot resume;
 - artifact manifest paths and hashes are safe;
 - download accepts only exact `FileEntryType.FILE` and reconciles bytes;
