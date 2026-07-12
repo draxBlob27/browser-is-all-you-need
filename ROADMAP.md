@@ -583,4 +583,7 @@ preflight, the trusted grader links only the two expected dependency subtrees
 into the checkout before tests. An interrupted oracle-only run may migrate
 source commit/file hashes for an infrastructure fix and reuse only records
 with exact oracle cache keys. Any persisted model-cache, SGLang, admission,
-smoke, full, or final artifact makes source identity strict again.
+smoke, full, or final artifact makes source identity strict again. Parse CTest
+discovery from complete in-memory stdout/stderr before truncation, persist the
+numeric count plus per-stream hashes/sizes, and retain bounded tails from both
+streams; compiler-warning volume must never erase positive test evidence.

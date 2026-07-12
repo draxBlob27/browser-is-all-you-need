@@ -102,7 +102,12 @@ after patch preflight and replaces only the expected cxxopts and
 body. This detached-parent layout is required because Modal SDK 1.5.2 rejects
 both mounting the same Volume object at multiple paths and mounting over the
 official image's already non-empty /home/simdjson/dependencies directory.
-Every Sandbox is terminated with wait and detached in finally.
+CTest discovery is parsed from the complete in-memory stdout/stderr streams
+before persistence truncation; the artifact keeps the numeric count, per-stream
+sizes/hashes, and bounded tails from both streams. This prevents PR 958's large
+non-fatal GCC stderr from hiding the successful CTest summary on stdout without
+relaxing the positive-test gate. The PR 958 capture strategy is cache-key
+bound. Every Sandbox is terminated with wait and detached in finally.
 
 Strict model output is exactly one fenced diff and nothing else. Reasoning is
 kept separate by SGLang; only message.content enters the parser. Recovery is

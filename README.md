@@ -1085,4 +1085,6 @@ the trusted grader links only cxxopts and simdjson-data from that detached
 mount into their expected checkout paths. Incomplete oracle-only runs may
 migrate source identity for an infrastructure fix, but reuse remains
 exact-cache-key only and any persisted model/server artifact restores strict
-source identity.
+source identity. The grader parses positive CTest discovery from complete
+in-memory stdout/stderr before retaining bounded tails from both streams, so
+large non-fatal compiler stderr cannot erase the numeric test proof.

@@ -76,6 +76,7 @@ SOURCE_IDENTITY_PATHS = (
 SIMDJSON_MODAL_MOUNT_LAYOUT = "detached-parent-symlinks-v2"
 SIMDJSON_MODAL_MOUNT_PATH = "/mnt/w8-biayn-simdjson-dependencies-v2"
 SIMDJSON_MODAL_MOUNT_RELATIVE = "modal-sandbox-dependencies"
+MODAL_PR958_OUTPUT_CAPTURE = "split-stream-tail-full-ctest-v1"
 ORACLE_SOURCE_MIGRATION_FIELDS = frozenset({"source_commit", "source_file_hashes"})
 
 
@@ -604,10 +605,18 @@ def classify_response(
         }
     if execution is None:
         raise ModalMultiSweError("valid patch response is missing its Sandbox execution")
+    precomputed_tests_collected = execution.get("tests_collected")
+    if precomputed_tests_collected is not None and (
+        isinstance(precomputed_tests_collected, bool)
+        or not isinstance(precomputed_tests_collected, int)
+        or precomputed_tests_collected < 0
+    ):
+        raise ModalMultiSweError("Sandbox execution has an invalid tests_collected value")
     result = classify_official_test_result(
         returncode=execution.get("returncode"),
         logs=str(execution.get("logs") or ""),
         timed_out=bool(execution.get("timed_out")),
+        precomputed_tests_collected=precomputed_tests_collected,
         sandbox_image=str(execution.get("image") or ""),
         sandbox_image_id=str(execution.get("sandbox_id") or ""),
     )
@@ -685,6 +694,50 @@ test -L /home/simdjson/dependencies/.cache/simdjson-data
     return script.replace(marker, setup + "\n" + marker)
 
 
+def summarize_modal_execution_output(
+    stdout: str,
+    stderr: str,
+    *,
+    returncode: int,
+    max_log_bytes: int = 65_536,
+) -> dict[str, Any]:
+    """Retain both stream tails while parsing CTest evidence before truncation."""
+
+    if max_log_bytes < 3:
+        raise ModalMultiSweError("max_log_bytes must leave room for both output streams")
+    stdout_bytes = stdout.encode()
+    stderr_bytes = stderr.encode()
+    raw = stdout_bytes + b"\n" + stderr_bytes
+    parsed = classify_official_test_result(returncode=returncode, logs=raw.decode(errors="replace"))
+    if len(raw) <= max_log_bytes:
+        bounded = raw
+    else:
+        available = max_log_bytes - 1
+        stdout_budget = min(len(stdout_bytes), available // 2)
+        stderr_budget = min(len(stderr_bytes), available // 2)
+        remaining = available - stdout_budget - stderr_budget
+        stdout_extra = min(len(stdout_bytes) - stdout_budget, remaining)
+        stdout_budget += stdout_extra
+        remaining -= stdout_extra
+        stderr_budget += min(len(stderr_bytes) - stderr_budget, remaining)
+        stdout_tail = stdout_bytes[-stdout_budget:] if stdout_budget else b""
+        stderr_tail = stderr_bytes[-stderr_budget:] if stderr_budget else b""
+        bounded = stdout_tail + b"\n" + stderr_tail
+    return {
+        "logs": bounded.decode(errors="replace"),
+        "output_bytes": len(raw),
+        "output_sha256": hashlib.sha256(raw).hexdigest(),
+        "output_truncated": len(raw) > max_log_bytes,
+        "output_tail_strategy": MODAL_PR958_OUTPUT_CAPTURE,
+        "stdout_bytes": len(stdout_bytes),
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_bytes": len(stderr_bytes),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "tests_collected": parsed.tests_collected,
+        "no_tests_collected": parsed.no_tests_collected,
+    }
+
+
 def oracle_cache_key(
     config: ModalMultiSweConfig, task: Mapping[str, Any], lock_row: Mapping[str, Any]
 ) -> str:
@@ -713,6 +766,8 @@ def oracle_cache_key(
     }
     if str(task.get("instance_id") or "") in SIMDJSON_OFFLINE_INSTANCE_IDS:
         identity["offline_dependency_mount_layout"] = SIMDJSON_MODAL_MOUNT_LAYOUT
+    if str(task.get("instance_id") or "") == "simdjson__simdjson-958":
+        identity["output_capture"] = MODAL_PR958_OUTPUT_CAPTURE
     return sha256_json(identity)
 
 

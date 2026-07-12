@@ -657,7 +657,11 @@ detached mount. Bind the setup script and layout version into the oracle cache
 key. Permit source commit/file-hash migration only for incomplete oracle-only
 runs with no model/server artifacts, persist the migration receipt, and reuse
 passing oracle records only by exact cache key. All later resume identity stays
-strict.
+strict. Parse CTest discovery from complete in-memory stdout/stderr before
+truncation, persist the numeric count and per-stream hashes/sizes, and retain
+bounded tails from both streams. Large compiler-warning stderr must not hide
+positive stdout test evidence; bind the PR 958 capture strategy into its cache
+key.
 
 The source/no-spend/offline-test path is implemented, while paid validation is
 pending. Require the paid ladder and a complete stopped-App receipt before

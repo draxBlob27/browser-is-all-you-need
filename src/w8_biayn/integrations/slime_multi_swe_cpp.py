@@ -1877,12 +1877,17 @@ def classify_official_test_result(
     returncode: int | None,
     logs: str,
     timed_out: bool = False,
+    precomputed_tests_collected: int | None = None,
     sandbox_image: str | None = None,
     sandbox_image_id: str | None = None,
 ) -> MultiSweTestResult:
     """Classify one official-image execution identically across backends."""
 
-    tests_collected = _ctest_tests_collected(logs)
+    tests_collected = (
+        precomputed_tests_collected
+        if precomputed_tests_collected is not None
+        else _ctest_tests_collected(logs)
+    )
     effective_returncode = 124 if timed_out and returncode is None else returncode
     no_tests_collected = (
         False

@@ -66,6 +66,7 @@ from w8_biayn.modal_multi_swe_cpp import (  # noqa: E402
     modal_sandbox_instance_script,
     resume_identity_mismatches,
     response_metadata,
+    summarize_modal_execution_output,
     utc_now,
     validate_image_lock,
     write_json,
@@ -517,14 +518,15 @@ def grade_patch(task: dict[str, Any], patch: str) -> dict[str, Any]:
             stdout = pool.submit(process.stdout.read)
             stderr = pool.submit(process.stderr.read)
             returncode = process.wait()
-            raw = (stdout.result() + "\n" + stderr.result()).encode()
+            output = summarize_modal_execution_output(
+                stdout.result(),
+                stderr.result(),
+                returncode=returncode,
+            )
         return {
             "returncode": returncode,
             "timed_out": returncode == 124,
-            "logs": raw[-65536:].decode(errors="replace"),
-            "output_bytes": len(raw),
-            "output_sha256": hashlib.sha256(raw).hexdigest(),
-            "output_truncated": len(raw) > 65536,
+            **output,
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "sandbox_id": sandbox.object_id,
             "image": task["sandbox_image_digest"],

@@ -596,9 +596,12 @@ For every oracle or model patch:
 10. Execute the shared official-instance shell script with an exec timeout.
 11. Drain stdout and stderr while the process runs; do not leave unconsumed
     buffered output.
-12. Record return code, parsed CTest count, bounded log tail, total output
-    bytes, output SHA-256, truncation flag, elapsed time, Sandbox ID, Modal
-    Image identity, source digest, and resource limits.
+12. Parse the CTest count from complete in-memory stdout/stderr before
+    truncation. Record return code, that numeric count, bounded tails from both
+    streams, per-stream byte counts and SHA-256 values, total output bytes and
+    SHA-256, truncation strategy/flag, elapsed time, Sandbox ID, Modal Image
+    identity, source digest, and resource limits. Large non-fatal compiler
+    stderr must not hide the stdout CTest summary.
 13. Terminate with `wait=True` and detach in `finally`, including timeout,
     cancellation, parser errors, and client exceptions.
 

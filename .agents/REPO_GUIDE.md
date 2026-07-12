@@ -584,7 +584,11 @@ directory. After patch preflight, trusted shell setup may replace only the two
 expected dependency locations with symlinks into the detached mount before
 tests. Source-only resume migration is allowed solely before any model/server
 artifact exists; passing oracle reuse remains exact-cache-key only and is
-audit-recorded.
+audit-recorded. Parse CTest discovery from complete in-memory stdout/stderr
+before persistence truncation, store the numeric count and per-stream
+hashes/sizes, and retain bounded tails from both streams. Large non-fatal
+compiler stderr must not hide the stdout test summary or weaken the
+positive-test gate.
 
 Source and offline tests are implemented; paid validation remains pending.
 Never print or document a score until 50 responses/records, passing oracle

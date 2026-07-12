@@ -274,6 +274,7 @@ def test_simdjson_mount_layout_is_bound_only_to_affected_oracle_keys(
     affected = simdjson_task()
     modal_contract.oracle_cache_key(cfg, affected, lock_row)
     assert identities[-1]["offline_dependency_mount_layout"] == "detached-parent-symlinks-v2"
+    assert identities[-1]["output_capture"] == "split-stream-tail-full-ctest-v1"
 
 
 def test_simdjson_modal_script_wires_fresh_mount_after_patch_preflight() -> None:
@@ -326,6 +327,49 @@ def test_request_is_secret_free_and_uses_one_prompt() -> None:
         "stream": False,
     }
     assert "Authorization" not in json.dumps(payload)
+
+
+def test_modal_output_capture_parses_full_ctest_before_bounding_streams() -> None:
+    stdout = "Test project /home/simdjson/build\n100% tests passed, 0 tests failed out of 12\n"
+    stderr = ("GCC warning: visible but non-fatal\n" * 5000).rstrip()
+    captured = modal_contract.summarize_modal_execution_output(
+        stdout,
+        stderr,
+        returncode=0,
+        max_log_bytes=1024,
+    )
+
+    assert captured["tests_collected"] == 12
+    assert captured["no_tests_collected"] is False
+    assert captured["output_truncated"] is True
+    assert captured["output_tail_strategy"] == "split-stream-tail-full-ctest-v1"
+    assert "0 tests failed out of 12" in captured["logs"]
+    assert "GCC warning" in captured["logs"]
+    assert len(captured["logs"].encode()) <= 1024
+
+    fence = chr(96) * 3
+    record = classify_response(
+        task=task(),
+        response=response(fence + "diff\n" + valid_patch() + fence),
+        execution={
+            "returncode": 0,
+            "timed_out": False,
+            "image": task()["sandbox_image_digest"],
+            "sandbox_id": "sb-pr958",
+            **captured,
+        },
+    )
+    assert record["reason"] == "passed"
+    assert record["tests_collected"] == 12
+
+    no_tests = modal_contract.summarize_modal_execution_output(
+        "Test project /home/simdjson/build\nNo tests were found!!!\n",
+        stderr,
+        returncode=0,
+        max_log_bytes=1024,
+    )
+    assert no_tests["tests_collected"] is None
+    assert no_tests["no_tests_collected"] is True
 
 
 def test_shared_server_command_keeps_glm_and_auth_contract(tmp_path: Path) -> None:
@@ -461,6 +505,9 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     assert "server.failure.json" in app
     assert "admission.failure.json" in app
     assert "resume_state=resume_state" in app
+    assert "summarize_modal_execution_output(" in app
+    grader_section = app.split("def grade_patch", 1)[1].split("def grade_with_retry", 1)[0]
+    assert "raw[-65536:]" not in grader_section
     assert "allow_oracle_source_migration=oracle_only" in app
     assert "model-cache.receipt.json" in app
     assert "generate-lock" in pure
