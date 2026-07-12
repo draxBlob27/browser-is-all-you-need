@@ -498,6 +498,9 @@ only from its own try 1. Source and offline tests implement the four-metric
 protocol; paid seed inspection, the sampling smoke, a complete full run, and
 stopped-App evidence remain pending. The canonical lane runbook contains the
 formulas, smoke, artifact, and spend contract.
+The paid acknowledgements are launch safety gates rather than immutable result
+identity, so the same planned run ID may move from false acknowledgements in
+no-spend plan mode to true acknowledgements for its first paid invocation.
 
 ## Moonlight Multi-SWE C++ Base Eval
 

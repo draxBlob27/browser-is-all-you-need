@@ -697,6 +697,9 @@ identity, and the deterministic one-based schedule
 `sample_seed = base_seed + sample_index`. Both paid acknowledgements remain
 mandatory. The full run remains gated by real-server admission, the ordinary
 Aider smoke, and the independent sampling smoke.
+The acknowledgement values are launch safety gates, not immutable benchmark
+identity. They may change from false in a saved no-spend plan to true for that
+run ID's first paid invocation without requiring resume.
 
 Before spending, saved secret-free request metadata must prove that the pinned
 Aider -> LiteLLM -> SGLang path transmits each trajectory seed. If it does not,
@@ -1129,6 +1132,8 @@ For `W8_MODAL_AIDER_RESUME=1`:
 
 Do not resume across changes to commits, model revision, Image, hardware,
 thinking behavior, edit format, tries, threads, sampling, or token limits.
+Do not include either paid acknowledgement in this immutable identity
+comparison; validate them independently as phase-specific safety gates.
 
 ## Offline Test Plan
 

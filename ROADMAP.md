@@ -379,6 +379,9 @@ try-1 and cumulative-try-2 matrices. State and feedback may continue from try
 Source and offline regressions implement the two-try/four-metric protocol.
 Seed inspection, the 2-by-8-by-try smoke, a complete 26-by-8-by-try run, and
 stopped-App proof remain blocking before reporting live metrics.
+Treat both paid acknowledgements as launch safety gates, not immutable result
+identity: a reviewed no-spend plan may enable them for the first paid invocation
+without becoming a resume/config mismatch.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

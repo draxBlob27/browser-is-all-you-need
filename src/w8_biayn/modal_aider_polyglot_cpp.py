@@ -375,6 +375,7 @@ class ModalAiderConfig:
         excluded = {
             "phase",
             "acknowledge_paid_run",
+            "acknowledge_pass_at_8",
             "resume",
             "modal_token_id",
             "modal_token_secret",
@@ -1137,6 +1138,7 @@ def assert_resume_compatible(
     excluded = {
         "phase",
         "acknowledge_paid_run",
+        "acknowledge_pass_at_8",
         "resume",
         "local_root",
         "app_name",

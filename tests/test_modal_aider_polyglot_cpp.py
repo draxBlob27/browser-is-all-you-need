@@ -696,6 +696,31 @@ def test_resume_rejects_identity_mismatch(tmp_path: Path) -> None:
         )
 
 
+def test_plan_to_paid_pass_at_8_acknowledgements_are_not_identity(tmp_path: Path) -> None:
+    planned = config(
+        tmp_path,
+        W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+    )
+    prepare_local_plan(planned, repo_root=tmp_path)
+
+    paid = config(
+        tmp_path,
+        W8_MODAL_AIDER_PHASE="full",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8="1",
+        W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+    )
+    prepare_local_plan(paid, repo_root=tmp_path)
+
+    stored = json.loads(
+        (paid.local_run_path(tmp_path) / "config.redacted.json").read_text(encoding="utf-8")
+    )
+    assert stored["acknowledge_paid_run"] is True
+    assert stored["acknowledge_pass_at_8"] is True
+    assert "acknowledge_paid_run" not in paid.identity_mapping()
+    assert "acknowledge_pass_at_8" not in paid.identity_mapping()
+
+
 def test_remote_preflight_rejects_stale_runs_before_paid_startup(tmp_path: Path) -> None:
     cfg = config(tmp_path, W8_MODAL_AIDER_PHASE="smoke", W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1")
     run_root = tmp_path / "remote-run"
@@ -720,6 +745,7 @@ def test_remote_preflight_allows_only_compatible_incomplete_resume(tmp_path: Pat
         tmp_path,
         W8_MODAL_AIDER_PHASE="smoke",
         W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8="1",
         W8_MODAL_AIDER_RESUME="1",
     )
     validate_remote_preflight(resumed, run_root)

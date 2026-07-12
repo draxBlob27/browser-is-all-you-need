@@ -308,6 +308,9 @@ Resume remains scoped to one exact `(sample_index, task_id)` trajectory. It may
 repair missing infrastructure work but must not regenerate model failures or
 cross trajectory state. The extra paid acknowledgement, bounded timeout, early
 GPU scale-down, artifact reconciliation, and verified App stop remain mandatory.
+Paid acknowledgements are operator safety gates, not benchmark identity fields:
+they may change from false in a no-spend plan to true for the paid launch without
+forcing a new run ID or `W8_MODAL_AIDER_RESUME=1`.
 
 An existing one-sample pass@1 result remains separate historical evidence; it
 is not merged into the new 26-by-8-by-try matrices. See the checked-in design
