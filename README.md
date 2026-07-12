@@ -90,11 +90,14 @@ editable content, so the admitted Aider request budget is 32768 tokens within
 the pinned model's 202752-position context. Failed admission summaries include
 only per-task counters, and committed failure artifacts are downloaded locally
 before the original remote exception is re-raised.
-The singleton SGLang Server keeps `min_containers=0` but uses Modal's
-1200-second maximum scaledown window so compilation gaps do not repeatedly
-cold-start four H100s. The run wrapper still stops and verifies the App
-immediately on every success or failure; the 20-minute window is not a teardown
-delay.
+The singleton SGLang Server is defined with static `min_containers=0`. After
+CPU/Volume admission and model-cache preparation, the launcher dynamically
+holds exactly one replica with `min_containers=1` for the entire benchmark.
+On success or error it returns to `min_containers=0` with a two-second drain
+before artifact transfer, then explicitly stops and verifies the App. The
+1200-second scaledown window remains a fallback, not the active-run lifetime
+mechanism. The operational lease is intentionally resume-compatible with
+artifacts created before this fix because it does not change model requests.
 Artifact download uses Modal SDK 1.5.2's explicit `FileEntryType.FILE`; it
 skips directories and every other non-regular entry before byte reads while
 retaining byte-for-byte reconciliation for downloaded files. The client first
@@ -514,20 +517,14 @@ otherwise complete non-exception row with a test invocation solely because the
 counter is nonzero.
 The runner commits `runner.identity.json` before benchmark work, binding the
 immutable config to one Modal App so a platform worker restart can re-enter
-without rejecting its own artifacts. Explicit independent resume reuses only
-samples with complete official rows and `stats.json`; it preserves an
-interrupted sample under `incomplete-attempts/` and recreates only that sample
-from the pinned tree and seed. The previous local failure download moves under
-`resume-download-archives/` before exact resumed transfer.
-The runner now commits `runner.identity.json` before benchmark work, binding
-the immutable config to one Modal App so a platform worker restart can re-enter
 without confusing its own artifacts for a stale run. Explicit independent
 resume validates and reuses only samples with complete official rows plus
 `stats.json`; it archives an interrupted sample under `incomplete-attempts/`
 and recreates that sample from the pinned tree and seed. Before resumed artifact
-transfer, the prior local failure download is moved under
+transfer, the prior local failure download moves under
 `resume-download-archives/` so strict reconciliation sees a fresh target
-without deleting diagnostics.
+without deleting diagnostics. Enabling the active-server lease remains
+compatible with pre-lease artifacts.
 
 ## Moonlight Multi-SWE C++ Base Eval
 

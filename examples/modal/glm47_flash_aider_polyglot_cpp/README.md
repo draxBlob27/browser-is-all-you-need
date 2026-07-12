@@ -163,13 +163,15 @@ process and fails early if it exits. A startup failure prints and commits only
 a bearer-redacted log tail as `server.failure.json`; raw SGLang output remains
 ephemeral.
 
-The singleton server remains scale-to-zero with `min_containers=0`, but its
-scaledown window is 1200 seconds. This keeps the loaded four-H100 replica warm
-across model-generation and C++ compile/test gaps instead of repeating CUDA
-banners and tunnel cold starts. The wrapper explicitly stops and verifies the
-App as soon as the run succeeds or fails, so it does not wait 20 minutes to
-tear down. The window is immutable run identity and appears in plans and
-receipts.
+The Server definition remains scale-to-zero with static `min_containers=0`.
+After CPU/Volume preflight and model-cache preparation succeed, the launcher
+dynamically sets `min_containers=1` to lease exactly one four-H100 replica for
+all Aider work. On success or error it restores `min_containers=0` and a
+two-second drain before artifact transfer, then explicitly stops and verifies
+the App. The 1200-second scaledown window remains an identity-bound fallback;
+it is no longer the mechanism that holds the active run. The active lease is
+an operational safeguard, not benchmark identity, so an otherwise compatible
+pre-lease run can resume with it enabled.
 
 The authenticated chat admission request uses
 `min(W8_MODAL_AIDER_MAX_TOKENS, 2048)` completion tokens. GLM's thinking phase
@@ -355,9 +357,10 @@ reads only exact `FILE` entries. Directories, the Polyglot source symlink, and
 all other non-regular entries are skipped before `read_file`; regular files
 still require byte-for-byte agreement with any existing local copy. The client
 validates the complete entry list first, then uses the SDK async API with at
-most 16 file reads in flight and prints progress every 250 files. When the
-remote result is committed, the client lowers the server scaledown window to
-two seconds before download so the four H100s can shut down during transfer.
+most 16 file reads in flight and prints progress every 250 files. When remote
+work succeeds or errors, the client restores `min_containers=0` and lowers the
+server scaledown window to two seconds before download so the four H100s can
+shut down during transfer.
 On remote admission failure, the same bounded downloader copies committed
 diagnostics locally before re-raising the original error. The printed failure
 summary contains only task names and numeric result/token counters, never model
@@ -442,8 +445,10 @@ generated settings, model weights, tokens, or receipts.
 - Smoke/full require `W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN=1`.
 - The model download runs on CPU before GPU allocation.
 - Exactly one strict four-H100 replica is allowed.
-- `min_containers=0`, `max_containers=1`, and a 60-second scale-down window
-  prevent a persistent warm pool.
+- The Server is statically `min_containers=0`, `max_containers=1`; after paid
+  admission the launcher leases one active replica with `min_containers=1`.
+  Success and error paths restore `min_containers=0` plus a two-second drain,
+  preventing a persistent warm pool.
 - `modal run` creates an ephemeral App; this lane never deploys or schedules.
 - A random per-run bearer protects the otherwise unauthenticated Modal route.
 - The bearer is attached only to SGLang and Aider and is never persisted.

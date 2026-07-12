@@ -306,10 +306,14 @@ spend all 8192 tokens reasoning without editable content, while the pinned
 checkpoint has a 202752-position context. Admission-failure output may include
 only safe per-task counters; download committed failure artifacts locally
 before re-raising the remote exception.
-Keep `min_containers=0`, but use a 1200-second SGLang scaledown window to span
-Aider generation/compile gaps without repeated four-H100 cold starts. Bind the
-value into plan identity and receipts; explicit stop plus control-plane
-verification still ends billing immediately on every exit.
+Define the Server with static `min_containers=0`, then dynamically hold exactly
+one replica with `min_containers=1` after CPU/Volume admission and model-cache
+preparation. Keep that active lease through all Aider work. On success or
+error, restore `min_containers=0` with a two-second drain before transfer;
+explicit stop plus control-plane verification remains mandatory. The
+1200-second scaledown window is a fallback and stays identity-bound. The active
+lease is operational, so compatible artifacts created before it may resume
+without an identity mismatch.
 Modal SDK 1.5.2 Volume entries expose an `IntEnum`; never classify them through
 `str(entry.type)`. Download only `FileEntryType.FILE`, skip every non-regular
 entry, and retain strict byte reconciliation. Validate the full entry list
@@ -343,18 +347,13 @@ Aider's `num_exhausted_context_windows` field counts provider
 `finish_reason=length` output-limit events. Keep it diagnostic; never reject
 otherwise complete non-exception rows with C++ test invocations solely because
 that counter is nonzero.
-Persist `runner.identity.json` before benchmark work and bind non-resume
-worker re-entry to the same Modal App plus immutable config. Explicit
-independent resume must validate and reuse only completed samples, archive an
-interrupted sample under `incomplete-attempts/`, and restart only that sample
+Persist `runner.identity.json` before benchmark work and bind non-resume worker
+re-entry to the same Modal App plus immutable config. Explicit independent
+resume reuses only validated complete sample rows with stats, archives an
+interrupted sample under `incomplete-attempts/`, and restarts only that sample
 from the pinned tree and seed. Preserve the prior local failure download under
-`resume-download-archives/` before exact resumed transfer.
-Persist `runner.identity.json` before benchmark work and bind non-resume
-worker re-entry to the same Modal App plus immutable config. Explicit
-independent resume must validate and reuse only completed sample rows with
-stats, archive an interrupted sample under `incomplete-attempts/`, and restart
-only that sample from the pinned tree and seed. Preserve the prior local failure
-download under `resume-download-archives/` before exact resumed transfer.
+`resume-download-archives/` before exact resumed transfer. The active-server
+lease is compatible with pre-lease artifacts.
 
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned

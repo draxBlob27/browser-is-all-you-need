@@ -26,6 +26,8 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     RUNNER_IDENTITY_FILENAME,
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
+    SGLANG_ACTIVE_MIN_CONTAINERS,
+    SGLANG_IDLE_MIN_CONTAINERS,
     SGLANG_ADMISSION_MAX_TOKENS,
     SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS,
     SGLANG_SCALEDOWN_WINDOW_SECONDS,
@@ -36,6 +38,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     aider_benchmark_command,
     archive_incomplete_independent_sample,
     archive_local_run_before_resume,
+    assert_resume_compatible,
     build_independent_pass_report,
     build_artifact_manifest,
     ensure_secret_free,
@@ -158,9 +161,13 @@ def test_valid_plan_config_and_redacted_plan_are_deterministic(tmp_path: Path) -
     assert first["transformers_commit"] == TRANSFORMERS_COMMIT
     assert first["config"]["transformers_commit"] == TRANSFORMERS_COMMIT
     assert first["config"]["sglang_scaledown_window_seconds"] == 1200
+    assert first["config"]["sglang_active_min_containers"] == 1
+    assert first["config"]["sglang_idle_min_containers"] == 0
     assert cfg.identity_mapping()["transformers_commit"] == TRANSFORMERS_COMMIT
     assert cfg.identity_mapping()["sglang_scaledown_window_seconds"] == 1200
     assert SGLANG_SCALEDOWN_WINDOW_SECONDS == 20 * 60
+    assert SGLANG_ACTIVE_MIN_CONTAINERS == 1
+    assert SGLANG_IDLE_MIN_CONTAINERS == 0
     assert SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS == 2
     assert ARTIFACT_DOWNLOAD_CONCURRENCY == 16
     assert cfg.max_tokens == DEFAULT_MAX_TOKENS == 32_768
@@ -798,6 +805,30 @@ def test_plan_to_paid_pass_at_8_acknowledgements_are_not_identity(tmp_path: Path
     assert "acknowledge_pass_at_8" not in paid.identity_mapping()
 
 
+def test_active_server_lease_is_resume_compatible_with_prior_artifacts(tmp_path: Path) -> None:
+    run_root = tmp_path / "remote-run"
+    run_root.mkdir()
+    original = config(
+        tmp_path,
+        W8_MODAL_AIDER_PHASE="full",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+    )
+    prior = original.redacted_mapping()
+    prior.pop("sglang_active_min_containers")
+    prior.pop("sglang_idle_min_containers")
+    write_json(run_root / "config.redacted.json", prior)
+
+    resumed = config(
+        tmp_path,
+        W8_MODAL_AIDER_PHASE="full",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+        W8_MODAL_AIDER_RESUME="1",
+    )
+    assert_resume_compatible(resumed, run_root / "config.redacted.json")
+    assert "sglang_active_min_containers" not in resumed.identity_mapping()
+    assert "sglang_idle_min_containers" not in resumed.identity_mapping()
+
+
 def test_remote_preflight_rejects_stale_runs_before_paid_startup(tmp_path: Path) -> None:
     cfg = config(tmp_path, W8_MODAL_AIDER_PHASE="smoke", W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1")
     run_root = tmp_path / "remote-run"
@@ -997,14 +1028,21 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert "scaledown_window=SGLANG_SCALEDOWN_WINDOW_SECONDS" in modal_app
     assert "scaledown_window=60" not in modal_app
     assert "gpu=CONFIG.gpu" in modal_app
+    assert "_hold_server_for_benchmark()" in modal_app
+    assert (
+        "min_containers=SGLANG_ACTIVE_MIN_CONTAINERS" in modal_app
+        and "min_containers=SGLANG_IDLE_MIN_CONTAINERS" in modal_app
+    )
     assert 'volumes={"/models": model_volume}' in modal_app
     assert 'volumes={"/results": results_volume}' in modal_app
     assert "secrets=downloader_secrets" in modal_app
     assert "secrets=[runner_secret]" in modal_app
+    entrypoint = modal_app.split("@app.local_entrypoint()", 1)[1]
     assert (
-        modal_app.index("preflight_remote_run.remote(RUNTIME)")
-        < modal_app.index("preload_model.remote(RUNTIME)")
-        < modal_app.index("SGLangServer.get_url()")
+        entrypoint.index("preflight_remote_run.remote(RUNTIME)")
+        < entrypoint.index("preload_model.remote(RUNTIME)")
+        < entrypoint.index("_hold_server_for_benchmark()")
+        < entrypoint.index("SGLangServer.get_url()")
     )
     server_start = modal_app.split("class SGLangServer:", 1)[1].split("def _run_aider_stage", 1)[0]
     assert "assert_resume_compatible(config, prior_config, allow_plan=True)" in server_start

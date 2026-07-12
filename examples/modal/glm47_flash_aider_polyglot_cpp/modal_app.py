@@ -46,6 +46,8 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     POLYGLOT_REPO_URL,
     SCHEMA_VERSION,
     SERVED_MODEL_NAME,
+    SGLANG_ACTIVE_MIN_CONTAINERS,
+    SGLANG_IDLE_MIN_CONTAINERS,
     SGLANG_ADMISSION_MAX_TOKENS,
     SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS,
     SGLANG_SCALEDOWN_WINDOW_SECONDS,
@@ -961,6 +963,8 @@ def run_aider_benchmark(
         "aider_commit": config.aider_commit,
         "polyglot_commit": config.polyglot_commit,
         "sglang_image": config.sglang_image,
+        "sglang_active_min_containers": SGLANG_ACTIVE_MIN_CONTAINERS,
+        "sglang_idle_min_containers": SGLANG_IDLE_MIN_CONTAINERS,
         "sglang_scaledown_window_seconds": SGLANG_SCALEDOWN_WINDOW_SECONDS,
         "modal_sdk_pin": MODAL_SDK_PIN,
         "gpu_requested": config.gpu,
@@ -1100,12 +1104,24 @@ def _download_run() -> Path:
 
 def _prepare_artifact_transfer() -> None:
     try:
-        SGLangServer.update_autoscaler(scaledown_window=SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS)
+        SGLangServer.update_autoscaler(
+            min_containers=SGLANG_IDLE_MIN_CONTAINERS,
+            scaledown_window=SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS,
+        )
     except Exception as exc:
         print(
-            f"warning: could not reduce SGLang scaledown window: {type(exc).__name__}",
+            f"warning: could not release SGLang benchmark lease: {type(exc).__name__}",
             file=sys.stderr,
         )
+
+
+def _hold_server_for_benchmark() -> None:
+    """Keep exactly one SGLang replica allocated until benchmark work exits."""
+
+    SGLangServer.update_autoscaler(
+        min_containers=SGLANG_ACTIVE_MIN_CONTAINERS,
+        scaledown_window=SGLANG_SCALEDOWN_WINDOW_SECONDS,
+    )
 
 
 @app.local_entrypoint()
@@ -1114,6 +1130,7 @@ def main() -> None:
 
     preflight_remote_run.remote(RUNTIME)
     cache_receipt = preload_model.remote(RUNTIME)
+    _hold_server_for_benchmark()
     server_url = SGLangServer.get_url()
     try:
         result = run_aider_benchmark.remote(RUNTIME, server_url, cache_receipt, app.app_id)

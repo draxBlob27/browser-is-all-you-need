@@ -358,10 +358,14 @@ consumed entirely by GLM reasoning; the larger bound remains inside the exact
 checkpoint's 202752-position context. On admission failure, print only safe
 per-task counters and download the committed failure subtree locally before
 re-raising the remote error.
-Keep the singleton Server at `min_containers=0`, but set its scaledown window
-to Modal's 1200-second maximum so gaps between generation and C++ compilation
-do not cycle four H100s. Record the window in plan identity and receipts. The
-local wrapper must still stop and verify the App immediately when the run exits.
+Define the singleton Server with static `min_containers=0`, then dynamically
+hold exactly one replica (`min_containers=1`) only after CPU/Volume admission
+and model-cache preparation. Keep that lease through all Aider work. On either
+success or error, restore `min_containers=0` and a two-second drain before
+artifact transfer; explicit stop and control-plane verification still close
+the App. The 1200-second window remains a fallback and immutable identity. The
+active lease is operational rather than benchmark identity, so old compatible
+artifacts may resume with it enabled.
 When downloading recursive Volume artifacts under Modal SDK 1.5.2, read only
 entries whose public type is exactly `FileEntryType.FILE`. Skip directories,
 symlinks, and other non-regular entries before `read_file`, then preserve the
@@ -394,16 +398,11 @@ edit and pass tests. It must not independently turn complete non-exception rows
 with C++ test invocations into an infrastructure failure.
 Commit an App-bound `runner.identity.json` before Aider work so Modal worker
 re-entry accepts only the same App and immutable config. Explicit independent
-resume must reuse only validated complete samples, preserve an interrupted
-sample under `incomplete-attempts/`, and restart only that sample from the
-pinned tree and original seed. Archive the previous local failure download
-before pulling the resumed exact artifact tree.
-Commit an App-bound `runner.identity.json` before Aider work so Modal worker
-re-entry accepts only the same App and immutable config. For explicit
-independent resume, reuse only fully validated sample rows plus stats, preserve
-an interrupted sample under `incomplete-attempts/`, and restart that one
-sample from the pinned tree with its original seed. Archive the previous local
-failure download before pulling the resumed exact artifact tree.
+resume reuses only fully validated sample rows plus stats, preserves an
+interrupted sample under `incomplete-attempts/`, and restarts that sample from
+the pinned tree with its original seed. Archive the previous local failure
+download before exact resumed transfer. Enabling the active-server lease is
+compatible with pre-lease artifacts.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
