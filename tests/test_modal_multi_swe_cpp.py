@@ -264,6 +264,7 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     pure = PURE.read_text(encoding="utf-8")
 
     assert "import modal" not in pure
+    assert app.count('"pydantic>=2.7"') == 2
     assert "modal.Sandbox.create(" in app
     assert 'modal.Image.from_registry(task["sandbox_image_digest"])' in app
     assert "block_network=True" in app

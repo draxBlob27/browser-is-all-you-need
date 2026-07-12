@@ -103,7 +103,7 @@ if IS_LOCAL:
     pure_source = str(ROOT / "src" / "w8_biayn")
     control_image = (
         modal.Image.debian_slim(python_version="3.11")
-        .pip_install("huggingface-hub[hf-transfer]>=0.24")
+        .pip_install("huggingface-hub[hf-transfer]>=0.24", "pydantic>=2.7")
         .env(
             {
                 "PYTHONPATH": "/opt/w8-src",
@@ -115,6 +115,7 @@ if IS_LOCAL:
     )
     server_image = (
         modal.Image.from_registry(CONFIG.sglang_image)
+        .pip_install("pydantic>=2.7")
         .pip_install("git+" + TRANSFORMERS_REPO_URL + "@" + TRANSFORMERS_COMMIT)
         .run_commands(
             'python -c "from transformers.models.auto.configuration_auto '
