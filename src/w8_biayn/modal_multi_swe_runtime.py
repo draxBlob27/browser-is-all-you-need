@@ -108,8 +108,14 @@ def prepare_and_admit(
     source_migration = resume_state.get("oracle_source_migration")
     if isinstance(source_migration, dict):
         identity_files["data/oracle-source-migration.json"] = source_migration
-    persist(identity_files)
-    records = []
+    oracle_import = resume_state.get("oracle_import")
+    if config.oracle_source_run_id:
+        if (
+            not isinstance(oracle_import, dict)
+            or oracle_import.get("source_run_id") != config.oracle_source_run_id
+        ):
+            raise ModalMultiSweError("validated oracle import receipt is missing")
+        identity_files["data/oracle-import.json"] = dict(oracle_import)
     data_files = {
         "data/sandbox-images.json": {
             "schema_version": 1,
@@ -125,13 +131,38 @@ def prepare_and_admit(
         data_files["data/tasks/" + task["instance_id"] + "/task.json"] = task
     if dataset_receipt.get("offline_dependencies") is not None:
         data_files["data/offline-dependencies.json"] = dataset_receipt["offline_dependencies"]
-    persist(data_files)
     prior_oracles = resume_state.get("oracle_records")
     if not isinstance(prior_oracles, dict):
         prior_oracles = {}
+    cache_keys = {
+        task["instance_id"]: oracle_cache_key(
+            config,
+            task,
+            lock["tasks"][task["instance_id"]],
+        )
+        for task in tasks
+    }
+    if config.oracle_source_run_id:
+        incompatible = sorted(
+            task_id
+            for task_id, cache_key in cache_keys.items()
+            if not isinstance(prior_oracles.get(task_id), dict)
+            or prior_oracles[task_id].get("oracle_cache_key") != cache_key
+            or prior_oracles[task_id].get("setup_valid") is not True
+            or prior_oracles[task_id].get("reason") != "passed"
+            or int(prior_oracles[task_id].get("tests_collected") or 0) <= 0
+        )
+        if incompatible or set(prior_oracles) != set(cache_keys):
+            raise ModalMultiSweError(
+                "oracle source proof is not exact for the current run: "
+                + str(incompatible or sorted(set(prior_oracles) ^ set(cache_keys)))
+            )
+    persist(identity_files)
+    persist(data_files)
+    records = []
     for index, task in enumerate(tasks, start=1):
         task_id = task["instance_id"]
-        cache_key = oracle_cache_key(config, task, lock["tasks"][task_id])
+        cache_key = cache_keys[task_id]
         prior = prior_oracles.get(task_id)
         reusable = (
             isinstance(prior, dict)
@@ -194,10 +225,23 @@ def prepare_and_admit(
                 },
             }
         )
-        suffix = " (reused)" if reusable else ""
+        if reusable and config.oracle_source_run_id:
+            suffix = " (imported from " + config.oracle_source_run_id + ")"
+        else:
+            suffix = " (reused)" if reusable else ""
         print("oracle " + str(index) + "/50 " + task_id + ": " + record["reason"] + suffix)
     records.sort(key=lambda row: row["task_id"])
     passed = sum(bool(row["setup_valid"]) for row in records)
+    oracle_provenance = (
+        {
+            "mode": "cross-run-import",
+            "source_run_id": config.oracle_source_run_id,
+            "exact_oracle_cache_keys": True,
+            "fallback_to_execution": False,
+        }
+        if config.oracle_source_run_id
+        else {"mode": "current-run-execution-or-resume"}
+    )
     summary = {
         "schema_version": SCHEMA_VERSION,
         "complete": len(records) == EXPECTED_CPP_TASKS,
@@ -207,6 +251,7 @@ def prepare_and_admit(
         "passed_count": passed,
         "correct_answer_source": "fix_patch",
         "harness_backend": "modal-sandbox",
+        "provenance": oracle_provenance,
     }
     persist(
         {
@@ -504,6 +549,7 @@ def evaluate(
         "completed_tasks": len(records),
         "strict_pass_rate": summary["pass_rate"],
         "oracle_passed": oracle_summary["passed_count"],
+        "oracle_source_run_id": config.oracle_source_run_id or None,
         "harness_backend": "modal-sandbox",
         "modal_app_name": config.app_name,
         "modal_app_stopped": False,

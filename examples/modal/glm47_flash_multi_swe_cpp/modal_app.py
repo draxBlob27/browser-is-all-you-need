@@ -67,6 +67,7 @@ from w8_biayn.modal_multi_swe_cpp import (  # noqa: E402
     SIMDJSON_MODAL_MOUNT_RELATIVE,
     assert_resume_compatible,
     build_artifact_manifest,
+    load_oracle_source_state,
     modal_sandbox_instance_script,
     pre_benchmark_source_migration_allowed,
     resume_identity_mismatches,
@@ -162,15 +163,26 @@ else:
 
 
 @app.function(image=control_image, volumes={"/results": results_volume}, timeout=120, retries=0)
-def preflight_remote_run(payload: dict[str, Any]) -> dict[str, Any]:
+def preflight_remote_run(payload: dict[str, Any], lock: dict[str, Any]) -> dict[str, Any]:
     config = _config(payload)
     results_volume.reload()
     root = Path("/results") / config.remote_run_path.lstrip("/")
     present = list(root.iterdir()) if root.is_dir() else []
     if present and not config.resume:
         raise ModalMultiSweError("remote run id already has artifacts")
+    state: dict[str, Any] = {"oracle_records": {}, "smoke": {}, "full": {}}
+    if config.oracle_source_run_id:
+        source_root = Path("/results/runs") / config.oracle_source_run_id
+        state.update(
+            load_oracle_source_state(
+                config=config,
+                source_root=source_root,
+                lock=lock,
+            )
+        )
+        state["oracle_import"]["imported_at_utc"] = utc_now()
     if not present:
-        return {}
+        return state
     pre_benchmark_only = pre_benchmark_source_migration_allowed(root)
     prior_config = root / "config.redacted.json"
     mismatches = resume_identity_mismatches(config, prior_config)
@@ -185,7 +197,6 @@ def preflight_remote_run(payload: dict[str, Any]) -> dict[str, Any]:
         "smoke_complete",
     }:
         raise ModalMultiSweError("completed runs are immutable")
-    state: dict[str, Any] = {"oracle_records": {}, "smoke": {}, "full": {}}
     if mismatches:
         prior = json.loads(prior_config.read_text(encoding="utf-8"))
         state["oracle_source_migration"] = {
@@ -692,7 +703,7 @@ def main() -> None:
     """Enforce oracle-before-model ordering, smoke, full, download, and release."""
 
     lock = _require_image_lock(LOCK)
-    resume_state = preflight_remote_run.remote(RUNTIME)
+    resume_state = preflight_remote_run.remote(RUNTIME, lock)
     # Dataset staging and all-task oracle execution are intentionally delegated
     # to the checked-in production helpers below before this call is allowed to
     # allocate model weights or the SGLang Server.

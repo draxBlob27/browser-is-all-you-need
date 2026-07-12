@@ -599,9 +599,14 @@ strict identity.
 Keep the dataset image lock off the GPU server image. Modal Server hydration
 must tolerate that control-only environment variable being absent, while local
 orchestration must require the reviewed lock before preflight, dataset/oracle,
-or paid work.
+or paid work. A fresh full run may name a completed source run for oracle-proof
+import. Require local and remote artifact-manifest reconciliation, stopped-App
+proof, the exact image lock and task set, and all 50 current cache-key matches;
+persist import lineage and fail without oracle execution fallback on any
+mismatch. Never import source model responses or mutate the completed run.
 
-Source and offline tests are implemented; paid validation remains pending.
+Source and offline tests are implemented; the fixed paid smoke is clean and
+full paid validation remains pending.
 Never print or document a score until 50 responses/records, passing oracle
 proof, artifact reconciliation, and control-plane verified stopped-App evidence
 are complete.

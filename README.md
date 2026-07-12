@@ -1072,10 +1072,13 @@ The only entrypoint is:
     bash examples/modal/glm47_flash_multi_swe_cpp/run.sh
 
 It defaults to a redacted no-spend plan. Paid smoke/full require explicit
-acknowledgement; both run the all-50 fix_patch proof through exact
-digest-locked, network-blocked Modal Sandboxes before model loading. Full is
-also gated by a real two-task smoke. Source, immutable image lock, runbook, and
-offline tests are implemented; paid Modal validation is pending. No model score
+acknowledgement; both require an all-50 fix_patch proof before model loading.
+Normally it runs through exact digest-locked, network-blocked Modal Sandboxes;
+a fresh full run may instead import an explicitly named completed run's proof
+only after local and remote manifest reconciliation plus all 50 current oracle
+cache-key matches. Full is also gated by a real two-task smoke. Source,
+immutable image lock, runbook, and offline tests are implemented; the paid
+two-task smoke is clean and full paid validation remains. No model score
 may be reported before a complete 50-task local artifact reconciliation and
 control-plane verified stopped-App receipt. Affected simdjson dependencies use
 one checksum-pinned read-only parent mount at a fresh /mnt path because Modal
@@ -1097,3 +1100,6 @@ restores strict identity.
 The GPU server image intentionally omits the dataset image-lock environment;
 remote module hydration tolerates that absence, while the local orchestrator
 still validates and requires the reviewed lock before any remote or paid work.
+Cross-run oracle import is full-only, records source lineage, imports no model
+responses, and has no execution fallback: any missing, stale, non-passing, or
+unreconciled source evidence blocks before model load or GPU allocation.

@@ -1,9 +1,9 @@
 # GLM-4.7-Flash Multi-SWE C++ Base Eval On Modal
 
 Status: source lane, immutable image lock, no-spend plan, operator runbook, and
-offline contract tests are implemented. Paid Modal validation has not run.
-This benchmark is not operationally proven or scored; the paid validation
-ladder remains blocking, and no model result may be presented before a complete
+offline contract tests are implemented. The paid two-task smoke completed with
+clean infrastructure; full paid validation has not run. This benchmark is not
+fully scored, and no model result may be presented before a complete
 50-task stopped-App receipt and local artifact reconciliation exist.
 
 Target: add an optional, repo-owned base evaluation of
@@ -150,12 +150,13 @@ ephemeral Modal App: w8-glm47-multi-swe-cpp-<run-id>
   +-- preflight_remote_run()                 CPU, no GPU
   |     `-- reject stale/concurrent run state
   |
-  +-- prepare_dataset_and_oracle()           CPU control + Modal Sandboxes
+  +-- prepare_dataset_and_oracle()           CPU control + optional Sandboxes
   |     +-- exact dataset revision and JSONL hash
   |     +-- checked-in 50-image digest lock
   |     +-- pinned simdjson offline dependencies
-  |     +-- one network-blocked official-image Sandbox per fix_patch
-  |     `-- blocking all-task oracle proof
+  |     +-- validate an explicit completed source proof, or run one
+  |     +-- one network-blocked official-image Sandbox per executed fix_patch
+  |     `-- blocking all-task exact-cache-key oracle proof
   |
   +-- preload_model()                        CPU, model Volume only
   |     `-- complete exact-revision HF snapshot and manifest
@@ -337,11 +338,13 @@ plan and receipt.
 ```text
 W8_MODAL_MULTI_SWE_PHASE=plan   # default, no paid resources
 W8_MODAL_MULTI_SWE_PHASE=smoke  # full oracle + real model + two model tasks
-W8_MODAL_MULTI_SWE_PHASE=full   # full oracle + smoke + all 50 model tasks
+W8_MODAL_MULTI_SWE_PHASE=full   # all-task proof + smoke + all 50 model tasks
 ```
 
-Full cannot skip smoke. Smoke cannot skip the all-task oracle gate. There is
-no `skip_oracle`, `skip_smoke`, mutable-image, or generic-image override.
+Full cannot skip smoke or the all-task oracle gate. A full-only
+`W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID` may satisfy that gate from a distinct
+completed run; there is no unchecked `skip_oracle`, `skip_smoke`, mutable-image,
+or generic-image override.
 
 ### Fixed first-run defaults
 
@@ -628,7 +631,9 @@ prepared checkout, tests, or oracle patch to the model server.
 
 ## Blocking Oracle Admission
 
-Smoke and full both require an all-task oracle gate before model loading.
+Smoke and full both require an all-task oracle gate before model loading. Smoke
+executes it. A fresh full run may either execute it or import an explicitly
+named completed run's proof.
 
 For each of the 50 tasks:
 
@@ -643,8 +648,12 @@ For each of the 50 tasks:
   dependency bundle, and Modal backend version.
 
 Resume may reuse only passing oracle records with an identical cache key.
-Missing, failed, provisional, or stale records are rerun. Persist a summary and
-provisional manifest after every task so interruption cannot erase progress.
+Without cross-run import, missing, failed, provisional, or stale records are
+rerun. Requested cross-run import is stricter: require a locally and remotely
+reconciled source artifact manifest, stopped-App proof, exact lock/task set,
+admitted summary/JSONL/individual records, and all 50 recomputed current cache
+keys. Any mismatch blocks without executing an oracle fallback. Persist source
+lineage in the fresh run and import no model response.
 
 Admission requires:
 
@@ -677,7 +686,7 @@ Smoke is paid and performs:
 
 1. remote stale-run admission;
 2. exact dataset staging;
-3. all-50-task Modal oracle admission;
+3. all-50-task Modal oracle admission, executed or exact-proof imported;
 4. exact model snapshot preload;
 5. real four-H100 SGLang startup and authenticated admission;
 6. one response for each of two fixed smoke task IDs;
@@ -938,7 +947,9 @@ Mock Modal only at the thin boundary.
 - immutable model/dataset/Image identities only;
 - strict `H100!:4`, one replica, zero warm containers;
 - paid acknowledgement for smoke/full;
-- full always includes smoke and oracle;
+- full always includes smoke and an all-task oracle proof;
+- cross-run proof import is full-only, distinct, stopped, reconciled, and exact;
+- requested import has no oracle-execution fallback;
 - samples per task fixed to one;
 - numeric bounds for tokens, timeouts, memory, CPU, and concurrency;
 - dirty Git full-run rejection;
@@ -1031,8 +1042,9 @@ Never jump directly to the full run. Execute and retain receipts in order:
 10. real-weight four-H100 SGLang health/models/admission probe;
 11. one saved Multi-SWE prompt through model, parser, and Sandbox;
 12. fixed two-task blocking smoke;
-13. full 50-response generation, early GPU release, and full grading;
-14. local artifact reconciliation, summary recomputation, and stopped-App
+13. validate the completed smoke as an optional full-run oracle source;
+14. full 50-response generation, early GPU release, and full grading;
+15. local artifact reconciliation, summary recomputation, and stopped-App
     verification.
 
 Each step blocks the next. Convert every paid infrastructure failure into an
@@ -1063,7 +1075,8 @@ Update every required surface in the same logical change:
 
 Repo-wide docs must say "planned" until source, offline tests, and no-spend plan
 exist. They must say "implemented, paid validation pending" until the real
-two-task smoke passes. They must not quote a model result until a complete
+two-task smoke passes, then say full validation remains. They must not quote a
+model result until a complete
 50-task receipt has `modal_app_stopped: true` and the local artifact copy
 revalidates.
 
@@ -1093,6 +1106,7 @@ Update the shared target once; never replace or fork the symlinks.
       unconditional terminate/detach.
 - [x] Implement incremental oracle persistence and exact-key resume.
 - [x] Enforce all-task oracle admission before GPU work.
+- [x] Add fail-closed cross-run oracle-proof import for a fresh full run.
 
 ### Phase C: GLM serving and evaluation orchestration
 
@@ -1120,8 +1134,8 @@ Update the shared target once; never replace or fork the symlinks.
 - [x] Run focused and full offline validation.
 - [x] Keep the dataset image lock control-plane-only; allow GPU Server module
       hydration without its env while failing local orchestration closed.
-- [ ] Execute paid ladder through two-task smoke.
-- [ ] Turn each paid failure into a regression.
+- [x] Execute paid ladder through two-task smoke.
+- [x] Turn each paid failure into a regression.
 - [ ] Execute full only after clean smoke.
 - [ ] Record immutable first-run evidence without committing generated files.
 
@@ -1213,10 +1227,12 @@ export W8_MODAL_MULTI_SWE_PHASE='plan'
 bash examples/modal/glm47_flash_multi_swe_cpp/run.sh
 ```
 
-Full run, which always includes the all-task oracle and two-task smoke:
+Full run, which imports the completed smoke's all-task proof and still runs the
+two-task smoke:
 
 ```bash
 export W8_MODAL_MULTI_SWE_PHASE='full'
+export W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID='glm47-mswe-smoke-20260712104329'
 export W8_MODAL_MULTI_SWE_ACKNOWLEDGE_PAID_RUN='1'
 export W8_MODAL_MULTI_SWE_GPU='H100!:4'
 export W8_MODAL_MULTI_SWE_MAX_TOKENS='32768'
@@ -1255,6 +1271,8 @@ Completed in source:
       artifact contracts.
 - [x] Exact dataset revision and reviewed 50-task linux/amd64 image digest lock.
 - [x] CPU dataset/dependency staging and all-task oracle-before-model ordering.
+- [x] Full-only stopped/reconciled cross-run oracle-proof import with exact
+      current cache-key validation and no execution fallback.
 - [x] Native network-blocked Modal Sandbox adapter with bounded resources,
       output capture, retry, terminate(wait=True), and detach.
 - [x] One-replica four-H100 serving, fixed smoke, generation-first full flow,
@@ -1263,5 +1281,5 @@ Completed in source:
 
 Still blocking any model claim:
 
-- [ ] Execute the paid validation ladder through the fixed two-task smoke.
+- [x] Execute the paid validation ladder through the fixed two-task smoke.
 - [ ] Execute and reconcile the complete 50-task run.

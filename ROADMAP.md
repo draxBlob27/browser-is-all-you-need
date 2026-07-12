@@ -358,14 +358,19 @@ consumed entirely by GLM reasoning; the larger bound remains inside the exact
 checkpoint's 202752-position context. On admission failure, print only safe
 per-task counters and download the committed failure subtree locally before
 re-raising the remote error.
-Define the singleton Server with static `min_containers=0`, then dynamically
+Do not use pinned Modal SDK 1.5.2's `App.server` for the long-lived SGLang
+replica: its hidden service Function retains the SDK's 300-second execution
+timeout and causes five-minute container recycling. Use the public
+`@app.function` plus `@modal.web_server` path with an explicit lifetime of
+cold-start timeout plus runner timeout plus 600 seconds. Record that derived
+timeout in plans and receipts. Keep static `min_containers=0`, then dynamically
 hold exactly one replica (`min_containers=1`) only after CPU/Volume admission
 and model-cache preparation. Keep that lease through all Aider work. On either
 success or error, restore `min_containers=0` and a two-second drain before
 artifact transfer; explicit stop and control-plane verification still close
-the App. The 1200-second window remains a fallback and immutable identity. The
-active lease is operational rather than benchmark identity, so old compatible
-artifacts may resume with it enabled.
+the App. The 1200-second window remains an identity-bound fallback. The
+execution lifetime and active lease are operational rather than benchmark
+identity, so old compatible artifacts may resume with them enabled.
 When downloading recursive Volume artifacts under Modal SDK 1.5.2, read only
 entries whose public type is exactly `FileEntryType.FILE`. Skip directories,
 symlinks, and other non-regular entries before `read_file`, then preserve the
@@ -565,12 +570,16 @@ Question:
 The canonical export-only flow is
 examples/modal/glm47_flash_multi_swe_cpp/README.md. Plan is no-spend by
 default. Smoke/full require the checked-in exact dataset revision and 50-image
-linux/amd64 digest lock, all-task fix_patch admission in the same
+linux/amd64 digest lock, an all-task fix_patch proof for the same
 network-blocked Modal Sandbox backend, one strict H100!:4 SGLang replica,
-separated reasoning/content, and the fixed two-task smoke.
+separated reasoning/content, and the fixed two-task smoke. A fresh full run may
+import that proof from an explicitly named completed run only when its stopped
+receipt and artifact manifest reconcile and all 50 current oracle cache keys
+match; requested import never falls back to executing oracles.
 
-Decision gate: source and offline contracts are implemented, but paid
-validation is pending. Do not publish a result until all 50 saved responses
+Decision gate: source and offline contracts are implemented and the paid
+two-task smoke is infrastructure-clean, but full validation is pending. Do not
+publish a result until all 50 saved responses
 map to 50 complete records, the strict summary recomputes with a passing oracle
 proof, artifacts reconcile byte-for-byte, every Sandbox terminated/detached,
 and the App receipt says modal_app_stopped: true. Label the result repo-owned,
@@ -596,3 +605,5 @@ smoke/full/final artifact.
 Keep the dataset image lock control-plane-only: do not attach it to the GPU
 server image. Server module hydration must tolerate its absence, while local
 orchestration must require the reviewed lock before preflight or paid work.
+Persist imported proof lineage in the new run and never import the source
+smoke's model responses or mutate the completed source run.

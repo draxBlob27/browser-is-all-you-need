@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -163,6 +164,23 @@ def test_config_plan_is_deterministic_redacted_and_no_spend(tmp_path: Path) -> N
     assert cfg.max_tokens == DEFAULT_MAX_TOKENS
     assert SGLANG_SCALEDOWN_WINDOW_SECONDS == 1200
 
+    imported = render_plan(
+        replace(
+            cfg,
+            phase="full",
+            oracle_source_run_id="glm47-mswe-smoke-source",
+        ),
+        validate_image_lock(LOCK),
+    )
+    assert imported["oracle_admission"] == {
+        "mode": "cross-run-import",
+        "source_run_id": "glm47-mswe-smoke-source",
+        "require_stopped_source_app": True,
+        "require_reconciled_source_manifest": True,
+        "require_all_exact_cache_keys": True,
+        "fallback_to_execution": False,
+    }
+
 
 @pytest.mark.parametrize(
     ("name", "value", "message"),
@@ -192,6 +210,23 @@ def test_paid_phase_requires_acknowledgement_and_lock(tmp_path: Path) -> None:
             tmp_path,
             W8_MODAL_MULTI_SWE_PHASE="smoke",
             W8_MODAL_MULTI_SWE_ACKNOWLEDGE_PAID_RUN="1",
+        )
+
+
+def test_oracle_source_run_is_full_only_safe_and_distinct(tmp_path: Path) -> None:
+    with pytest.raises(ModalMultiSweError, match="only for full"):
+        config(
+            tmp_path,
+            W8_MODAL_MULTI_SWE_PHASE="smoke",
+            W8_MODAL_MULTI_SWE_ACKNOWLEDGE_PAID_RUN="1",
+            W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID="prior-smoke-run",
+        )
+    with pytest.raises(ModalMultiSweError, match="must differ"):
+        config(
+            tmp_path,
+            W8_MODAL_MULTI_SWE_PHASE="full",
+            W8_MODAL_MULTI_SWE_ACKNOWLEDGE_PAID_RUN="1",
+            W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID="glm47-mswe-cpp-test",
         )
 
 
@@ -588,6 +623,8 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     assert "trusted_oracle_patch=True" in runtime_source
     assert "check-app-stopped" in run
     assert app.index("prepare_and_admit(") < app.index("preload_model.remote(")
+    assert "preflight_remote_run.remote(RUNTIME, lock)" in app
+    assert "load_oracle_source_state(" in app
     assert run.index("trap cleanup EXIT") < run.index("modal token info") < run.index("modal run")
     assert "modal deploy" not in run
     assert os.access(RUN_SH, os.X_OK)
@@ -608,7 +645,7 @@ def test_server_import_does_not_require_control_only_image_lock() -> None:
     assert "W8_MODAL_MULTI_SWE_IMAGE_LOCK" not in server_section
     assert "lock = _require_image_lock(LOCK)" in app
     assert app.index("lock = _require_image_lock(LOCK)") < app.index(
-        "resume_state = preflight_remote_run.remote(RUNTIME)"
+        "resume_state = preflight_remote_run.remote(RUNTIME, lock)"
     )
 
 
@@ -627,7 +664,7 @@ def test_modal_152_simdjson_uses_one_fresh_read_only_parent_volume_mount() -> No
 
 def test_runbook_and_repo_docs_name_pending_paid_validation() -> None:
     lane = (LANE / "README.md").read_text(encoding="utf-8")
-    assert "paid Modal validation remains" in lane
+    assert "full paid validation remains" in lane
     assert "not a leaderboard" in lane
     assert "modal_app_stopped: true" in lane
     assert "generate-lock" in lane and "never an implicit benchmark step" in lane
@@ -670,6 +707,118 @@ def test_config_identity_hashes_lane_sources() -> None:
         "examples/modal/glm47_flash_multi_swe_cpp/modal_app.py",
     }
     assert cfg.identity_mapping()["source_file_hashes"] == cfg.source_file_hashes
+
+
+def _write_oracle_source_fixture(
+    tmp_path: Path,
+    cfg: ModalMultiSweConfig,
+    lock: dict[str, object],
+) -> Path:
+    source = cfg.local_run_path(tmp_path).parent / cfg.oracle_source_run_id
+    source.mkdir(parents=True)
+    source_config = cfg.redacted_mapping()
+    source_config.update(
+        {
+            "run_id": cfg.oracle_source_run_id,
+            "app_name": "w8-glm47-multi-swe-cpp-" + cfg.oracle_source_run_id,
+            "remote_run_path": "/runs/" + cfg.oracle_source_run_id,
+            "oracle_source_run_id": "",
+        }
+    )
+    dataset_receipt = {
+        "dataset_revision": cfg.dataset_revision,
+        "image_lock_sha256": lock["sha256"],
+    }
+    summary = {
+        "schema_version": 1,
+        "complete": True,
+        "all_passed": True,
+        "expected_task_count": EXPECTED_CPP_TASKS,
+        "record_count": EXPECTED_CPP_TASKS,
+        "passed_count": EXPECTED_CPP_TASKS,
+        "correct_answer_source": "fix_patch",
+        "harness_backend": "modal-sandbox",
+    }
+    modal_contract.write_json(source / "config.redacted.json", source_config)
+    modal_contract.write_json(source / "dataset.receipt.json", dataset_receipt)
+    modal_contract.write_json(source / "image-lock.json", lock)
+    (source / "image-lock.sha256").write_text(str(lock["sha256"]) + "\n", encoding="utf-8")
+    modal_contract.write_json(
+        source / "run_receipt.json",
+        {
+            "run_id": cfg.oracle_source_run_id,
+            "status": "smoke_complete",
+            "oracle_passed": EXPECTED_CPP_TASKS,
+            "modal_app_stopped": True,
+            "teardown_status": "verified",
+        },
+    )
+    modal_contract.write_json(source / "data/oracle.summary.json", summary)
+    records = []
+    for task_id, lock_row in lock["tasks"].items():
+        record = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "instance_id": task_id,
+            "oracle_cache_key": "a" * 64,
+            "setup_valid": True,
+            "reason": "passed",
+            "tests_collected": 1,
+            "image": lock_row["digest"],
+            "harness_backend": "modal-sandbox",
+        }
+        records.append(record)
+        modal_contract.write_json(source / "data/oracle.records" / f"{task_id}.json", record)
+    (source / "data/oracle.records.jsonl").write_text(
+        "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    modal_contract.write_json(
+        source / "data/manifest.json",
+        {
+            "schema_version": 3,
+            "admitted": True,
+            "task_count": EXPECTED_CPP_TASKS,
+            "dataset_revision": cfg.dataset_revision,
+            "harness_backend": "modal-sandbox",
+        },
+    )
+    modal_contract.write_json(
+        source / "artifact_manifest.json",
+        build_artifact_manifest(source),
+    )
+    return source
+
+
+def test_oracle_source_requires_reconciled_stopped_all_task_proof(tmp_path: Path) -> None:
+    lock_path = tmp_path / DEFAULT_LOCK_PATH
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_bytes(LOCK.read_bytes())
+    cfg = config(
+        tmp_path,
+        W8_MODAL_MULTI_SWE_RUN_ID="glm47-mswe-full-test",
+        W8_MODAL_MULTI_SWE_PHASE="full",
+        W8_MODAL_MULTI_SWE_ACKNOWLEDGE_PAID_RUN="1",
+        W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID="glm47-mswe-smoke-source",
+    )
+    lock = validate_image_lock(lock_path)
+    source = _write_oracle_source_fixture(tmp_path, cfg, lock)
+
+    state = modal_contract.load_oracle_source_state(
+        config=cfg,
+        source_root=source,
+        lock=lock,
+    )
+
+    assert len(state["oracle_records"]) == EXPECTED_CPP_TASKS
+    assert state["oracle_import"]["fallback_to_execution"] is False
+    assert prepare_local_plan(cfg, repo_root=tmp_path) == cfg.local_run_path(tmp_path)
+
+    receipt = json.loads((source / "run_receipt.json").read_text(encoding="utf-8"))
+    receipt["modal_app_stopped"] = False
+    modal_contract.write_json(source / "run_receipt.json", receipt)
+    with pytest.raises(ModalMultiSweError, match="stopped-App proof"):
+        modal_contract.load_oracle_source_state(config=cfg, source_root=source, lock=lock)
 
 
 def test_missing_editable_content_is_strict_model_outcome() -> None:
@@ -742,6 +891,90 @@ def test_oracle_resume_reuses_exact_passes_and_checkpoints_each_task(
     assert len(checkpoints) == EXPECTED_CPP_TASKS + 1
     assert checkpoints[-1]["data/oracle.summary.json"]["record_count"] == EXPECTED_CPP_TASKS
     assert writes[0]["data/oracle-source-migration.json"]["exact_oracle_cache_keys_required"]
+
+
+def test_cross_run_oracle_import_has_no_execution_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_run_id = "glm47-mswe-smoke-source"
+    cfg = replace(
+        config(tmp_path),
+        phase="full",
+        oracle_source_run_id=source_run_id,
+    )
+    task_ids = [f"task-{index:02d}" for index in range(EXPECTED_CPP_TASKS)]
+    tasks = [{"instance_id": task_id, "fix_patch": "diff"} for task_id in task_ids]
+    lock = {
+        "sha256": "d" * 64,
+        "platform": "linux/amd64",
+        "tasks": {
+            task_id: {
+                "tag": "mswebench/fmtlib_m_fmt:pr-1",
+                "digest": "mswebench/fmtlib_m_fmt@sha256:" + "e" * 64,
+            }
+            for task_id in task_ids
+        },
+    }
+    prompts = {task_id: {"prompt": "prompt " + task_id} for task_id in task_ids}
+    monkeypatch.setattr(
+        modal_runtime,
+        "oracle_cache_key",
+        lambda _config, row, _lock: "cache-" + row["instance_id"],
+    )
+    prior = {
+        task_id: {
+            "schema_version": 1,
+            "task_id": task_id,
+            "instance_id": task_id,
+            "oracle_cache_key": "cache-" + task_id,
+            "setup_valid": True,
+            "reason": "passed",
+            "tests_collected": 1,
+        }
+        for task_id in task_ids
+    }
+    writes: list[dict[str, object]] = []
+
+    admitted = modal_runtime.prepare_and_admit(
+        config=cfg,
+        lock=lock,
+        tasks=tasks,
+        dataset_receipt={"prompts": prompts},
+        grade=lambda *_args: pytest.fail("cross-run import must not execute an oracle"),
+        persist=writes.append,
+        resume_state={
+            "oracle_records": prior,
+            "oracle_import": {
+                "source_run_id": source_run_id,
+                "exact_oracle_cache_keys_required": True,
+                "fallback_to_execution": False,
+            },
+        },
+    )
+
+    assert admitted["oracle_summary"]["provenance"] == {
+        "mode": "cross-run-import",
+        "source_run_id": source_run_id,
+        "exact_oracle_cache_keys": True,
+        "fallback_to_execution": False,
+    }
+    assert writes[0]["data/oracle-import.json"]["source_run_id"] == source_run_id
+
+    bad = dict(prior)
+    bad[task_ids[0]] = dict(bad[task_ids[0]], oracle_cache_key="wrong")
+    with pytest.raises(ModalMultiSweError, match="not exact"):
+        modal_runtime.prepare_and_admit(
+            config=cfg,
+            lock=lock,
+            tasks=tasks,
+            dataset_receipt={"prompts": prompts},
+            grade=lambda *_args: pytest.fail("mismatched import must not execute an oracle"),
+            persist=lambda _files: pytest.fail("mismatched import must fail before persistence"),
+            resume_state={
+                "oracle_records": bad,
+                "oracle_import": {"source_run_id": source_run_id},
+            },
+        )
 
 
 def test_stage_resume_reuses_matching_response_and_grader_record(

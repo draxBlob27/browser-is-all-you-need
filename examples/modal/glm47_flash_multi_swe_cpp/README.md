@@ -7,8 +7,9 @@ contract, oracle proof, and correctness summary.
 
 It is separate from PIE training, the Moonlight SLIME Multi-SWE lane, and the
 official Multi-SWE evaluator. It is a repo-owned result, not a leaderboard
-score. Source and offline tests are implemented; paid Modal validation remains
-pending. Do not quote a model score until a complete 50-task receipt proves
+score. Source and offline tests are implemented; the fixed paid smoke is clean
+and full paid validation remains pending. Do not quote a model score until a
+complete 50-task receipt proves
 modal_app_stopped: true and the local artifact copy revalidates.
 
 ## One entrypoint
@@ -18,8 +19,10 @@ Run from the repository root:
     bash examples/modal/glm47_flash_multi_swe_cpp/run.sh
 
 Configuration is export-only. Plan is the default and creates no paid
-resources. Smoke/full require explicit acknowledgement. Full always runs the
-all-task oracle and fixed two-task smoke first.
+resources. Smoke/full require explicit acknowledgement. Full always requires
+an all-task oracle proof and runs the fixed two-task smoke first. It may import
+that proof from an explicitly named completed run instead of executing the
+same 50 oracle Sandboxes.
 
 ## Required exports
 
@@ -32,6 +35,10 @@ all-task oracle and fixed two-task smoke first.
     export W8_MODAL_MULTI_SWE_MODEL_REVISION='<40-lowercase-hex-commit>'
     export W8_MODAL_MULTI_SWE_DATASET_REVISION='d0fab3ccc7dff232fcaac234cf8af9a2efeaccf6'
     export W8_MODAL_MULTI_SWE_SGLANG_IMAGE='lmsysorg/sglang@sha256:<64-hex>'
+
+For a fresh full run that reuses the admitted proof from the completed smoke:
+
+    export W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID='glm47-mswe-smoke-20260712104329'
 
 HF_TOKEN is optional and downloader-only. Modal credentials stay in the local
 control plane. The random SGLang bearer reaches only the server and request
@@ -84,9 +91,18 @@ The first result family fixes one response per task, temperature zero, top-p
 one, 32,768 completion tokens, one SGLang replica, four strict H100s, and four
 concurrent graders. It reports strict pass rate, not pass@k or PIE speed.
 
+`W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID` is full-only and must differ from the
+new run ID. Before authentication, plan validates the local source receipt,
+stopped-App proof, artifact manifest, exact image lock, admitted data manifest,
+summary, aggregate JSONL, and 50 individual records. Remote preflight repeats
+those checks against the results Volume. Dataset staging then recomputes every
+current oracle cache key; all 50 must match before any new run artifact, model
+load, or GPU allocation. A missing or stale record fails closed—there is no
+fallback oracle execution when import is requested.
+
 ## Grader contract
 
-Every oracle or candidate patch receives a fresh Modal Sandbox built from the
+Every newly executed oracle or candidate patch receives a fresh Modal Sandbox built from the
 task's exact checked-in mswebench image digest. Networking is blocked. CPU and
 memory request/limit are both 2 cores and 2,048 MiB. The Sandbox has a bounded
 lifetime and the test exec has a 1,200-second ceiling.
@@ -148,6 +164,12 @@ or final receipt restores strict source identity. Saved responses and grader
 records always require their exact identities and cache keys. Completed runs
 are immutable. A fresh run ID remains the normal path.
 
+Cross-run oracle import is distinct from resume. It copies only a completed
+source run's validated oracle proof into a fresh full run and records lineage in
+`data/oracle-import.json`, `data/oracle.summary.json`, and `run_receipt.json`.
+It never imports smoke model responses and never makes the completed source run
+mutable.
+
 ## Teardown and failure recovery
 
 The wrapper installs traps before authentication. It explicitly stops the
@@ -178,6 +200,7 @@ Paid-incident checklist:
 
 - [x] Server module hydration does not require the control-only image-lock env.
 - [x] Local orchestration remains fail-closed without the reviewed image lock.
-- [ ] Resume the fixed smoke and complete authenticated SGLang admission.
-- [ ] Complete both fixed smoke tasks and verify stopped-App evidence.
+- [x] Resume the fixed smoke and complete authenticated SGLang admission.
+- [x] Complete both fixed smoke tasks and verify stopped-App evidence.
+- [x] Validate explicit all-50 oracle import from the completed smoke offline.
 - [ ] Run full only after the smoke is clean.

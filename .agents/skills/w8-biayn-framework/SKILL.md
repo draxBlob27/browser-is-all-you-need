@@ -672,7 +672,13 @@ successful admission or any benchmark-stage artifact.
 Keep the dataset image lock out of the GPU server image. Modal Server module
 hydration must accept its absence, but local orchestration must require the
 reviewed lock before preflight, dataset/oracle, or paid work.
+For a fresh full run, `W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID` may import the
+completed smoke's all-50 proof. Validate the source locally before auth and
+again in the results Volume: reconciled artifact manifest, stopped-App receipt,
+exact lock/task set, admitted summary/JSONL/records, then all 50 recomputed
+current oracle cache keys. Persist import lineage, import no model responses,
+and fail closed without executing oracles on any mismatch.
 
-The source/no-spend/offline-test path is implemented, while paid validation is
-pending. Require the paid ladder and a complete stopped-App receipt before
+The source/no-spend/offline-test path and fixed paid smoke are complete, while
+full paid validation is pending. Require a complete stopped-App receipt before
 reporting a model result.

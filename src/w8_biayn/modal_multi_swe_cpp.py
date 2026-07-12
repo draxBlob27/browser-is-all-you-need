@@ -225,6 +225,7 @@ class ModalMultiSweConfig:
     local_root: str = DEFAULT_LOCAL_ROOT
     image_lock_path: str = DEFAULT_LOCK_PATH
     resume: bool = False
+    oracle_source_run_id: str = ""
     source_commit: str = "unknown"
     source_dirty: bool = False
 
@@ -298,6 +299,9 @@ class ModalMultiSweConfig:
                 env.get("W8_MODAL_MULTI_SWE_IMAGE_LOCK", DEFAULT_LOCK_PATH)
             ).strip(),
             resume=_boolean(env, "W8_MODAL_MULTI_SWE_RESUME"),
+            oracle_source_run_id=str(
+                env.get("W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID", "")
+            ).strip(),
             source_commit=commit,
             source_dirty=dirty,
             source_file_hashes=source_file_hashes(repo_root),
@@ -309,6 +313,13 @@ class ModalMultiSweConfig:
         errors = []
         if not RUN_ID_RE.fullmatch(self.run_id):
             errors.append("W8_MODAL_MULTI_SWE_RUN_ID has an unsafe value")
+        if self.oracle_source_run_id:
+            if not RUN_ID_RE.fullmatch(self.oracle_source_run_id):
+                errors.append("W8_MODAL_MULTI_SWE_ORACLE_SOURCE_RUN_ID has an unsafe value")
+            if self.oracle_source_run_id == self.run_id:
+                errors.append("oracle source run must differ from the current run")
+            if self.phase != "full":
+                errors.append("oracle source run is supported only for full evaluation")
         for value, name in (
             (self.modal_profile, "MODAL_PROFILE"),
             (self.model_volume, "model Volume"),
@@ -854,6 +865,14 @@ def render_plan(
         "action": "no paid resources" if config.phase == "plan" else "ephemeral paid run",
         "blocking_oracle": config.phase in {"smoke", "full"},
         "blocking_smoke": config.phase == "full",
+        "oracle_admission": {
+            "mode": "cross-run-import" if config.oracle_source_run_id else "execute-all",
+            "source_run_id": config.oracle_source_run_id or None,
+            "require_stopped_source_app": bool(config.oracle_source_run_id),
+            "require_reconciled_source_manifest": bool(config.oracle_source_run_id),
+            "require_all_exact_cache_keys": bool(config.oracle_source_run_id),
+            "fallback_to_execution": False if config.oracle_source_run_id else None,
+        },
         "config": config.redacted_mapping(),
         "image_lock": {
             "path": config.image_lock_path,
@@ -897,6 +916,14 @@ def prepare_local_plan(config: ModalMultiSweConfig, *, repo_root: str | Path = "
     lock_path = Path(repo_root) / config.image_lock_path
     lock = validate_image_lock(lock_path) if lock_path.is_file() else None
     root = config.local_run_path(repo_root)
+    if config.oracle_source_run_id:
+        if lock is None:
+            raise ModalMultiSweError("oracle import requires the checked-in image lock")
+        load_oracle_source_state(
+            config=config,
+            source_root=root.parent / config.oracle_source_run_id,
+            lock=lock,
+        )
     if root.exists() and any(root.iterdir()):
         allowed = {"plan.json", "config.redacted.json"}
         unexpected = {item.name for item in root.iterdir()} - allowed
@@ -982,6 +1009,144 @@ def build_artifact_manifest(root: str | Path) -> dict[str, Any]:
     }
 
 
+def load_oracle_source_state(
+    *,
+    config: ModalMultiSweConfig,
+    source_root: str | Path,
+    lock: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate a completed run before importing its exact oracle proof."""
+
+    source_run_id = config.oracle_source_run_id
+    if not source_run_id:
+        raise ModalMultiSweError("oracle source run id is required")
+    root = Path(source_root)
+    required = {
+        "artifact_manifest.json",
+        "config.redacted.json",
+        "dataset.receipt.json",
+        "image-lock.json",
+        "image-lock.sha256",
+        "run_receipt.json",
+        "data/manifest.json",
+        "data/oracle.records.jsonl",
+        "data/oracle.summary.json",
+    }
+    missing = sorted(relative for relative in required if not (root / relative).is_file())
+    if missing:
+        raise ModalMultiSweError(f"oracle source run is incomplete: {missing}")
+
+    source_config = json.loads((root / "config.redacted.json").read_text(encoding="utf-8"))
+    if source_config.get("run_id") != source_run_id:
+        raise ModalMultiSweError("oracle source config run id mismatch")
+    if source_config.get("dataset_revision") != config.dataset_revision:
+        raise ModalMultiSweError("oracle source dataset revision mismatch")
+    if source_config.get("results_volume") != config.results_volume:
+        raise ModalMultiSweError("oracle source results Volume mismatch")
+
+    receipt = json.loads((root / "run_receipt.json").read_text(encoding="utf-8"))
+    if receipt.get("run_id") != source_run_id:
+        raise ModalMultiSweError("oracle source receipt run id mismatch")
+    if receipt.get("status") not in {"smoke_complete", "complete"}:
+        raise ModalMultiSweError("oracle source run is not complete")
+    if receipt.get("modal_app_stopped") is not True or receipt.get("teardown_status") != "verified":
+        raise ModalMultiSweError("oracle source run lacks stopped-App proof")
+    if int(receipt.get("oracle_passed") or 0) != EXPECTED_CPP_TASKS:
+        raise ModalMultiSweError("oracle source receipt lacks 50 passing oracles")
+
+    stored_manifest = json.loads(
+        (root / "artifact_manifest.json").read_text(encoding="utf-8")
+    )
+    if build_artifact_manifest(root) != stored_manifest:
+        raise ModalMultiSweError("oracle source artifacts do not match their manifest")
+
+    source_lock = json.loads((root / "image-lock.json").read_text(encoding="utf-8"))
+    if source_lock != dict(lock):
+        raise ModalMultiSweError("oracle source image lock mismatch")
+    source_lock_sha = (root / "image-lock.sha256").read_text(encoding="utf-8").strip()
+    if source_lock_sha != str(lock.get("sha256") or ""):
+        raise ModalMultiSweError("oracle source image-lock hash mismatch")
+
+    dataset_receipt = json.loads(
+        (root / "dataset.receipt.json").read_text(encoding="utf-8")
+    )
+    if dataset_receipt.get("dataset_revision") != config.dataset_revision:
+        raise ModalMultiSweError("oracle source dataset receipt mismatch")
+    if dataset_receipt.get("image_lock_sha256") != lock.get("sha256"):
+        raise ModalMultiSweError("oracle source dataset image-lock mismatch")
+
+    summary = json.loads((root / "data/oracle.summary.json").read_text(encoding="utf-8"))
+    expected_summary = {
+        "complete": True,
+        "all_passed": True,
+        "expected_task_count": EXPECTED_CPP_TASKS,
+        "record_count": EXPECTED_CPP_TASKS,
+        "passed_count": EXPECTED_CPP_TASKS,
+        "correct_answer_source": "fix_patch",
+        "harness_backend": "modal-sandbox",
+    }
+    if any(summary.get(key) != value for key, value in expected_summary.items()):
+        raise ModalMultiSweError("oracle source summary is not an all-task passing proof")
+
+    records_root = root / "data" / "oracle.records"
+    paths = sorted(records_root.glob("*.json")) if records_root.is_dir() else []
+    records: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        task_id = str(record.get("task_id") or "")
+        if path.stem != task_id or task_id in records:
+            raise ModalMultiSweError("oracle source record identity mismatch")
+        if task_id not in lock["tasks"]:
+            raise ModalMultiSweError("oracle source record task set mismatch")
+        if (
+            record.get("setup_valid") is not True
+            or record.get("reason") != "passed"
+            or int(record.get("tests_collected") or 0) <= 0
+            or record.get("image") != lock["tasks"][task_id]["digest"]
+            or record.get("harness_backend") != "modal-sandbox"
+        ):
+            raise ModalMultiSweError("oracle source contains a non-passing record")
+        records[task_id] = record
+    if set(records) != set(lock["tasks"]) or len(records) != EXPECTED_CPP_TASKS:
+        raise ModalMultiSweError("oracle source does not contain the exact 50-task record set")
+    ordered_records = [records[task_id] for task_id in sorted(records)]
+    aggregate_records_jsonl = [
+        json.loads(line)
+        for line in (root / "data/oracle.records.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    if aggregate_records_jsonl != ordered_records:
+        raise ModalMultiSweError("oracle source aggregate records do not reconcile")
+    data_manifest = json.loads((root / "data/manifest.json").read_text(encoding="utf-8"))
+    if (
+        data_manifest.get("admitted") is not True
+        or data_manifest.get("task_count") != EXPECTED_CPP_TASKS
+        or data_manifest.get("dataset_revision") != config.dataset_revision
+        or data_manifest.get("harness_backend") != "modal-sandbox"
+    ):
+        raise ModalMultiSweError("oracle source data manifest is not admitted")
+
+    import_receipt = {
+        "schema_version": 1,
+        "kind": "cross-run-oracle-proof-import",
+        "source_run_id": source_run_id,
+        "source_status": receipt["status"],
+        "source_manifest_sha256": sha256_json(stored_manifest),
+        "source_oracle_summary_sha256": sha256_json(summary),
+        "source_oracle_records_sha256": sha256_json(records),
+        "source_modal_app_stopped": True,
+        "exact_oracle_cache_keys_required": True,
+        "fallback_to_execution": False,
+    }
+    return {
+        "dataset_receipt": dataset_receipt,
+        "oracle_records": records,
+        "oracle_import": import_receipt,
+    }
+
+
 def aggregate_records(
     records: Sequence[dict[str, Any]],
     *,
@@ -1056,6 +1221,8 @@ def validate_local_artifacts(
         "run_receipt.json",
         "artifact_manifest.json",
     }
+    if config.oracle_source_run_id:
+        required.add("data/oracle-import.json")
     missing = sorted(name for name in required if not (root / name).is_file())
     if missing:
         raise ModalMultiSweError(f"local artifact copy is incomplete: {missing}")
@@ -1081,6 +1248,19 @@ def validate_local_artifacts(
         raise ModalMultiSweError("local result set has wrong task cardinality")
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     oracle = json.loads(oracle_path.read_text(encoding="utf-8"))
+    if config.oracle_source_run_id:
+        imported = json.loads(
+            (root / "data/oracle-import.json").read_text(encoding="utf-8")
+        )
+        if (
+            imported.get("source_run_id") != config.oracle_source_run_id
+            or imported.get("exact_oracle_cache_keys_required") is not True
+            or imported.get("fallback_to_execution") is not False
+            or oracle.get("provenance", {}).get("source_run_id")
+            != config.oracle_source_run_id
+            or receipt.get("oracle_source_run_id") != config.oracle_source_run_id
+        ):
+            raise ModalMultiSweError("oracle import lineage is incomplete")
     recomputed = aggregate_records(
         records,
         oracle_summary=oracle,
