@@ -10,6 +10,7 @@ the only Modal-aware boundary.
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -25,6 +26,14 @@ import yaml
 
 SCHEMA_VERSION = 1
 BENCHMARK_LABEL = "aider-polyglot-cpp-modal-base-eval"
+SEQUENTIAL_EVAL_MODE = "sequential-repair"
+INDEPENDENT_EVAL_MODE = "independent-pass-at-1-and-8"
+INDEPENDENT_RESULT_LABEL = (
+    "repo-derived independent pass@1/pass@8 by cumulative Aider try depth"
+)
+INDEPENDENT_SAMPLES_PER_TASK = 8
+INDEPENDENT_TRIES = 2
+PASS_AT_ESTIMATOR_VERSION = "independent-aider-two-try-v2"
 MODEL_REPO = "zai-org/GLM-4.7-Flash"
 SERVED_MODEL_NAME = "glm-4.7-flash"
 AIDER_MODEL_NAME = "openai/glm-4.7-flash"
@@ -162,6 +171,10 @@ class ModalAiderConfig:
     results_volume: str = "w8-aider-polyglot-cpp-results"
     local_root: str = DEFAULT_LOCAL_ROOT
     resume: bool = False
+    eval_mode: str = SEQUENTIAL_EVAL_MODE
+    samples_per_task: int = INDEPENDENT_SAMPLES_PER_TASK
+    base_seed: int = 0
+    acknowledge_pass_at_8: bool = False
 
     @classmethod
     def from_env(
@@ -208,6 +221,16 @@ class ModalAiderConfig:
             ).strip(),
             local_root=str(env.get("W8_MODAL_AIDER_LOCAL_ROOT", DEFAULT_LOCAL_ROOT)).strip(),
             resume=_boolean(env, "W8_MODAL_AIDER_RESUME"),
+            eval_mode=str(
+                env.get("W8_MODAL_AIDER_EVAL_MODE", SEQUENTIAL_EVAL_MODE)
+            ).strip(),
+            samples_per_task=_integer(
+                env, "W8_MODAL_AIDER_SAMPLES_PER_TASK", INDEPENDENT_SAMPLES_PER_TASK
+            ),
+            base_seed=_integer(env, "W8_MODAL_AIDER_BASE_SEED", 0),
+            acknowledge_pass_at_8=_boolean(
+                env, "W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8"
+            ),
         )
         config.validate(repo_root=repo_root)
         return config
@@ -271,6 +294,24 @@ class ModalAiderConfig:
             errors.append("temperature must be in [0, 2]")
         if not 0.0 < self.top_p <= 1.0:
             errors.append("top_p must be in (0, 1]")
+        if self.eval_mode not in {SEQUENTIAL_EVAL_MODE, INDEPENDENT_EVAL_MODE}:
+            errors.append(
+                "W8_MODAL_AIDER_EVAL_MODE must be sequential-repair or "
+                "independent-pass-at-1-and-8"
+            )
+        if self.base_seed < 0:
+            errors.append("W8_MODAL_AIDER_BASE_SEED must be nonnegative")
+        if self.eval_mode == INDEPENDENT_EVAL_MODE:
+            if self.samples_per_task != INDEPENDENT_SAMPLES_PER_TASK:
+                errors.append("independent pass@8 mode requires exactly 8 samples per task")
+            if self.tries != INDEPENDENT_TRIES:
+                errors.append("independent pass@8 mode requires W8_MODAL_AIDER_TRIES=2")
+            if self.temperature <= 0:
+                errors.append("independent pass@8 mode requires positive sampling temperature")
+            if self.phase in {"smoke", "full"} and not self.acknowledge_pass_at_8:
+                errors.append(
+                    "W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8=1 is required for paid pass@8"
+                )
         repo = Path(repo_root).resolve()
         local = (
             (repo / self.local_root).resolve()
@@ -378,7 +419,7 @@ def write_json(path: str | Path, payload: Any) -> None:
 def render_plan(config: ModalAiderConfig) -> dict[str, Any]:
     """Render the deterministic, printable, fully redacted launch plan."""
 
-    return {
+    plan = {
         "schema_version": SCHEMA_VERSION,
         "benchmark": BENCHMARK_LABEL,
         "action": "no paid resources" if config.phase == "plan" else "ephemeral paid run",
@@ -394,6 +435,26 @@ def render_plan(config: ModalAiderConfig) -> dict[str, Any]:
         ],
         "teardown_command": modal_stop_command(config),
     }
+    if config.eval_mode == INDEPENDENT_EVAL_MODE:
+        plan["independent_sampling"] = {
+            "result_family": INDEPENDENT_RESULT_LABEL,
+            "samples_per_task": config.samples_per_task,
+            "full_trajectory_count": config.expected_cpp_tasks * config.samples_per_task,
+            "sampling_smoke_trajectory_count": config.smoke_tests * config.samples_per_task,
+            "base_seed": config.base_seed,
+            "seed_schedule": [sample_seed(config, index) for index in range(1, 9)],
+            "max_tries_per_trajectory": INDEPENDENT_TRIES,
+            "maximum_full_edit_attempts": (
+                config.expected_cpp_tasks * config.samples_per_task * INDEPENDENT_TRIES
+            ),
+            "maximum_sampling_smoke_edit_attempts": (
+                config.smoke_tests * config.samples_per_task * INDEPENDENT_TRIES
+            ),
+            "temperature": config.temperature,
+            "top_p": config.top_p,
+            "additional_paid_acknowledgement": config.acknowledge_pass_at_8,
+        }
+    return plan
 
 
 def prepare_local_plan(config: ModalAiderConfig, *, repo_root: str | Path = ".") -> Path:
@@ -429,7 +490,20 @@ def modal_list_command(config: ModalAiderConfig) -> list[str]:
     return command
 
 
-def model_settings(config: ModalAiderConfig) -> str:
+def sample_seed(config: ModalAiderConfig, sample_index: int) -> int:
+    if not 1 <= sample_index <= config.samples_per_task:
+        raise ModalAiderError("sample index is outside the configured sample schedule")
+    return config.base_seed + sample_index
+
+
+def model_settings(config: ModalAiderConfig, *, sample_index: int | None = None) -> str:
+    extra_params: dict[str, Any] = {
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        "top_p": config.top_p,
+    }
+    if sample_index is not None:
+        extra_params["seed"] = sample_seed(config, sample_index)
     payload = [
         {
             "name": AIDER_MODEL_NAME,
@@ -437,11 +511,7 @@ def model_settings(config: ModalAiderConfig) -> str:
             "use_repo_map": False,
             "use_temperature": True,
             "streaming": False,
-            "extra_params": {
-                "max_tokens": config.max_tokens,
-                "temperature": config.temperature,
-                "top_p": config.top_p,
-            },
+            "extra_params": extra_params,
         }
     ]
     return yaml.safe_dump(payload, sort_keys=False)
@@ -452,6 +522,8 @@ def aider_benchmark_command(
     *,
     stage: str,
     result_name: str | None = None,
+    settings_path: str = MODEL_SETTINGS_PATH,
+    exercises_dir: str = "polyglot-benchmark",
 ) -> list[str]:
     if stage not in {"smoke", "full"}:
         raise ModalAiderError("Aider stage must be smoke or full")
@@ -475,13 +547,39 @@ def aider_benchmark_command(
     command.extend(
         [
             "--exercises-dir",
-            "polyglot-benchmark",
+            exercises_dir,
             "--read-model-settings",
-            MODEL_SETTINGS_PATH,
+            settings_path,
         ]
     )
     if config.resume and stage == "full":
         command.append("--cont")
+    return command
+
+
+def independent_sample_command(
+    config: ModalAiderConfig,
+    *,
+    sample_index: int,
+    smoke: bool = False,
+    settings_path: str,
+    exercises_dir: str,
+) -> list[str]:
+    """Build one isolated two-try Aider trajectory for the independent protocol."""
+
+    sample_seed(config, sample_index)
+    result_name = f"{config.run_id}-{'smoke-' if smoke else ''}sample-{sample_index:02d}"
+    command = aider_benchmark_command(
+        config,
+        stage="full",
+        result_name=result_name,
+        settings_path=settings_path,
+        exercises_dir=exercises_dir,
+    )
+    command[command.index("--tries") + 1] = str(INDEPENDENT_TRIES)
+    if smoke:
+        command[command.index("--threads") + 1] = "1"
+        command.extend(["--num-tests", str(config.smoke_tests)])
     return command
 
 
@@ -647,6 +745,7 @@ def validate_aider_results(
     *,
     expected_tasks: int,
     require_chat_histories: bool = True,
+    reject_all_exhausted: bool = True,
 ) -> AiderResultAdmission:
     root = Path(result_dir)
     paths = sorted(root.glob("cpp/exercises/practice/*/.aider.results.json"))
@@ -686,7 +785,7 @@ def validate_aider_results(
         )
     if test_invocations == 0:
         raise ModalAiderError("Aider completed no C++ test invocation")
-    if exhausted >= test_invocations:
+    if reject_all_exhausted and exhausted >= test_invocations:
         raise ModalAiderError("all Aider attempts exhausted their context windows")
     return AiderResultAdmission(
         result_dir=str(root),
@@ -766,6 +865,262 @@ def validate_authoritative_stats(stats: Mapping[str, Any], *, expected_tasks: in
         raise ModalAiderError("Aider stats edit format is not whole")
     if "pass_rate_1" not in stats:
         raise ModalAiderError("Aider stats are missing pass_rate_1")
+
+
+def _two_try_result_row(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ModalAiderError(f"malformed Aider result JSON: {path}") from exc
+    if not isinstance(payload, dict) or not payload:
+        raise ModalAiderError(f"empty Aider result row: {path}")
+    if payload.get("exception"):
+        raise ModalAiderError(f"infrastructure exception blocks pass@8 admission: {path}")
+    outcomes = payload.get("tests_outcomes")
+    if (
+        not isinstance(outcomes, list)
+        or not 1 <= len(outcomes) <= INDEPENDENT_TRIES
+        or not all(isinstance(value, bool) for value in outcomes)
+    ):
+        raise ModalAiderError(
+            f"independent trajectory must contain one or two boolean test outcomes: {path}"
+        )
+    if outcomes[0] and len(outcomes) != 1:
+        raise ModalAiderError(f"Aider continued after a passing first try: {path}")
+    if not outcomes[0] and len(outcomes) != INDEPENDENT_TRIES:
+        raise ModalAiderError(f"failed first try is missing its second-try outcome: {path}")
+    history = path.with_name(".aider.chat.history.md")
+    if not history.is_file() or history.stat().st_size == 0:
+        raise ModalAiderError(f"independent trajectory is missing its chat history: {path}")
+    return payload
+
+
+def validate_independent_aider_results(
+    result_dir: str | Path, *, expected_tasks: int
+) -> AiderResultAdmission:
+    """Admit complete official two-try trajectories without rescoring Aider edits."""
+
+    admission = validate_aider_results(
+        result_dir,
+        expected_tasks=expected_tasks,
+        reject_all_exhausted=False,
+    )
+    for path in sorted(Path(result_dir).glob("cpp/exercises/practice/*/.aider.results.json")):
+        _two_try_result_row(path)
+    return admission
+
+
+def validate_independent_authoritative_stats(
+    stats: Mapping[str, Any], *, result_dir: str | Path, expected_tasks: int
+) -> None:
+    """Allow omitted pass_rate_2 only when every trajectory passed on try 1."""
+
+    validate_authoritative_stats(stats, expected_tasks=expected_tasks)
+    reached_try_2 = False
+    for path in sorted(Path(result_dir).glob("cpp/exercises/practice/*/.aider.results.json")):
+        payload = _two_try_result_row(path)
+        reached_try_2 = reached_try_2 or len(payload["tests_outcomes"]) == INDEPENDENT_TRIES
+    if reached_try_2 and "pass_rate_2" not in stats:
+        raise ModalAiderError("two-try Aider stats are missing pass_rate_2")
+
+
+def independent_config_fingerprint(config: ModalAiderConfig) -> str:
+    """Fingerprint all cross-sample fields while leaving index/derived seed explicit."""
+
+    return sha256_json(
+        {
+            **config.identity_mapping(),
+            "eval_mode": INDEPENDENT_EVAL_MODE,
+            "seed_schedule": "base_seed + one_based_sample_index",
+            "estimator_version": PASS_AT_ESTIMATOR_VERSION,
+        }
+    )
+
+
+def build_independent_pass_report(
+    config: ModalAiderConfig,
+    *,
+    sample_result_dirs: Mapping[int, str | Path],
+    out: str | Path,
+    expected_tasks: int,
+    persist: bool = True,
+) -> dict[str, Any]:
+    """Recompute both cumulative try-depth matrices and the four pass metrics."""
+
+    if config.eval_mode != INDEPENDENT_EVAL_MODE:
+        raise ModalAiderError("independent report requires independent-pass-at-1-and-8 mode")
+    expected_indices = set(range(1, INDEPENDENT_SAMPLES_PER_TASK + 1))
+    if set(sample_result_dirs) != expected_indices:
+        raise ModalAiderError("independent report requires exactly sample indices 1 through 8")
+    output = Path(out)
+    output.mkdir(parents=True, exist_ok=True)
+    fingerprint = independent_config_fingerprint(config)
+    task_rows: dict[str, dict[int, dict[str, Any]]] = {}
+    samples: list[dict[str, Any]] = []
+    expected_task_ids: set[str] | None = None
+    for sample_index in sorted(sample_result_dirs):
+        result_root = Path(sample_result_dirs[sample_index])
+        paths = sorted(result_root.glob("cpp/exercises/practice/*/.aider.results.json"))
+        if len(paths) != expected_tasks:
+            raise ModalAiderError(
+                f"sample {sample_index:02d} expected {expected_tasks} rows, found {len(paths)}"
+            )
+        task_ids = {path.parent.name for path in paths}
+        if expected_task_ids is None:
+            expected_task_ids = task_ids
+        elif task_ids != expected_task_ids:
+            raise ModalAiderError("independent samples have mismatched task sets")
+        for path in paths:
+            payload = _two_try_result_row(path)
+            task_id = path.parent.name
+            if sample_index in task_rows.setdefault(task_id, {}):
+                raise ModalAiderError(f"duplicate task/sample cell: {task_id}/{sample_index}")
+            outcomes = payload["tests_outcomes"]
+            try1_success = int(outcomes[0])
+            try2_success = int(any(outcomes))
+            if try1_success:
+                outcome = "passed_try1"
+            elif try2_success:
+                outcome = "passed_try2"
+            elif int(payload.get("num_exhausted_context_windows", 0) or 0):
+                outcome = "context_exhausted"
+            elif int(payload.get("num_malformed_responses", 0) or 0):
+                outcome = "malformed_response"
+            else:
+                outcome = "failed_tests"
+            try:
+                official_result_path = path.relative_to(output).as_posix()
+            except ValueError:
+                official_result_path = path.as_posix()
+            history = path.with_name(".aider.chat.history.md")
+            try:
+                chat_history_path = history.relative_to(output).as_posix()
+            except ValueError:
+                chat_history_path = history.as_posix()
+            row = {
+                "task_id": task_id,
+                "sample_index": sample_index,
+                "seed": sample_seed(config, sample_index),
+                "official_result_path": official_result_path,
+                "official_result_sha256": sha256_file(path),
+                "chat_history_path": chat_history_path,
+                "chat_history_sha256": sha256_file(history),
+                "attempts_made": len(outcomes),
+                "raw_tests_outcomes": outcomes,
+                "try1_success": try1_success,
+                "try2_success": try2_success,
+                "outcome": outcome,
+                "prompt_tokens": int(payload.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(payload.get("completion_tokens", 0) or 0),
+                "config_fingerprint": fingerprint,
+            }
+            task_rows[task_id][sample_index] = row
+            samples.append(row)
+    if expected_task_ids is None or len(expected_task_ids) != expected_tasks:
+        raise ModalAiderError("independent result has no complete task set")
+    matrices: dict[str, list[dict[str, Any]]] = {"try1": [], "try2": []}
+    for task_id in sorted(expected_task_ids):
+        cells = task_rows[task_id]
+        if set(cells) != expected_indices:
+            raise ModalAiderError(f"task {task_id} does not have exactly eight samples")
+        for try_name in ("try1", "try2"):
+            values = [
+                cells[index][f"{try_name}_success"] for index in sorted(expected_indices)
+            ]
+            successes = sum(values)
+            matrices[try_name].append(
+                {
+                    "task_id": task_id,
+                    "samples": values,
+                    "successes": successes,
+                    f"task_pass_at_1_{try_name}": successes / INDEPENDENT_SAMPLES_PER_TASK,
+                    f"task_pass_at_8_{try_name}": int(successes > 0),
+                }
+            )
+    metrics: dict[str, float] = {}
+    for try_name in ("try1", "try2"):
+        rows = matrices[try_name]
+        metrics[f"pass@1_{try_name}"] = sum(
+            row[f"task_pass_at_1_{try_name}"] for row in rows
+        ) / expected_tasks
+        metrics[f"pass@8_{try_name}"] = sum(
+            row[f"task_pass_at_8_{try_name}"] for row in rows
+        ) / expected_tasks
+    monotonic_pairs = (
+        ("pass@1_try1", "pass@1_try2"),
+        ("pass@8_try1", "pass@8_try2"),
+        ("pass@1_try1", "pass@8_try1"),
+        ("pass@1_try2", "pass@8_try2"),
+    )
+    for lower, upper in monotonic_pairs:
+        if metrics[lower] > metrics[upper] + 1e-12:
+            raise ModalAiderError(f"independent metric invariant violated: {lower} <= {upper}")
+    summary = {
+        "schema_version": 2,
+        "result_family": INDEPENDENT_RESULT_LABEL,
+        "estimator_version": PASS_AT_ESTIMATOR_VERSION,
+        "task_count": expected_tasks,
+        "samples_per_task": INDEPENDENT_SAMPLES_PER_TASK,
+        "trajectory_count": expected_tasks * INDEPENDENT_SAMPLES_PER_TASK,
+        "max_tries_per_trajectory": INDEPENDENT_TRIES,
+        "maximum_edit_attempts": (
+            expected_tasks * INDEPENDENT_SAMPLES_PER_TASK * INDEPENDENT_TRIES
+        ),
+        "base_seed": config.base_seed,
+        "seed_schedule": [sample_seed(config, index) for index in range(1, 9)],
+        "temperature": config.temperature,
+        "top_p": config.top_p,
+        **metrics,
+        "config_fingerprint": fingerprint,
+    }
+    if persist:
+        for try_name in ("try1", "try2"):
+            write_json(output / f"success-matrix.{try_name}.json", {"rows": matrices[try_name]})
+        write_json(output / "pass-at-1-and-8-by-try.json", summary)
+        with (output / "samples.jsonl").open("w", encoding="utf-8") as handle:
+            for row in sorted(samples, key=lambda item: (item["task_id"], item["sample_index"])):
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        for try_name in ("try1", "try2"):
+            with (output / f"success-matrix.{try_name}.csv").open(
+                "w", encoding="utf-8", newline=""
+            ) as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    ["task_id", *[f"sample_{index:02d}" for index in range(1, 9)], "c_i"]
+                )
+                for row in matrices[try_name]:
+                    writer.writerow([row["task_id"], *row["samples"], row["successes"]])
+        with (output / "pass-at-1-and-8-by-try.csv").open(
+            "w", encoding="utf-8", newline=""
+        ) as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["metric", "value"])
+            for metric in ("pass@1_try1", "pass@1_try2", "pass@8_try1", "pass@8_try2"):
+                writer.writerow([metric, metrics[metric]])
+        (output / "report.md").write_text(
+            "\n".join(
+                [
+                    "# Independent Aider pass@1/pass@8 by try depth",
+                    "",
+                    INDEPENDENT_RESULT_LABEL + ".",
+                    "",
+                    f"- Tasks: {expected_tasks}",
+                    f"- Independent trajectories per task: {INDEPENDENT_SAMPLES_PER_TASK}",
+                    f"- Maximum Aider tries per trajectory: {INDEPENDENT_TRIES}",
+                    f"- pass@1_try1: {metrics['pass@1_try1']:.12g}",
+                    f"- pass@1_try2: {metrics['pass@1_try2']:.12g}",
+                    f"- pass@8_try1: {metrics['pass@8_try1']:.12g}",
+                    f"- pass@8_try2: {metrics['pass@8_try2']:.12g}",
+                    "",
+                    "Aider is authoritative for each trajectory's try outcomes. These four "
+                    "metrics are repository-derived across independent trajectories and are "
+                    "not renamed Aider pass_rate_1/pass_rate_2 statistics.",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    return {"summary": summary, "matrices": matrices, "samples": samples}
 
 
 def assert_resume_compatible(
@@ -942,6 +1297,157 @@ def validate_local_artifacts(
         raise ModalAiderError("run receipt has the wrong benchmark label")
     if receipt.get("modal_app_stopped") is not True or receipt.get("teardown_status") != "verified":
         raise ModalAiderError("local receipt does not prove that the Modal App stopped")
+    if config.eval_mode == INDEPENDENT_EVAL_MODE:
+        protocol = root / INDEPENDENT_EVAL_MODE
+        report_root = protocol if config.phase == "full" else protocol / "smoke"
+        summary_path = report_root / "pass-at-1-and-8-by-try.json"
+        matrix_paths = {
+            try_name: report_root / f"success-matrix.{try_name}.json"
+            for try_name in ("try1", "try2")
+        }
+        if not summary_path.is_file() or not all(path.is_file() for path in matrix_paths.values()):
+            raise ModalAiderError("local independent pass@8 report is incomplete")
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        expected = config.expected_cpp_tasks if config.phase == "full" else config.smoke_tests
+        if summary.get("task_count") != expected or summary.get("samples_per_task") != 8:
+            raise ModalAiderError("local independent pass@8 report has wrong dimensions")
+        if (
+            receipt.get("eval_mode") != INDEPENDENT_EVAL_MODE
+            or receipt.get("result_family") != INDEPENDENT_RESULT_LABEL
+            or receipt.get("tries") != INDEPENDENT_TRIES
+            or receipt.get("completed_tasks") != expected
+            or receipt.get("completed_trajectories") != expected * INDEPENDENT_SAMPLES_PER_TASK
+            or receipt.get("maximum_edit_attempts")
+            != expected * INDEPENDENT_SAMPLES_PER_TASK * INDEPENDENT_TRIES
+            or receipt.get("independent_pass_at_1_and_8") != summary
+        ):
+            raise ModalAiderError("local independent receipt does not match the by-try report")
+        expected_metric_keys = {
+            "pass@1_try1",
+            "pass@1_try2",
+            "pass@8_try1",
+            "pass@8_try2",
+        }
+        if set(key for key in summary if key.startswith("pass@")) != expected_metric_keys:
+            raise ModalAiderError("independent report must contain exactly four by-try metrics")
+        expected_indices = range(1, INDEPENDENT_SAMPLES_PER_TASK + 1)
+        sample_result_dirs: dict[int, Path] = {}
+        for sample_index in expected_indices:
+            sample_root = report_root / f"sample-{sample_index:02d}"
+            for name in (
+                "command.json",
+                "model-settings.yml",
+                "model-settings.sha256",
+                "request-metadata.json",
+                "fresh-tree.receipt.json",
+                "stats.json",
+            ):
+                if not (sample_root / name).is_file():
+                    raise ModalAiderError(
+                        f"local independent sample {sample_index:02d} is missing {name}"
+                    )
+            command = json.loads((sample_root / "command.json").read_text(encoding="utf-8"))
+            metadata = json.loads(
+                (sample_root / "request-metadata.json").read_text(encoding="utf-8")
+            )
+            expected_seed = sample_seed(config, sample_index)
+            if (
+                command.get("sample_index") != sample_index
+                or command.get("seed") != expected_seed
+                or command.get("tries") != INDEPENDENT_TRIES
+                or metadata.get("seed") != expected_seed
+            ):
+                raise ModalAiderError(
+                    f"local independent sample {sample_index:02d} has mismatched seed/config"
+                )
+            suffix = (
+                f"--{config.run_id}-smoke-sample-{sample_index:02d}"
+                if config.phase != "full"
+                else f"--{config.run_id}-sample-{sample_index:02d}"
+            )
+            official_dirs = [
+                path for path in sample_root.iterdir() if path.is_dir() and path.name.endswith(suffix)
+            ]
+            if len(official_dirs) != 1:
+                raise ModalAiderError(
+                    f"local independent sample {sample_index:02d} has no unique official result"
+                )
+            sample_result_dirs[sample_index] = official_dirs[0]
+            validate_independent_aider_results(official_dirs[0], expected_tasks=expected)
+            stats = json.loads((sample_root / "stats.json").read_text(encoding="utf-8"))
+            validate_independent_authoritative_stats(
+                stats, result_dir=official_dirs[0], expected_tasks=expected
+            )
+        recomputed = build_independent_pass_report(
+            config,
+            sample_result_dirs=sample_result_dirs,
+            out=report_root,
+            expected_tasks=expected,
+            persist=False,
+        )
+        stored_matrices = {
+            try_name: json.loads(path.read_text(encoding="utf-8"))
+            for try_name, path in matrix_paths.items()
+        }
+        if recomputed["summary"] != summary or any(
+            {"rows": recomputed["matrices"][try_name]} != stored_matrices[try_name]
+            for try_name in ("try1", "try2")
+        ):
+            raise ModalAiderError("stored pass@1/pass@8 report does not match official rows")
+        for try_name in ("try1", "try2"):
+            csv_path = report_root / f"success-matrix.{try_name}.csv"
+            if not csv_path.is_file():
+                raise ModalAiderError(f"independent report is missing {csv_path.name}")
+            with csv_path.open(encoding="utf-8", newline="") as handle:
+                csv_rows = list(csv.reader(handle))
+            expected_header = [
+                "task_id",
+                *[f"sample_{index:02d}" for index in range(1, 9)],
+                "c_i",
+            ]
+            expected_rows = [
+                [
+                    row["task_id"],
+                    *[str(value) for value in row["samples"]],
+                    str(row["successes"]),
+                ]
+                for row in recomputed["matrices"][try_name]
+            ]
+            if csv_rows != [expected_header, *expected_rows]:
+                raise ModalAiderError(f"{csv_path.name} does not match official rows")
+        metrics_csv = report_root / "pass-at-1-and-8-by-try.csv"
+        if not metrics_csv.is_file():
+            raise ModalAiderError("independent report is missing its metric CSV")
+        with metrics_csv.open(encoding="utf-8", newline="") as handle:
+            metric_rows = list(csv.reader(handle))
+        expected_metrics = [
+            [metric, str(summary[metric])]
+            for metric in ("pass@1_try1", "pass@1_try2", "pass@8_try1", "pass@8_try2")
+        ]
+        if metric_rows != [["metric", "value"], *expected_metrics]:
+            raise ModalAiderError("metric CSV does not match the independent summary")
+        report_path = report_root / "report.md"
+        if not report_path.is_file():
+            raise ModalAiderError("independent report is missing report.md")
+        report_text = report_path.read_text(encoding="utf-8")
+        for metric in ("pass@1_try1", "pass@1_try2", "pass@8_try1", "pass@8_try2"):
+            if f"- {metric}: {summary[metric]:.12g}" not in report_text:
+                raise ModalAiderError(f"report.md does not match {metric}")
+        stored_samples = [
+            json.loads(line)
+            for line in (report_root / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        expected_samples = sorted(
+            recomputed["samples"], key=lambda item: (item["task_id"], item["sample_index"])
+        )
+        if stored_samples != expected_samples:
+            raise ModalAiderError("stored independent sample rows do not match official rows")
+        manifest = build_artifact_manifest(root)
+        stored_manifest = json.loads((root / "artifact_manifest.json").read_text(encoding="utf-8"))
+        if stored_manifest != manifest:
+            raise ModalAiderError("local artifact tree does not match artifact_manifest.json")
+        return {"receipt": receipt, "stats": summary, "admission": summary, "manifest": manifest}
     stage = "full" if config.phase == "full" else "smoke"
     stats_path = root / stage / "stats.json"
     if not stats_path.is_file():
@@ -1021,6 +1527,17 @@ def _print_summary(validated: Mapping[str, Any], *, artifact_path: Path) -> None
     print(f"status: {receipt['status']}")
     print(f"benchmark: {BENCHMARK_LABEL}")
     print(f"model: {receipt['model_repo']}@{receipt['model_revision']}")
+    if receipt.get("eval_mode") == INDEPENDENT_EVAL_MODE:
+        print(f"result_family: {INDEPENDENT_RESULT_LABEL}")
+        print(f"tasks: {stats['task_count']}/{receipt['expected_tasks']}")
+        print(f"samples_per_task: {stats['samples_per_task']}")
+        print(f"pass@1_try1: {stats['pass@1_try1']}")
+        print(f"pass@1_try2: {stats['pass@1_try2']}")
+        print(f"pass@8_try1: {stats['pass@8_try1']}")
+        print(f"pass@8_try2: {stats['pass@8_try2']}")
+        print(f"modal_app_stopped: {str(bool(receipt.get('modal_app_stopped'))).lower()}")
+        print(f"artifacts: {artifact_path}")
+        return
     print(f"tasks: {stats['test_cases']}/{receipt['expected_tasks']}")
     print(f"pass_rate_1: {stats['pass_rate_1']}")
     if "pass_rate_2" in stats:

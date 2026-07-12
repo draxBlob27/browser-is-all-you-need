@@ -490,6 +490,15 @@ complete 26-task receipt remain pending. The full export contract, artifact
 semantics, security boundaries, and recovery commands live in the
 [canonical lane runbook](examples/modal/glm47_flash_aider_polyglot_cpp/README.md).
 
+The updated target for the distinct `independent-pass-at-1-and-8` result family
+is eight independent trajectories per task with up to two sequential Aider
+tries inside each trajectory. It reports exactly `pass@1_try1`,
+`pass@1_try2`, `pass@8_try1`, and `pass@8_try2`; try 2 may consume feedback
+only from its own try 1. Source and offline tests implement the four-metric
+protocol; paid seed inspection, the sampling smoke, a complete full run, and
+stopped-App evidence remain pending. The canonical lane runbook contains the
+formulas, smoke, artifact, and spend contract.
+
 ## Moonlight Multi-SWE C++ Base Eval
 
 This optional benchmark lane evaluates the base Moonlight checkpoint on the C++

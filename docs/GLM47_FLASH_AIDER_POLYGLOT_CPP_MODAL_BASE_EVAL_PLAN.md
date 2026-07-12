@@ -46,9 +46,10 @@ Modal owns:
 - durable result storage;
 - ephemeral application lifecycle and teardown.
 
-This repository owns only orchestration, configuration validation, redacted
-receipts, artifact transfer, and completeness checks. It must not implement a
-second Polyglot prompt, edit parser, grader, or pass-rate calculation.
+This repository owns orchestration, configuration validation, redacted
+receipts, artifact transfer, completeness checks, and—only in independent
+mode—the cross-sample pass@1/pass@8 aggregation at each cumulative Aider try
+depth. It must not implement a second Polyglot prompt, edit parser, or grader.
 
 ## Scope Boundaries
 
@@ -61,7 +62,7 @@ It is not:
 - SFT, GRPO, or any other training;
 - the custom Moonlight Polyglot rollout-only lane;
 - a speed benchmark;
-- a pass@k sampling experiment;
+- an implicit pass@k interpretation of sequential Aider retries;
 - a reason to add Modal to the active SLIME training stack;
 - a reason to change the existing SkyPilot/GCP training architecture;
 - automatically a leaderboard submission.
@@ -635,289 +636,226 @@ A repo-owned parser may convert the raw stats to JSON for easier inspection,
 but the raw Aider results and stats output are authoritative. The parser must
 not recompute test outcomes or change pass-rate semantics.
 
-## Planned True Pass@1 And Pass@8 Extension
+## Independent Pass@1/Pass@8 By Try
 
-Status: design only. The implemented lane deliberately caps Aider `--tries` at
-two and recognizes only sequential `pass_rate_1` and `pass_rate_2`. The work in
-this section must be implemented and validated before the lane can produce a
-pass@1/pass@8 report. Setting `W8_MODAL_AIDER_TRIES=8` is not part of the
-design.
+Status: implemented in source with offline contract tests. Paid seed transport
+inspection, the two-task/eight-trajectory smoke, and the first complete
+26-task/eight-trajectory run remain required before a live model claim.
 
-### Semantic boundary
+### Semantic boundary and names
 
-Aider tries and independent pass@1/pass@8 answer different questions:
+The experiment has two different axes:
 
-- Aider `--tries 2` runs a second edit after the first failure and supplies
-  test feedback in the same trajectory. `pass_rate_2` is cumulative success
-  after that repair opportunity.
-- pass@1/pass@8 requires eight independent samples from the same initial task
-  and model distribution, without sharing edits, chat history, test feedback,
-  or state.
+- `k` is the number of independent trajectories: one or eight;
+- `try` is the cumulative Aider repair depth inside each trajectory: try 1 or
+  try 2.
 
-The new result family must therefore use eight independent Aider invocations
-with `--tries 1`. It must never derive pass@8 from the current
-`tests_outcomes` sequence of a two-try conversation and must never relabel
-`pass_rate_2` as an independent-sampling metric.
+Run eight independent trajectories for every task and allow each trajectory
+up to two Aider tries. A failed first try may receive its own test feedback and
+continue to try 2. No edit, chat history, test feedback, seed, working tree, or
+result state may cross from one trajectory into another.
 
-Keep both modes:
+Report exactly these four metrics:
 
 ```text
-sequential-repair                existing default, --tries 2, Aider pass_rate_1/2
-independent-pass-at-1-and-8      planned, 8 samples/task, --tries 1, pass@1/pass@8
+pass@1_try1
+pass@1_try2
+pass@8_try1
+pass@8_try2
 ```
 
-They use distinct run IDs, result labels, artifact schemas, and summaries. Do
-not combine them into one curve.
+Use `_try1` and `_try2`, not ambiguous names such as `pass@8_2`. Aider's raw
+`pass_rate_1` and `pass_rate_2` remain authoritative within each trajectory;
+they must not be renamed pass@1 or pass@8.
+
+Keep the result families distinct:
+
+```text
+sequential-repair                one trajectory/task, --tries 2, Aider pass_rate_1/2
+independent-pass-at-1-and-8      8 trajectories/task, --tries 2, four repo-derived metrics
+```
+
+They require distinct run IDs, artifact schemas, summaries, and labels.
 
 ### Configuration contract
 
-Add identity-bound exports only when implementation begins:
+The updated implementation must require:
 
 ```bash
 export W8_MODAL_AIDER_EVAL_MODE='independent-pass-at-1-and-8'
 export W8_MODAL_AIDER_SAMPLES_PER_TASK='8'
 export W8_MODAL_AIDER_BASE_SEED='<nonnegative-integer>'
-export W8_MODAL_AIDER_TRIES='1'
+export W8_MODAL_AIDER_TRIES='2'
 export W8_MODAL_AIDER_TEMPERATURE='0.7'
 export W8_MODAL_AIDER_TOP_P='1.0'
 export W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8='1'
 ```
 
-Validation must require:
+Validation must enforce exactly eight trajectories, exactly two maximum Aider
+tries, positive temperature, one fixed top-p/token/edit/model/prompt/grader
+identity, and the deterministic one-based schedule
+`sample_seed = base_seed + sample_index`. Both paid acknowledgements remain
+mandatory. The full run remains gated by real-server admission, the ordinary
+Aider smoke, and the independent sampling smoke.
 
-- exactly eight samples for the first pass@1/pass@8 protocol;
-- exactly one Aider try per sample;
-- a positive sampling temperature, identical across all samples;
-- one fixed top-p, token budget, edit format, model, prompt, grader, and
-  upstream identity across all samples;
-- a frozen base seed and deterministic per-sample seed schedule;
-- the ordinary paid-run acknowledgement and the additional 208-trajectory
-  acknowledgement;
-- full always gated by the existing real server smoke plus the sampling smoke.
-
-The sample seed should be a pure function such as
-`sample_seed = base_seed + sample_index`, with one-based sample indices 1..8.
-The exact schedule becomes receipt identity and cannot change on resume.
-
-Before paid sampling, prove from saved, secret-free request metadata that the
-pinned Aider -> LiteLLM -> OpenAI-compatible SGLang path actually transmits the
-requested seed. If upstream Aider's model settings cannot vary `seed` by sample,
-generate one settings YAML per pass with the same fields except its exact seed.
-If the pinned stack ignores or strips seed, stop for a compatibility decision;
-do not infer reproducible independence merely because calls occur in different
-directories.
+Before spending, saved secret-free request metadata must prove that the pinned
+Aider -> LiteLLM -> SGLang path transmits each trajectory seed. If it does not,
+stop for a compatibility decision.
 
 ### Execution shape
 
-Run eight complete one-try benchmark passes. For sample `s` in 1..8:
+For trajectory `s` in 1..8:
 
-1. Materialize a fresh writable copy of the pinned 26-task Polyglot C++ tree.
-2. Generate a sample-specific model-settings file containing the frozen
-   sampling fields and `seed_s`.
-3. Invoke the pinned Aider benchmark with `--tries 1` and a unique result name,
-   for example `<run-id>-sample-01`.
-4. Allow the normal per-pass `--threads 8` concurrency to feed the singleton
-   SGLang server, but do not run two sample passes against one working tree.
-5. Run Aider stats on that exact result directory.
-6. Require all 26 non-exception result rows and nonempty histories.
-7. Commit that sample's command, settings, stats, rows, histories, seed, and
-   hashes before starting or admitting the next sample.
+1. Materialize a fresh writable copy of the pinned 26-task C++ tree.
+2. Generate settings containing the frozen sampling fields and `seed_s`.
+3. Run Aider with `--tries 2` and a unique result name such as
+   `<run-id>-sample-01`.
+4. Permit try 2 to consume only try 1's feedback from that same trajectory.
+5. Require every official row and nonempty history, run Aider stats, and commit
+   commands/settings/results/hashes before starting the next trajectory.
 
-Each sample starts from the original exercise state. It cannot use `--cont` to
-continue another sample and cannot see another sample's edit, chat history,
-test output, or result directory. `--cont` is allowed only to fill missing
-tasks inside the same exact-identity sample during resume.
-
-The first implementation should run sample passes sequentially. Aider's eight
-threads already provide request concurrency to SGLang. Parallelizing whole
-sample passes adds writable-tree and overload risk without changing the
-statistic and requires a later explicit validation.
-
-One full pass@8 run contains:
-
-```text
-26 tasks * 8 independent samples = 208 official Aider one-try trajectories
-```
+The eight trajectory passes run sequentially; Aider's per-pass threads provide
+request concurrency. One full run contains 208 independent task trajectories
+and at most 416 model edit attempts. A first-try pass legitimately has no
+second model call but counts as cumulatively passing at both try depths.
+Aider may omit `pass_rate_2` when every task in a pass succeeds on try 1 because
+its stats depth follows observed outcomes. Accept the omission only in that
+case; if any task reached try 2, missing `pass_rate_2` is incomplete evidence.
 
 ### Sampling smoke
 
-Add a blocking sampling smoke after real-weight SGLang admission and before the
-full 208-trajectory run:
+The blocking smoke uses two fixed tasks across eight independent trajectories:
 
-- two fixed C++ tasks;
-- eight independent samples per task;
-- `--tries 1` for every sample;
-- distinct saved seeds and request metadata;
-- fresh working tree and empty chat history per sample;
-- 16 complete official result rows/histories;
-- a recomputed 2-by-8 success matrix;
-- pass@1 and pass@8 aggregation using the same production code;
-- committed artifacts and verified teardown.
+- 16 official task/trajectory rows and histories;
+- `--tries 2` for each trajectory;
+- distinct transmitted seeds and fresh trees;
+- two complete 2-by-8 cumulative matrices, one for try 1 and one for try 2;
+- all four metrics computed by production aggregation code;
+- no required model pass.
 
-The smoke does not require a passing model answer. It proves independence,
-request plumbing, official result admission, aggregation, and lifecycle. A
-missing row, reused working tree, repeated/untransmitted seed, exception-only
-row, or matrix mismatch is an infrastructure failure.
+Missing rows, missing required second attempts after a first-try failure,
+reused state, exceptions, untransmitted seeds, or matrix disagreement are
+infrastructure failures.
 
-### Success matrix and the two reported metrics
+### Success matrices and four reported metrics
 
-After all eight full passes, build one binary matrix with rows keyed by the
-exact 26 task identities and columns keyed by sample indices 1..8. A cell is
-one only when the corresponding official one-try Aider result reports a test
-pass. Malformed edits, compile failures, test failures, context exhaustion, and
-other admitted model failures are zero. Infrastructure exceptions are not zero;
-they make the report incomplete.
-
-For task `i`, let:
+For task `i`, trajectory `s`, and try depth `t` in `{1, 2}`, define cumulative
+success `y[i,s,t]`:
 
 ```text
-n   = 8 complete independent samples
-c_i = number of passing samples for task i
+y[i,s,1] = 1 when try 1 passes, otherwise 0
+y[i,s,2] = 1 when try 1 or try 2 passes, otherwise 0
+c[i,t]   = sum over s=1..8 of y[i,s,t]
 ```
 
-Calculate only these two task-level values:
+If try 1 passes, `y[i,s,2]` is also one even though Aider correctly skips the
+second attempt. If try 1 fails, admission requires a completed try-2 outcome.
+Model failures are zero; infrastructure exceptions block the report.
+
+For each `t`, calculate:
 
 ```text
-task_pass_at_1(i) = c_i / 8
-task_pass_at_8(i) = 1 if c_i > 0 else 0
+task_pass_at_1_try_t(i) = c[i,t] / 8
+task_pass_at_8_try_t(i) = 1 if c[i,t] > 0 else 0
 ```
 
-The reported benchmark values are:
+The four benchmark values are the means of those task values over the exact 26
+tasks. Do not calculate or publish pass@2 through pass@7.
+
+Tests and admission must enforce:
 
 ```text
-pass@1 = mean_i(task_pass_at_1(i)) over the exact 26 tasks
-pass@8 = mean_i(task_pass_at_8(i)) over the exact 26 tasks
+pass@1_try1 <= pass@1_try2
+pass@8_try1 <= pass@8_try2
+pass@1_try1 <= pass@8_try1
+pass@1_try2 <= pass@8_try2
 ```
 
-These are the `k=1` and `k=8` cases of the standard order-independent
-combinatorial estimator. The implementation must not calculate, persist, or
-publish pass@2 through pass@7.
+There is no required ordering between `pass@1_try2` and `pass@8_try1`.
+Results must be invariant to trajectory-column ordering, and every task must
+have all eight trajectories at both cumulative depths.
 
-Properties that tests must pin:
-
-- pass@1 equals the mean per-task success fraction across eight samples;
-- pass@8 equals the fraction of tasks with at least one passing sample;
-- pass@8 is greater than or equal to pass@1;
-- a task with `c_i = 0` contributes zero to both metrics;
-- a task with `c_i = 8` contributes one to both metrics;
-- results do not depend on sample-column ordering;
-- incomplete tasks cannot use a smaller task-specific `n`.
-
-Do not treat the first saved directory as pass@1, average the eight Aider
-`pass_rate_1` summaries, or pool 208 outcomes without preserving task
-identity. Those quantities are not the requested task-level pass@1/pass@8
-result.
-
-Aider remains authoritative for every individual edit/test outcome. The new
-aggregator is repo-owned and must label its output:
+The report label is:
 
 ```text
-repo-derived independent pass@1 and pass@8 over official Aider one-try trajectories
+repo-derived independent pass@1/pass@8 by cumulative Aider try depth
 ```
 
-It is not an upstream Aider statistic and is not automatically an official
-leaderboard result.
+It is not an upstream Aider statistic or automatically a leaderboard result.
+An older one-sample pass@1 run remains separate historical evidence and is not
+merged into this matrix.
 
 ### Artifacts and admission
 
-Extend the results subtree without changing current sequential artifacts:
+The updated artifact subtree is:
 
 ```text
-runs/<run-id>/
-  independent-pass-at-1-and-8/
-    smoke/
-      sample-01/<official Aider artifacts>
-      sample-02/<official Aider artifacts>
-      ...
-      sample-08/<official Aider artifacts>
-      success-matrix.json
-      pass-at-1-and-8.json
-    sample-01/
-      command.json
-      model-settings.yml
-      model-settings.sha256
-      stats.txt
-      stats.json
-      <official-aider-result-directory>/
-    ...
-    sample-08/
-      ...
-    samples.jsonl
-    success-matrix.json
-    success-matrix.csv
-    pass-at-1-and-8.json
-    pass-at-1-and-8.csv
-    report.md
+runs/<run-id>/independent-pass-at-1-and-8/
+  smoke/
+    sample-01/ ... sample-08/
+    success-matrix.try1.json
+    success-matrix.try2.json
+    pass-at-1-and-8-by-try.json
+  sample-01/
+    command.json
+    model-settings.yml
+    model-settings.sha256
+    stats.txt
+    stats.json
+    <official-aider-result-directory>/
+  ...
+  sample-08/
+  samples.jsonl
+  success-matrix.try1.json
+  success-matrix.try1.csv
+  success-matrix.try2.json
+  success-matrix.try2.csv
+  pass-at-1-and-8-by-try.json
+  pass-at-1-and-8-by-try.csv
+  report.md
 ```
 
-`samples.jsonl` must contain one row per task/sample pair: task ID, sample
-index, seed, official result path and hash, admitted success bit, outcome
-classification, token usage, and immutable config fingerprint. It must not
-duplicate secrets or silently rescore Aider results.
+Each `samples.jsonl` row records task, trajectory index, seed, attempts made,
+try-1 success, cumulative try-2 success, raw official outcomes, result/history
+hashes, token usage, classification, and immutable config fingerprint.
 
-Full admission requires:
-
-- exactly eight sample directories;
-- exactly 26 identical task IDs in every sample;
-- exactly 208 unique task/sample rows;
-- no exception-only or infrastructure-failed trajectory;
-- identical immutable config fingerprints except allowed sample index/seed;
-- seed schedule matching the frozen base seed;
-- summaries recomputed from on-disk official rows;
-- success matrix, JSON, CSV, and Markdown values agreeing exactly;
-- artifact manifest and local copy reconciliation;
-- `modal_app_stopped: true` after control-plane verification.
-
-The final console summary should print only pass@1 and pass@8, plus sample/task
-counts, sampling settings, result-family label, artifact path, and stopped-App
-state. It must not print either metric if any admission condition fails.
+Full admission requires eight sample directories, the same 26 tasks in each,
+208 unique task/trajectory rows, no infrastructure exception, exact seed and
+config reconciliation, correct try-2 presence/skip semantics, and complete
+agreement among on-disk rows, both matrices, JSON, CSV, Markdown, artifact
+manifest, and local copy. The final console summary prints exactly the four
+named metrics only after `modal_app_stopped: true` is verified.
 
 ### Resume and failure semantics
 
-Resume operates at `(sample_index, task_id)` granularity. Reuse a trajectory
-only when its official row/history are complete and its config/request/result
-hashes match. Resume may fill missing tasks in the same sample using Aider's
-supported continuation flow, then rerun that sample's stats and global matrix.
-
-Never:
-
-- overwrite a completed trajectory;
-- change the base seed or per-sample seed;
-- regenerate a failed model outcome to seek a pass;
-- carry an edit or feedback into another sample;
-- accept fewer than eight samples for one task;
-- merge trajectories from different model, sampling, prompt, grader, or
-  upstream identities.
-
-Transport or infrastructure failure may retry the exact missing trajectory
-according to one documented bounded retry policy. The retry preserves its
-sample index, seed, prompt, and clean initial tree and is recorded. Model
-failure is final data, not a retry trigger.
+Resume stays scoped to `(sample_index, task_id)` and the exact frozen identity.
+It may fill missing infrastructure-failed work inside that trajectory using
+Aider continuation, but must never regenerate a model failure, change seeds,
+overwrite a completed trajectory, or carry state across trajectories. A
+first-try model failure is not final until its scheduled second try completes;
+a second-try model failure is final data.
 
 ### Tests required before paid execution
 
-Add offline tests for:
+Add or update offline tests for:
 
-- mode validation and the enforced `samples=8`, `tries=1` contract;
-- positive, frozen sampling configuration and seed schedule;
-- sample-specific Aider argv/settings/result directory construction;
-- request metadata proving seed propagation at the mocked boundary;
-- fresh tree/history isolation between samples;
-- exact 26-by-8 matrix construction and duplicate/missing-cell rejection;
-- pass@1/pass@8 values for `c_i` from zero through eight;
-- order invariance, `pass@8 >= pass@1`, and pass@8 any-success equivalence;
-- exception/infrastructure rows blocking rather than becoming failures;
-- strict task/config/hash reconciliation across all eight passes;
-- resume reuse of complete cells and rejection of changed seeds/config;
-- artifact path safety and JSON/CSV/Markdown agreement;
-- redaction, extra paid acknowledgement, bounded spend, and stopped-App gate;
-- explicit labels preventing `pass_rate_2`, pass@1, and pass@8 conflation;
-- source-shape rejection of pass@2 through pass@7 output fields.
+- enforced `samples=8`, `tries=2`, positive sampling, and seed schedule;
+- sample-specific argv/settings and observed seed propagation;
+- fresh tree/history isolation across trajectories and feedback continuity only
+  within one trajectory;
+- exact 26-by-8 matrices at try 1 and cumulative try 2;
+- first-try-pass short-circuit and mandatory try 2 after first-try failure;
+- all four metric values for per-task success counts zero through eight;
+- the four monotonicity inequalities and order invariance;
+- rejection of missing/duplicate/exception cells and config/hash mismatches;
+- JSON/CSV/Markdown agreement, redaction, spend bounds, and stopped-App gate;
+- explicit separation from raw Aider `pass_rate_1`/`pass_rate_2`;
+- rejection of intermediate pass@2 through pass@7 fields.
 
-Paid validation must progress through seed transport inspection, one task with
-eight samples, the two-task/eight-sample smoke, one full 26-task sample, then
-the complete eight-sample run. Convert every paid failure into an offline
-regression before continuing.
+Paid validation progresses through seed inspection, one task with eight
+two-try trajectories, the two-task/eight-trajectory smoke, one full 26-task
+trajectory pass, and finally all eight passes. Every paid failure becomes an
+offline regression before continuing.
 
 ## Run Sequence And Blocking Gates
 
@@ -1160,9 +1098,9 @@ Expected planning envelope for the first implementation, not a guarantee:
 | First model cache | 5–20 minutes |
 | GPU allocation and server start | 3–12 minutes |
 | Two-task smoke | 2–6 minutes |
-| Full 26-task, one-try-equivalent work | 8–20 minutes |
 | Full run with up to two Aider tries | 15–40 minutes |
 | First complete run | 35–90 minutes |
+| Independent 26×8 trajectories, up to two tries | Unmeasured; bounded by configured timeout |
 
 Do not encode a dollar price as a correctness rule because Modal pricing can
 change. The dry-run plan may calculate an estimate only from an exported or

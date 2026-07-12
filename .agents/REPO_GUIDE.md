@@ -290,6 +290,15 @@ do not remain allocated for artifact copying.
 bash examples/modal/glm47_flash_aider_polyglot_cpp/run.sh
 ```
 
+The updated independent design uses exactly eight isolated trajectories per
+task and up to two sequential Aider tries per trajectory. Report only
+`pass@1_try1`, `pass@1_try2`, `pass@8_try1`, and `pass@8_try2`; try-2 success
+is cumulative and may use feedback only from the same trajectory's try 1.
+Require separate try-depth matrices, the frozen seed schedule, the extra paid
+acknowledgement, a 2-by-8-by-try smoke, complete artifacts, and stopped-App
+proof. Source and offline tests implement this contract; paid seed inspection,
+the sampling smoke, and the complete stopped-App full receipt remain mandatory.
+
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned
 SLIME rollout-only eval of base Moonlight on C++ issue-resolution tasks from

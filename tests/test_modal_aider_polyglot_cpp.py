@@ -17,6 +17,9 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     ARTIFACT_DOWNLOAD_CONCURRENCY,
     BENCHMARK_LABEL,
     DEFAULT_MAX_TOKENS,
+    INDEPENDENT_EVAL_MODE,
+    INDEPENDENT_RESULT_LABEL,
+    INDEPENDENT_TRIES,
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
     SGLANG_ADMISSION_MAX_TOKENS,
@@ -26,20 +29,26 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     ModalAiderConfig,
     ModalAiderError,
     aider_benchmark_command,
+    build_independent_pass_report,
     build_artifact_manifest,
     ensure_secret_free,
     mark_local_teardown_verified,
     modal_app_is_stopped,
     model_settings,
+    independent_sample_command,
     parse_aider_stats,
     prepare_local_plan,
     render_plan,
+    sample_seed,
     sglang_server_command,
     summarize_aider_exceptions,
     summarize_aider_result_diagnostics,
     summarize_sglang_admission,
     validate_aider_results,
     validate_authoritative_stats,
+    validate_independent_aider_results,
+    validate_independent_authoritative_stats,
+    validate_local_artifacts,
     validate_model_snapshot,
     validate_remote_preflight,
     validate_sglang_admission,
@@ -94,6 +103,27 @@ def write_result(root: Path, task: str, *, exception: bool = False) -> None:
     )
     write_json(task_root / ".aider.results.json", payload)
     (task_root / ".aider.chat.history.md").write_text("model response\n", encoding="utf-8")
+
+
+def write_independent_result(
+    root: Path, task: str, *, outcomes: list[bool], exception: bool = False
+) -> None:
+    task_root = root / "cpp/exercises/practice" / task
+    task_root.mkdir(parents=True)
+    payload = (
+        {"exception": "transport failed"}
+        if exception
+        else {
+            "testcase": task,
+            "tests_outcomes": outcomes,
+            "model": AIDER_MODEL_NAME,
+            "edit_format": "whole",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+        }
+    )
+    write_json(task_root / ".aider.results.json", payload)
+    (task_root / ".aider.chat.history.md").write_text("one fresh trajectory\n", encoding="utf-8")
 
 
 def authoritative_stats(tasks: int, *, tries: int = 2) -> dict[str, object]:
@@ -193,6 +223,271 @@ def test_full_requires_digest_ack_and_fixed_hardware(tmp_path: Path) -> None:
 def test_numeric_bounds_are_enforced(tmp_path: Path, name: str, value: str) -> None:
     with pytest.raises(ModalAiderError):
         config(tmp_path, **{name: value})
+
+
+def test_independent_mode_requires_exact_paid_contract(tmp_path: Path) -> None:
+    common = {
+        "W8_MODAL_AIDER_EVAL_MODE": INDEPENDENT_EVAL_MODE,
+        "W8_MODAL_AIDER_TRIES": "2",
+        "W8_MODAL_AIDER_BASE_SEED": "700",
+    }
+    cfg = config(tmp_path, **common)
+    assert cfg.samples_per_task == 8
+    assert INDEPENDENT_TRIES == 2
+    assert [sample_seed(cfg, index) for index in range(1, 9)] == list(range(701, 709))
+    sampling_plan = render_plan(cfg)["independent_sampling"]
+    assert sampling_plan["full_trajectory_count"] == 208
+    assert sampling_plan["sampling_smoke_trajectory_count"] == 16
+    assert sampling_plan["max_tries_per_trajectory"] == 2
+    assert sampling_plan["maximum_full_edit_attempts"] == 416
+    assert sampling_plan["seed_schedule"] == list(range(701, 709))
+    with pytest.raises(ModalAiderError, match="exactly 8"):
+        config(tmp_path, **common, W8_MODAL_AIDER_SAMPLES_PER_TASK="7")
+    with pytest.raises(ModalAiderError, match="TRIES=2"):
+        config(
+            tmp_path,
+            W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+            W8_MODAL_AIDER_TRIES="1",
+        )
+    with pytest.raises(ModalAiderError, match="positive sampling"):
+        config(tmp_path, **common, W8_MODAL_AIDER_TEMPERATURE="0")
+    with pytest.raises(ModalAiderError, match="ACKNOWLEDGE_PASS_AT_8"):
+        config(
+            tmp_path,
+            **common,
+            W8_MODAL_AIDER_PHASE="full",
+            W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+        )
+
+
+def test_independent_sample_settings_and_argv_transmit_seed(tmp_path: Path) -> None:
+    cfg = config(
+        tmp_path,
+        W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+        W8_MODAL_AIDER_TRIES="2",
+        W8_MODAL_AIDER_BASE_SEED="41",
+    )
+    settings = model_settings(cfg, sample_index=3)
+    argv = independent_sample_command(
+        cfg,
+        sample_index=3,
+        settings_path="/run/sample-03.yml",
+        exercises_dir="/fresh/sample-03",
+    )
+    assert "seed: 44" in settings
+    assert argv[argv.index("--tries") + 1] == "2"
+    assert argv[argv.index("--read-model-settings") + 1] == "/run/sample-03.yml"
+    assert argv[argv.index("--exercises-dir") + 1] == "/fresh/sample-03"
+    assert "sample-03" in argv[1]
+
+
+def test_independent_matrix_computes_four_metrics_by_try_depth(tmp_path: Path) -> None:
+    cfg = config(
+        tmp_path,
+        W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+        W8_MODAL_AIDER_TRIES="2",
+        W8_MODAL_AIDER_BASE_SEED="100",
+    )
+    sample_dirs = {index: tmp_path / f"sample-{index:02d}" for index in range(1, 9)}
+    # Try 1 covers c_i=0..8; cumulative try 2 covers min(8, c_i+1).
+    # Column order is deliberately reversed.
+    for sample_index, root in reversed(list(sample_dirs.items())):
+        for try1_successes in range(9):
+            try1_passed = sample_index <= try1_successes
+            try2_passed = sample_index <= min(8, try1_successes + 1)
+            write_independent_result(
+                root,
+                f"task-c{try1_successes}",
+                outcomes=[True] if try1_passed else [False, try2_passed],
+            )
+    out = tmp_path / "report"
+    report = build_independent_pass_report(
+        cfg,
+        sample_result_dirs=dict(reversed(list(sample_dirs.items()))),
+        out=out,
+        expected_tasks=9,
+    )
+    summary = report["summary"]
+    assert summary["result_family"] == INDEPENDENT_RESULT_LABEL
+    assert summary["pass@1_try1"] == pytest.approx(0.5)
+    assert summary["pass@1_try2"] == pytest.approx(11 / 18)
+    assert summary["pass@8_try1"] == pytest.approx(8 / 9)
+    assert summary["pass@8_try2"] == pytest.approx(1.0)
+    assert {key for key in summary if key.startswith("pass@")} == {
+        "pass@1_try1",
+        "pass@1_try2",
+        "pass@8_try1",
+        "pass@8_try2",
+    }
+    assert report["matrices"]["try1"][0]["successes"] == 0
+    assert report["matrices"]["try2"][0]["successes"] == 1
+    assert report["matrices"]["try1"][-1]["successes"] == 8
+    assert report["matrices"]["try2"][-1]["successes"] == 8
+    assert len((out / "samples.jsonl").read_text().splitlines()) == 72
+    assert "pass@2" not in (out / "report.md").read_text()
+    assert (out / "success-matrix.try1.json").is_file()
+    assert (out / "success-matrix.try2.json").is_file()
+    assert (out / "pass-at-1-and-8-by-try.json").is_file()
+
+
+def test_independent_matrix_rejects_missing_and_exception_cells(tmp_path: Path) -> None:
+    cfg = config(
+        tmp_path,
+        W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+        W8_MODAL_AIDER_TRIES="2",
+    )
+    sample_dirs = {index: tmp_path / f"sample-{index:02d}" for index in range(1, 9)}
+    for index, root in sample_dirs.items():
+        write_independent_result(root, "task", outcomes=[False, False], exception=index == 8)
+    with pytest.raises(ModalAiderError, match="exception blocks"):
+        build_independent_pass_report(
+            cfg, sample_result_dirs=sample_dirs, out=tmp_path / "bad", expected_tasks=1
+        )
+    with pytest.raises(ModalAiderError, match="indices 1 through 8"):
+        build_independent_pass_report(
+            cfg,
+            sample_result_dirs={key: value for key, value in sample_dirs.items() if key != 8},
+            out=tmp_path / "missing",
+            expected_tasks=1,
+        )
+
+
+def test_independent_two_try_admission_enforces_short_circuit_and_repair(tmp_path: Path) -> None:
+    valid = tmp_path / "valid"
+    write_independent_result(valid, "first-pass", outcomes=[True])
+    write_independent_result(valid, "repaired", outcomes=[False, True])
+    write_independent_result(valid, "failed", outcomes=[False, False])
+    admission = validate_independent_aider_results(valid, expected_tasks=3)
+    assert admission.test_invocations == 5
+
+    missing_repair = tmp_path / "missing-repair"
+    write_independent_result(missing_repair, "task", outcomes=[False])
+    with pytest.raises(ModalAiderError, match="missing its second-try"):
+        validate_independent_aider_results(missing_repair, expected_tasks=1)
+
+    continued = tmp_path / "continued"
+    write_independent_result(continued, "task", outcomes=[True, False])
+    with pytest.raises(ModalAiderError, match="continued after a passing first try"):
+        validate_independent_aider_results(continued, expected_tasks=1)
+
+
+def test_independent_stats_allow_missing_try2_only_when_no_task_reached_it(
+    tmp_path: Path,
+) -> None:
+    all_first_pass = tmp_path / "all-first-pass"
+    write_independent_result(all_first_pass, "task", outcomes=[True])
+    validate_independent_authoritative_stats(
+        authoritative_stats(1, tries=1),
+        result_dir=all_first_pass,
+        expected_tasks=1,
+    )
+
+    reached_try2 = tmp_path / "reached-try2"
+    write_independent_result(reached_try2, "task", outcomes=[False, True])
+    with pytest.raises(ModalAiderError, match="missing pass_rate_2"):
+        validate_independent_authoritative_stats(
+            authoritative_stats(1, tries=1),
+            result_dir=reached_try2,
+            expected_tasks=1,
+        )
+    validate_independent_authoritative_stats(
+        authoritative_stats(1, tries=2),
+        result_dir=reached_try2,
+        expected_tasks=1,
+    )
+
+
+def test_independent_local_artifacts_recompute_four_metrics_and_reject_tampering(
+    tmp_path: Path,
+) -> None:
+    cfg = config(
+        tmp_path,
+        W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+        W8_MODAL_AIDER_TRIES="2",
+        W8_MODAL_AIDER_PHASE="full",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+        W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8="1",
+        W8_MODAL_AIDER_EXPECTED_CPP_TASKS="1",
+        W8_MODAL_AIDER_BASE_SEED="90",
+    )
+    root = cfg.local_run_path(tmp_path)
+    protocol = root / INDEPENDENT_EVAL_MODE
+    result_dirs: dict[int, Path] = {}
+    for sample_index in range(1, 9):
+        sample_root = protocol / f"sample-{sample_index:02d}"
+        result_root = sample_root / f"run--{cfg.run_id}-sample-{sample_index:02d}"
+        outcomes = [True] if sample_index == 1 else [False, sample_index == 2]
+        write_independent_result(result_root, "task", outcomes=outcomes)
+        result_dirs[sample_index] = result_root
+        settings = model_settings(cfg, sample_index=sample_index)
+        (sample_root / "model-settings.yml").write_text(settings, encoding="utf-8")
+        (sample_root / "model-settings.sha256").write_text("settings-hash\n", encoding="utf-8")
+        write_json(
+            sample_root / "command.json",
+            {
+                "sample_index": sample_index,
+                "seed": sample_seed(cfg, sample_index),
+                "tries": 2,
+            },
+        )
+        write_json(
+            sample_root / "request-metadata.json",
+            {"sample_index": sample_index, "seed": sample_seed(cfg, sample_index)},
+        )
+        write_json(
+            sample_root / "fresh-tree.receipt.json",
+            {"sample_index": sample_index, "copy_isolated_from_other_samples": True},
+        )
+        write_json(sample_root / "stats.json", authoritative_stats(1, tries=2))
+
+    report = build_independent_pass_report(
+        cfg,
+        sample_result_dirs=result_dirs,
+        out=protocol,
+        expected_tasks=1,
+    )
+    for name in (
+        "plan.json",
+        "config.redacted.json",
+        "upstreams.json",
+        "model-cache.receipt.json",
+        "server.receipt.json",
+    ):
+        write_json(root / name, {"status": "complete"})
+    (root / "model-settings.yml").write_text("settings\n", encoding="utf-8")
+    (root / "model-settings.sha256").write_text("settings-hash\n", encoding="utf-8")
+    write_json(
+        root / "run_receipt.json",
+        {
+            "status": "complete",
+            "benchmark": BENCHMARK_LABEL,
+            "eval_mode": INDEPENDENT_EVAL_MODE,
+            "result_family": INDEPENDENT_RESULT_LABEL,
+            "tries": 2,
+            "expected_tasks": 1,
+            "completed_tasks": 1,
+            "completed_trajectories": 8,
+            "maximum_edit_attempts": 16,
+            "independent_pass_at_1_and_8": report["summary"],
+            "modal_app_stopped": True,
+            "teardown_status": "verified",
+        },
+    )
+    write_json(root / "artifact_manifest.json", build_artifact_manifest(root))
+
+    validated = validate_local_artifacts(cfg, repo_root=tmp_path)
+    assert validated["stats"]["pass@1_try1"] == pytest.approx(1 / 8)
+    assert validated["stats"]["pass@1_try2"] == pytest.approx(2 / 8)
+    assert validated["stats"]["pass@8_try1"] == 1
+    assert validated["stats"]["pass@8_try2"] == 1
+
+    matrix_path = protocol / "success-matrix.try2.json"
+    matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    matrix["rows"][0]["successes"] = 8
+    write_json(matrix_path, matrix)
+    write_json(root / "artifact_manifest.json", build_artifact_manifest(root))
+    with pytest.raises(ModalAiderError, match="does not match official rows"):
+        validate_local_artifacts(cfg, repo_root=tmp_path)
 
 
 def test_local_artifact_path_cannot_escape_w8_state(tmp_path: Path) -> None:
@@ -509,6 +804,7 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert "HF_TOKEN" not in modal_app.split("def run_aider_benchmark", 1)[1]
     assert run.index("trap cleanup EXIT") < run.index("modal token info") < run.index("modal run")
     assert "W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN" in run
+    assert "W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8" in run
     assert "modal app stop" in run and "modal app list --json" in run
     assert "from modal.volume import FileEntryType" in modal_app
     assert "if entry.type != FileEntryType.FILE:" in modal_app
@@ -525,6 +821,8 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
     assert "max_tokens: 8192" not in settings_template
     assert 'kind = str(getattr(entry, "type", "")).lower()' not in modal_app
     assert os.access(RUN_SH, os.X_OK)
+    for intermediate_k in range(2, 8):
+        assert f'"pass@{intermediate_k}"' not in pure
 
 
 def test_modal_images_add_mount_mode_local_source_after_build_steps() -> None:

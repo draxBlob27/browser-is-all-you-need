@@ -19,6 +19,13 @@ Configuration is export-only. Required for every phase:
 W8_MODAL_AIDER_PHASE defaults to plan. Smoke/full additionally require:
   W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN=1
 
+Independent pass@1/pass@8 by try depth additionally requires:
+  W8_MODAL_AIDER_EVAL_MODE=independent-pass-at-1-and-8
+  W8_MODAL_AIDER_SAMPLES_PER_TASK=8, W8_MODAL_AIDER_TRIES=2
+  W8_MODAL_AIDER_BASE_SEED=<nonnegative integer>
+  W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8=1
+
+It reports pass@1_try1, pass@1_try2, pass@8_try1, and pass@8_try2.
 See the lane README for every optional W8_MODAL_AIDER_* export.
 EOF
 }

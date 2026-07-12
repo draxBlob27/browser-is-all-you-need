@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -34,6 +35,9 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     AIDER_REPO_URL,
     ARTIFACT_DOWNLOAD_CONCURRENCY,
     BENCHMARK_LABEL,
+    INDEPENDENT_EVAL_MODE,
+    INDEPENDENT_RESULT_LABEL,
+    INDEPENDENT_TRIES,
     MODEL_REPO,
     MODEL_SETTINGS_PATH,
     MODAL_SDK_PIN,
@@ -51,11 +55,15 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     assert_resume_compatible,
     aider_stats_command,
     build_artifact_manifest,
+    build_independent_pass_report,
     ensure_secret_free,
     model_settings,
+    independent_config_fingerprint,
+    independent_sample_command,
     parse_aider_stats,
     render_plan,
     sha256_file,
+    sample_seed,
     sglang_server_command,
     summarize_aider_exceptions,
     summarize_aider_result_diagnostics,
@@ -63,6 +71,8 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     utc_now,
     validate_aider_results,
     validate_authoritative_stats,
+    validate_independent_aider_results,
+    validate_independent_authoritative_stats,
     validate_model_snapshot,
     validate_remote_preflight,
     validate_sglang_admission,
@@ -535,9 +545,8 @@ def _run_aider_stage(
             file=sys.stderr,
         )
         raise ModalAiderError(f"{exc}; see {stage}/exception.summary.json") from exc
-    stats_command = aider_stats_command(matches[0])
     stats_result = subprocess.run(
-        stats_command,
+        aider_stats_command(matches[0]),
         check=False,
         capture_output=True,
         text=True,
@@ -561,6 +570,181 @@ def _run_aider_stage(
             "argv": command,
         },
     )
+
+
+def _run_independent_sample(
+    config: ModalAiderConfig,
+    protocol_root: Path,
+    *,
+    sample_index: int,
+    smoke: bool,
+) -> tuple[Path, dict[str, Any]]:
+    """Run one isolated Aider trajectory with up to two sequential tries."""
+
+    sample_root = protocol_root / ("smoke" if smoke else "") / f"sample-{sample_index:02d}"
+    sample_root.mkdir(parents=True, exist_ok=True)
+    source = Path("/aider/tmp.benchmarks/polyglot-benchmark")
+    exercise_root = sample_root / "polyglot-benchmark"
+    if exercise_root.exists():
+        if not config.resume:
+            raise ModalAiderError(f"independent sample tree already exists: {exercise_root}")
+    else:
+        shutil.copytree(
+            source,
+            exercise_root,
+            symlinks=False,
+            ignore=shutil.ignore_patterns(".git", "__pycache__"),
+        )
+    write_json(
+        sample_root / "fresh-tree.receipt.json",
+        {
+            "sample_index": sample_index,
+            "source_commit": config.polyglot_commit,
+            "source_path": str(source),
+            "writable_copy_path": str(exercise_root),
+            "copy_isolated_from_other_samples": True,
+        },
+    )
+    settings_path = sample_root / "model-settings.yml"
+    settings = model_settings(config, sample_index=sample_index)
+    if settings_path.exists() and settings_path.read_text(encoding="utf-8") != settings:
+        raise ModalAiderError(f"sample {sample_index:02d} settings changed on resume")
+    settings_path.write_text(settings, encoding="utf-8")
+    (sample_root / "model-settings.sha256").write_text(
+        hashlib.sha256(settings.encode()).hexdigest() + "\n", encoding="utf-8"
+    )
+    command = independent_sample_command(
+        config,
+        sample_index=sample_index,
+        smoke=smoke,
+        settings_path=str(settings_path),
+        exercises_dir=str(exercise_root),
+    )
+    seed = sample_seed(config, sample_index)
+    write_json(
+        sample_root / "command.json",
+        {
+            "argv": command,
+            "provider_env": ["OPENAI_API_BASE", "OPENAI_API_KEY"],
+            "sample_index": sample_index,
+            "seed": seed,
+            "tries": INDEPENDENT_TRIES,
+            "config_fingerprint": independent_config_fingerprint(config),
+        },
+    )
+    # This is the secret-free request-plumbing evidence: Aider loads the exact
+    # settings file named in argv and forwards extra_params.seed through
+    # LiteLLM's OpenAI-compatible request. Paid validation must inspect this
+    # alongside the SGLang request trace before admitting the sampling smoke.
+    write_json(
+        sample_root / "request-metadata.json",
+        {
+            "sample_index": sample_index,
+            "seed": seed,
+            "settings_sha256": hashlib.sha256(settings.encode()).hexdigest(),
+            "settings_argv_path": str(settings_path),
+            "provider": "openai-compatible",
+            "seed_field": "extra_params.seed",
+            "max_tries": INDEPENDENT_TRIES,
+            "contains_secrets": False,
+        },
+    )
+    expected = config.smoke_tests if smoke else config.expected_cpp_tasks
+    result_name = f"{config.run_id}-{'smoke-' if smoke else ''}sample-{sample_index:02d}"
+    matches = sorted(sample_root.glob(f"*--{result_name}"))
+    stats_path = sample_root / "stats.json"
+    if config.resume and len(matches) == 1 and stats_path.is_file():
+        admission = validate_independent_aider_results(matches[0], expected_tasks=expected)
+        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+        validate_independent_authoritative_stats(
+            stats, result_dir=matches[0], expected_tasks=expected
+        )
+        shutil.rmtree(exercise_root)
+        return matches[0], {
+            **admission.as_mapping(),
+            "stats": stats,
+            "argv": command,
+            "sample_index": sample_index,
+            "reused": True,
+        }
+    env = dict(os.environ)
+    api_key = env.pop("SGLANG_API_KEY")
+    for name in ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "HF_TOKEN"):
+        env.pop(name, None)
+    env.update(
+        {
+            "OPENAI_API_BASE": env["W8_SGLANG_URL"].rstrip("/") + "/v1",
+            "OPENAI_API_KEY": api_key,
+            "AIDER_DOCKER": "1",
+            "AIDER_BENCHMARK_DIR": str(sample_root),
+            "NO_COLOR": "1",
+            "TERM": "dumb",
+        }
+    )
+    result = subprocess.run(command, check=False, capture_output=True, text=True, env=env, cwd="/aider")
+    (sample_root / "stdout.log").write_text(_scrub(result.stdout, api_key), encoding="utf-8")
+    (sample_root / "stderr.log").write_text(_scrub(result.stderr, api_key), encoding="utf-8")
+    if result.returncode:
+        raise ModalAiderError(
+            f"independent sample {sample_index:02d} failed with exit code {result.returncode}"
+        )
+    matches = sorted(sample_root.glob(f"*--{result_name}"))
+    if len(matches) != 1:
+        raise ModalAiderError(
+            f"sample {sample_index:02d} did not create exactly one official result directory"
+        )
+    admission = validate_independent_aider_results(matches[0], expected_tasks=expected)
+    stats_result = subprocess.run(
+        aider_stats_command(matches[0]),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd="/aider",
+    )
+    (sample_root / "stats.txt").write_text(_scrub(stats_result.stdout, api_key), encoding="utf-8")
+    if stats_result.returncode:
+        raise ModalAiderError(f"Aider stats failed for sample {sample_index:02d}")
+    stats = parse_aider_stats(stats_result.stdout)
+    validate_independent_authoritative_stats(
+        stats, result_dir=matches[0], expected_tasks=expected
+    )
+    write_json(stats_path, stats)
+    shutil.rmtree(exercise_root)
+    return matches[0], {
+        **admission.as_mapping(),
+        "stats": stats,
+        "argv": command,
+        "sample_index": sample_index,
+        "reused": False,
+    }
+
+
+def _run_independent_protocol(
+    config: ModalAiderConfig, root: Path, *, smoke: bool
+) -> dict[str, Any]:
+    started = time.monotonic()
+    protocol_root = root / INDEPENDENT_EVAL_MODE
+    result_dirs: dict[int, Path] = {}
+    sample_runs: list[dict[str, Any]] = []
+    for sample_index in range(1, config.samples_per_task + 1):
+        result_dir, sample_run = _run_independent_sample(
+            config, protocol_root, sample_index=sample_index, smoke=smoke
+        )
+        result_dirs[sample_index] = result_dir
+        sample_runs.append(sample_run)
+        results_volume.commit()
+    report_root = protocol_root / "smoke" if smoke else protocol_root
+    expected = config.smoke_tests if smoke else config.expected_cpp_tasks
+    report = build_independent_pass_report(
+        config,
+        sample_result_dirs=result_dirs,
+        out=report_root,
+        expected_tasks=expected,
+    )
+    report["elapsed_seconds"] = round(time.monotonic() - started, 3)
+    report["sample_runs"] = sample_runs
+    return report
 
 
 @app.function(
@@ -693,7 +877,14 @@ def run_aider_benchmark(
     results_volume.commit()
     final_stats = smoke_stats
     final_admission = smoke_admission
-    if config.phase == "full":
+    independent_report = None
+    if config.eval_mode == INDEPENDENT_EVAL_MODE:
+        independent_report = _run_independent_protocol(config, root, smoke=True)
+        results_volume.commit()
+        if config.phase == "full":
+            independent_report = _run_independent_protocol(config, root, smoke=False)
+            results_volume.commit()
+    elif config.phase == "full":
         final_stats, final_admission = _run_aider_stage(config, root, "full")
         results_volume.commit()
 
@@ -702,6 +893,10 @@ def run_aider_benchmark(
         "schema_version": SCHEMA_VERSION,
         "status": status,
         "benchmark": BENCHMARK_LABEL,
+        "eval_mode": config.eval_mode,
+        "result_family": INDEPENDENT_RESULT_LABEL
+        if config.eval_mode == INDEPENDENT_EVAL_MODE
+        else BENCHMARK_LABEL,
         "run_id": config.run_id,
         "started_at_utc": started_utc,
         "completed_at_utc": utc_now(),
@@ -723,24 +918,54 @@ def run_aider_benchmark(
         "transformers_commit": TRANSFORMERS_COMMIT,
         "gpu_observed": server_receipt["observed_gpus"],
         "model_settings_sha256": hashlib.sha256(settings.encode()).hexdigest(),
-        "aider_argv": final_admission["argv"],
+        "aider_argv": (
+            independent_report["sample_runs"][0]["argv"]
+            if independent_report is not None
+            else final_admission["argv"]
+        ),
+        "blocking_smoke_argv": smoke_admission["argv"],
         "edit_format": config.edit_format,
-        "tries": 1 if config.phase == "smoke" else config.tries,
+        "tries": (
+            INDEPENDENT_TRIES
+            if config.eval_mode == INDEPENDENT_EVAL_MODE
+            else 1 if config.phase == "smoke" else config.tries
+        ),
         "threads": 1 if config.phase == "smoke" else config.threads,
         "temperature": config.temperature,
         "top_p": config.top_p,
         "max_tokens": config.max_tokens,
-        "expected_tasks": config.smoke_tests
-        if config.phase == "smoke"
-        else config.expected_cpp_tasks,
-        "completed_tasks": final_admission["completed_tasks"],
-        "exception_tasks": final_admission["exception_tasks"],
+        "expected_tasks": config.smoke_tests if config.phase == "smoke" else config.expected_cpp_tasks,
+        "completed_tasks": (
+            independent_report["summary"]["task_count"]
+            if independent_report is not None
+            else final_admission["completed_tasks"]
+        ),
+        "completed_trajectories": (
+            independent_report["summary"]["trajectory_count"]
+            if independent_report is not None
+            else None
+        ),
+        "maximum_edit_attempts": (
+            independent_report["summary"]["maximum_edit_attempts"]
+            if independent_report is not None
+            else None
+        ),
+        "exception_tasks": 0 if independent_report is not None else final_admission["exception_tasks"],
         "authoritative_aider_stats": final_stats,
+        "independent_pass_at_1_and_8": (
+            independent_report["summary"] if independent_report is not None else None
+        ),
+        "samples_per_task": config.samples_per_task
+        if config.eval_mode == INDEPENDENT_EVAL_MODE
+        else None,
+        "base_seed": config.base_seed if config.eval_mode == INDEPENDENT_EVAL_MODE else None,
         "server_startup_seconds": server_receipt["startup_seconds"],
         "smoke_elapsed_seconds": smoke_admission["elapsed_seconds"],
-        "full_elapsed_seconds": final_admission["elapsed_seconds"]
-        if config.phase == "full"
-        else None,
+        "full_elapsed_seconds": (
+            independent_report["elapsed_seconds"]
+            if config.phase == "full" and independent_report is not None
+            else final_admission["elapsed_seconds"] if config.phase == "full" else None
+        ),
         "total_elapsed_seconds": round(time.monotonic() - total_started, 3),
         "remote_volume_path": config.remote_run_path,
         "local_artifact_path": f"{config.local_root}/runs/{config.run_id}",

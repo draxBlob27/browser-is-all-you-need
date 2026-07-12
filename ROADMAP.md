@@ -371,6 +371,15 @@ progress. Once the remote result is committed, reduce the server scaledown
 window to two seconds before downloading so artifact transfer does not retain
 the four-H100 replica.
 
+The updated independent result-family design uses eight trajectories per task,
+each with up to two sequential Aider tries. It reports exactly
+`pass@1_try1`, `pass@1_try2`, `pass@8_try1`, and `pass@8_try2` from separate
+try-1 and cumulative-try-2 matrices. State and feedback may continue from try
+1 to try 2 only within one trajectory; all eight trajectories remain isolated.
+Source and offline regressions implement the two-try/four-metric protocol.
+Seed inspection, the 2-by-8-by-try smoke, a complete 26-by-8-by-try run, and
+stopped-App proof remain blocking before reporting live metrics.
+
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
 Question:
