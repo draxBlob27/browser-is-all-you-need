@@ -230,6 +230,134 @@ artifacts: .../.w8-biayn/modal/glm47-flash-aider-polyglot-cpp/runs/<run-id>
 
 Anything less is incomplete infrastructure evidence, not a model result.
 
+## Planned Independent Pass@1 And Pass@8 Mode
+
+Status: not implemented. The current source still accepts only
+`W8_MODAL_AIDER_TRIES=1` or `2` and reports Aider's sequential
+`pass_rate_1`/`pass_rate_2`. Do not set `W8_MODAL_AIDER_TRIES=8` and do not
+rename sequential retry statistics as pass@8.
+
+A true pass@1/pass@8 extension will be a separate run mode, tentatively
+selected with:
+
+```bash
+export W8_MODAL_AIDER_EVAL_MODE='independent-pass-at-1-and-8'
+export W8_MODAL_AIDER_SAMPLES_PER_TASK='8'
+export W8_MODAL_AIDER_BASE_SEED='<fixed-integer>'
+export W8_MODAL_AIDER_TRIES='1'
+export W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8='1'
+```
+
+The existing sequential-repair mode remains the default and retains
+`--tries 2`.
+
+### Sampling protocol
+
+Independent pass@1/pass@8 mode will run Aider's full 26-task C++ benchmark eight
+times. Each pass must:
+
+- use Aider `--tries 1`, so no test feedback or edit history crosses attempts;
+- start from a fresh Polyglot exercise tree and empty chat history;
+- use the same model revision, prompt, edit format, token budget, temperature,
+  top-p, Aider/Polyglot commits, test command, and SGLang server;
+- use a distinct recorded sample index and deterministic seed derived from the
+  frozen base seed;
+- write to a distinct official result directory such as
+  `<run-id>-sample-01` through `<run-id>-sample-08`;
+- preserve Aider's unmodified result row and chat history for every task.
+
+The pinned Aider/LiteLLM/SGLang path must be proved to transmit the configured
+seed on the actual request before the paid run. If exact per-sample seed
+plumbing is unavailable, implementation stops for a compatibility decision;
+it must not claim reproducible independent sampling from directory names alone.
+Sampling temperature must be greater than zero and identical for all eight
+passes. A temperature-zero run is not an informative pass@8 experiment.
+
+The implementation may run Aider threads within one sample pass, as the
+current full benchmark does, but must not run two sample passes against the
+same writable exercise tree. A later sample never receives the previous
+sample's edit, tests, chat history, or failure feedback.
+
+### pass@1 and pass@8 calculation
+
+After all eight passes, build a complete 26-by-8 binary success matrix from
+the official one-try Aider result rows. For task `i`:
+
+- `n = 8` is the number of independent samples;
+- `c_i` is the number of those samples that pass;
+- calculate only these two metrics:
+
+```text
+task_pass_at_1(i) = c_i / 8
+task_pass_at_8(i) = 1 if c_i > 0 else 0
+
+pass@1 = mean_i(task_pass_at_1(i))
+pass@8 = mean_i(task_pass_at_8(i))
+```
+
+These are the `k=1` and `k=8` cases of the standard order-independent
+combinatorial estimator. The implementation must not calculate or publish
+pass@2 through pass@7. Pass@1 is not the first saved directory's success rate
+and is not an average of eight Aider `pass_rate_1` summary values; it is
+computed from the complete per-task sample matrix.
+
+The report must contain exactly `pass@1` and `pass@8`, the per-task `c_i`
+counts, the full binary matrix, sample-level outcome counts, and the exact
+estimator version. Pass@8 is the fraction of tasks solved by at least one of
+the eight samples. Any missing or exception-only trajectory blocks the
+complete report rather than reducing `n` for that task.
+
+Aider remains authoritative for each individual trajectory's edit/test
+outcome. The repository owns only the cross-sample pass@1/pass@8 aggregation,
+so this new report must use this label:
+
+```text
+repo-derived independent pass@1 and pass@8 over official Aider one-try trajectories
+```
+
+It is not an upstream Aider statistic or leaderboard score.
+
+### Smoke, artifacts, resume, and spend
+
+Before the 208-trajectory full run, add a sampling smoke with two fixed C++
+tasks and eight independent one-try samples per task. Its complete 2-by-8
+matrix must produce only pass@1 and pass@8. It must also prove fresh working
+trees, distinct transmitted seeds, complete official rows/histories, and
+teardown. A model pass is not required; complete independent trajectories are.
+
+Planned full artifacts:
+
+```text
+runs/<run-id>/
+  independent-pass-at-1-and-8/
+    sample-01/
+      command.json
+      model-settings.yml
+      stats.json
+      <official-aider-result-directory>/
+    ...
+    sample-08/
+      ...
+    samples.jsonl
+    success-matrix.json
+    success-matrix.csv
+    pass-at-1-and-8.json
+    pass-at-1-and-8.csv
+    report.md
+```
+
+Every sample directory must contain all 26 official result rows and histories.
+Resume may fill missing tasks within one exact-identity sample, but may not
+overwrite completed trajectories, change seeds, reuse edits across samples, or
+regenerate only failed model outcomes. The final aggregator must recompute the
+matrix from disk and reject mismatched task sets, seeds, configs, or hashes.
+
+Eight one-try passes require 208 task trajectories and can cost materially more
+than the current sequential two-try benchmark, whose second attempt runs only
+after failure. The separate paid acknowledgement above, a redacted no-spend
+plan, bounded timeouts, one four-H100 replica, early scale-down before artifact
+transfer, and verified App stop remain mandatory.
+
 ## Storage And Resume
 
 Defaults:
