@@ -145,6 +145,7 @@ def prepare_and_admit(
                 task=task,
                 response=_oracle_response(str(task["fix_patch"])),
                 execution=execution,
+                trusted_oracle_patch=True,
             )
             setup_valid = (
                 classified["all_tests_pass"]

@@ -556,6 +556,7 @@ def classify_response(
     task: dict[str, Any],
     response: Mapping[str, Any],
     execution: Mapping[str, Any] | None,
+    trusted_oracle_patch: bool = False,
 ) -> dict[str, Any]:
     base = {
         "task_id": task["instance_id"],
@@ -572,7 +573,8 @@ def classify_response(
     try:
         content = editable_content(response)
         patch = parse_patch_response(content)
-        preflight_patch_paths(patch, task)
+        if not trusted_oracle_patch:
+            preflight_patch_paths(patch, task)
     except Exception as exc:
         reason = getattr(exc, "reason", "invalid_format")
         return {

@@ -229,6 +229,52 @@ def test_classifier_uses_only_editable_content_and_strict_metrics() -> None:
     assert invalid["score"] == -1.0
 
 
+def test_catch2_1616_trusted_oracle_bypasses_only_model_forbidden_file_policy() -> None:
+    fence = chr(96) * 3
+    forbidden_patch = """diff --git a/docs/benchmarks.md b/docs/benchmarks.md
+--- a/docs/benchmarks.md
++++ b/docs/benchmarks.md
+@@ -1 +1 @@
+-old
++new
+"""
+    raw = response(fence + "diff\n" + forbidden_patch + fence)
+    execution = {
+        "returncode": 0,
+        "logs": "100% tests passed, 0 tests failed out of 12\n",
+        "timed_out": False,
+        "image": task()["sandbox_image_digest"],
+        "sandbox_id": "oracle-sb",
+    }
+
+    model_record = classify_response(task=task(), response=raw, execution=execution)
+    oracle_record = classify_response(
+        task=task(),
+        response=raw,
+        execution=execution,
+        trusted_oracle_patch=True,
+    )
+
+    assert model_record["reason"] == "invalid_files"
+    assert oracle_record["reason"] == "passed"
+    assert oracle_record["all_tests_pass"] is True
+
+    traversal_patch = """diff --git a/../secret.cpp b/../secret.cpp
+--- a/../secret.cpp
++++ b/../secret.cpp
+@@ -1 +1 @@
+-old
++new
+"""
+    traversal_record = classify_response(
+        task=task(),
+        response=response(fence + "diff\n" + traversal_patch + fence),
+        execution=execution,
+        trusted_oracle_patch=True,
+    )
+    assert traversal_record["reason"] == "invalid_files"
+
+
 def test_aggregation_has_oracle_provenance_and_no_pie_speed_metrics() -> None:
     row = {
         "task_id": "fmtlib__fmt-1171",
@@ -280,6 +326,8 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     assert "generate-lock" in pure
     assert "docker" not in run
     assert "min_containers=0" in app and "max_containers=1" in app
+    runtime_source = Path(modal_runtime.__file__).read_text(encoding="utf-8")
+    assert "trusted_oracle_patch=True" in runtime_source
     assert "check-app-stopped" in run
     assert app.index("prepare_and_admit(") < app.index("preload_model.remote(")
     assert run.index("trap cleanup EXIT") < run.index("modal token info") < run.index("modal run")
