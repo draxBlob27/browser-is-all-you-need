@@ -246,6 +246,7 @@ export W8_MODAL_AIDER_BASE_SEED='<fixed-integer>'
 export W8_MODAL_AIDER_TRIES='2'
 export W8_MODAL_AIDER_TEMPERATURE='0.7'
 export W8_MODAL_AIDER_TOP_P='1.0'
+export W8_MODAL_AIDER_MAX_RUN_SECONDS='14400'
 export W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN='1'
 export W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8='1'
 ```
@@ -297,6 +298,14 @@ per-trajectory statistics and are not renamed.
 The sampling smoke is two tasks by eight independent trajectories, each with
 `--tries 2`. It must build both try-depth matrices and all four metrics using
 production aggregation code. A model pass is not required.
+The task set is pinned to `binary-search-tree` and `grade-school` through
+Aider's official comma-separated `--keywords` filter before its random shuffle.
+Corrected evidence lives under `sampling-smoke-v1`; any older `smoke/`
+trajectories with randomized task subsets remain diagnostic-only and are never
+reused on resume.
+Paid evidence showed this smoke alone can take about 70 minutes, so independent
+full runs require `W8_MODAL_AIDER_MAX_RUN_SECONDS=14400`; the former 7200-second
+identity must use a fresh run ID rather than resume across the timeout change.
 
 The full run contains 208 independent task trajectories and at most 416 model
 edit attempts. Artifacts must include separate try-1 and cumulative-try-2
@@ -377,6 +386,11 @@ runs/<run-id>/
     stats.txt
     stats.json
     <timestamp>--<run-id>-smoke/
+  independent-pass-at-1-and-8/sampling-smoke-v1/
+    sample-01/ ... sample-08/
+    success-matrix.try1.json
+    success-matrix.try2.json
+    pass-at-1-and-8-by-try.json
   full/
     command.json
     stdout.log

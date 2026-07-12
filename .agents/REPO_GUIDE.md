@@ -300,6 +300,12 @@ proof. Source and offline tests implement this contract; paid seed inspection,
 the sampling smoke, and the complete stopped-App full receipt remain mandatory.
 Paid acknowledgements are launch safety gates rather than immutable benchmark
 identity and may change from false in plan mode to true for the first paid run.
+Pin every sampling-smoke trajectory to `binary-search-tree` and `grade-school`
+with Aider's comma-separated keyword filter. Store corrected evidence under
+`sampling-smoke-v1`; preserve randomized legacy smoke artifacts as diagnostics
+but never reuse them on resume.
+Independent full requires `W8_MODAL_AIDER_MAX_RUN_SECONDS=14400`; a prior
+7200-second run must get a fresh ID because timeout remains immutable identity.
 
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned

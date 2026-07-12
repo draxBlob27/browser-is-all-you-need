@@ -37,6 +37,8 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     BENCHMARK_LABEL,
     INDEPENDENT_EVAL_MODE,
     INDEPENDENT_RESULT_LABEL,
+    INDEPENDENT_SMOKE_DIR,
+    INDEPENDENT_SMOKE_TASKS,
     INDEPENDENT_TRIES,
     MODEL_REPO,
     MODEL_SETTINGS_PATH,
@@ -581,7 +583,11 @@ def _run_independent_sample(
 ) -> tuple[Path, dict[str, Any]]:
     """Run one isolated Aider trajectory with up to two sequential tries."""
 
-    sample_root = protocol_root / ("smoke" if smoke else "") / f"sample-{sample_index:02d}"
+    sample_root = (
+        protocol_root / INDEPENDENT_SMOKE_DIR / f"sample-{sample_index:02d}"
+        if smoke
+        else protocol_root / f"sample-{sample_index:02d}"
+    )
     sample_root.mkdir(parents=True, exist_ok=True)
     source = Path("/aider/tmp.benchmarks/polyglot-benchmark")
     exercise_root = sample_root / "polyglot-benchmark"
@@ -646,6 +652,7 @@ def _run_independent_sample(
             "provider": "openai-compatible",
             "seed_field": "extra_params.seed",
             "max_tries": INDEPENDENT_TRIES,
+            "task_ids": list(INDEPENDENT_SMOKE_TASKS) if smoke else None,
             "contains_secrets": False,
         },
     )
@@ -654,7 +661,11 @@ def _run_independent_sample(
     matches = sorted(sample_root.glob(f"*--{result_name}"))
     stats_path = sample_root / "stats.json"
     if config.resume and len(matches) == 1 and stats_path.is_file():
-        admission = validate_independent_aider_results(matches[0], expected_tasks=expected)
+        admission = validate_independent_aider_results(
+            matches[0],
+            expected_tasks=expected,
+            expected_task_ids=INDEPENDENT_SMOKE_TASKS if smoke else None,
+        )
         stats = json.loads(stats_path.read_text(encoding="utf-8"))
         validate_independent_authoritative_stats(
             stats, result_dir=matches[0], expected_tasks=expected
@@ -681,7 +692,9 @@ def _run_independent_sample(
             "TERM": "dumb",
         }
     )
-    result = subprocess.run(command, check=False, capture_output=True, text=True, env=env, cwd="/aider")
+    result = subprocess.run(
+        command, check=False, capture_output=True, text=True, env=env, cwd="/aider"
+    )
     (sample_root / "stdout.log").write_text(_scrub(result.stdout, api_key), encoding="utf-8")
     (sample_root / "stderr.log").write_text(_scrub(result.stderr, api_key), encoding="utf-8")
     if result.returncode:
@@ -693,7 +706,11 @@ def _run_independent_sample(
         raise ModalAiderError(
             f"sample {sample_index:02d} did not create exactly one official result directory"
         )
-    admission = validate_independent_aider_results(matches[0], expected_tasks=expected)
+    admission = validate_independent_aider_results(
+        matches[0],
+        expected_tasks=expected,
+        expected_task_ids=INDEPENDENT_SMOKE_TASKS if smoke else None,
+    )
     stats_result = subprocess.run(
         aider_stats_command(matches[0]),
         check=False,
@@ -706,9 +723,7 @@ def _run_independent_sample(
     if stats_result.returncode:
         raise ModalAiderError(f"Aider stats failed for sample {sample_index:02d}")
     stats = parse_aider_stats(stats_result.stdout)
-    validate_independent_authoritative_stats(
-        stats, result_dir=matches[0], expected_tasks=expected
-    )
+    validate_independent_authoritative_stats(stats, result_dir=matches[0], expected_tasks=expected)
     write_json(stats_path, stats)
     shutil.rmtree(exercise_root)
     return matches[0], {
@@ -734,7 +749,7 @@ def _run_independent_protocol(
         result_dirs[sample_index] = result_dir
         sample_runs.append(sample_run)
         results_volume.commit()
-    report_root = protocol_root / "smoke" if smoke else protocol_root
+    report_root = protocol_root / INDEPENDENT_SMOKE_DIR if smoke else protocol_root
     expected = config.smoke_tests if smoke else config.expected_cpp_tasks
     report = build_independent_pass_report(
         config,
@@ -928,13 +943,17 @@ def run_aider_benchmark(
         "tries": (
             INDEPENDENT_TRIES
             if config.eval_mode == INDEPENDENT_EVAL_MODE
-            else 1 if config.phase == "smoke" else config.tries
+            else 1
+            if config.phase == "smoke"
+            else config.tries
         ),
         "threads": 1 if config.phase == "smoke" else config.threads,
         "temperature": config.temperature,
         "top_p": config.top_p,
         "max_tokens": config.max_tokens,
-        "expected_tasks": config.smoke_tests if config.phase == "smoke" else config.expected_cpp_tasks,
+        "expected_tasks": config.smoke_tests
+        if config.phase == "smoke"
+        else config.expected_cpp_tasks,
         "completed_tasks": (
             independent_report["summary"]["task_count"]
             if independent_report is not None
@@ -950,7 +969,9 @@ def run_aider_benchmark(
             if independent_report is not None
             else None
         ),
-        "exception_tasks": 0 if independent_report is not None else final_admission["exception_tasks"],
+        "exception_tasks": 0
+        if independent_report is not None
+        else final_admission["exception_tasks"],
         "authoritative_aider_stats": final_stats,
         "independent_pass_at_1_and_8": (
             independent_report["summary"] if independent_report is not None else None
@@ -964,7 +985,9 @@ def run_aider_benchmark(
         "full_elapsed_seconds": (
             independent_report["elapsed_seconds"]
             if config.phase == "full" and independent_report is not None
-            else final_admission["elapsed_seconds"] if config.phase == "full" else None
+            else final_admission["elapsed_seconds"]
+            if config.phase == "full"
+            else None
         ),
         "total_elapsed_seconds": round(time.monotonic() - total_started, 3),
         "remote_volume_path": config.remote_run_path,

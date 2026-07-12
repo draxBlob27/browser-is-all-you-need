@@ -18,7 +18,10 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     BENCHMARK_LABEL,
     DEFAULT_MAX_TOKENS,
     INDEPENDENT_EVAL_MODE,
+    INDEPENDENT_FULL_MAX_RUN_SECONDS,
     INDEPENDENT_RESULT_LABEL,
+    INDEPENDENT_SMOKE_DIR,
+    INDEPENDENT_SMOKE_TASKS,
     INDEPENDENT_TRIES,
     MODEL_SETTINGS_PATH,
     SERVED_MODEL_NAME,
@@ -238,6 +241,9 @@ def test_independent_mode_requires_exact_paid_contract(tmp_path: Path) -> None:
     sampling_plan = render_plan(cfg)["independent_sampling"]
     assert sampling_plan["full_trajectory_count"] == 208
     assert sampling_plan["sampling_smoke_trajectory_count"] == 16
+    assert sampling_plan["sampling_smoke_tasks"] == list(INDEPENDENT_SMOKE_TASKS)
+    assert sampling_plan["sampling_smoke_artifact_dir"] == INDEPENDENT_SMOKE_DIR
+    assert sampling_plan["required_full_max_run_seconds"] == INDEPENDENT_FULL_MAX_RUN_SECONDS
     assert sampling_plan["max_tries_per_trajectory"] == 2
     assert sampling_plan["maximum_full_edit_attempts"] == 416
     assert sampling_plan["seed_schedule"] == list(range(701, 709))
@@ -251,12 +257,23 @@ def test_independent_mode_requires_exact_paid_contract(tmp_path: Path) -> None:
         )
     with pytest.raises(ModalAiderError, match="positive sampling"):
         config(tmp_path, **common, W8_MODAL_AIDER_TEMPERATURE="0")
+    with pytest.raises(ModalAiderError, match="exactly 2 fixed smoke tasks"):
+        config(tmp_path, **common, W8_MODAL_AIDER_SMOKE_TESTS="1")
+    with pytest.raises(ModalAiderError, match="MAX_RUN_SECONDS=14400"):
+        config(
+            tmp_path,
+            **common,
+            W8_MODAL_AIDER_PHASE="full",
+            W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+            W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8="1",
+        )
     with pytest.raises(ModalAiderError, match="ACKNOWLEDGE_PASS_AT_8"):
         config(
             tmp_path,
             **common,
             W8_MODAL_AIDER_PHASE="full",
             W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
+            W8_MODAL_AIDER_MAX_RUN_SECONDS="14400",
         )
 
 
@@ -279,6 +296,16 @@ def test_independent_sample_settings_and_argv_transmit_seed(tmp_path: Path) -> N
     assert argv[argv.index("--read-model-settings") + 1] == "/run/sample-03.yml"
     assert argv[argv.index("--exercises-dir") + 1] == "/fresh/sample-03"
     assert "sample-03" in argv[1]
+    smoke_argv = independent_sample_command(
+        cfg,
+        sample_index=3,
+        smoke=True,
+        settings_path="/run/sample-03.yml",
+        exercises_dir="/fresh/sample-03",
+    )
+    assert smoke_argv[smoke_argv.index("--keywords") + 1] == ",".join(INDEPENDENT_SMOKE_TASKS)
+    assert smoke_argv[smoke_argv.index("--num-tests") + 1] == "2"
+    assert smoke_argv[smoke_argv.index("--tries") + 1] == "2"
 
 
 def test_independent_matrix_computes_four_metrics_by_try_depth(tmp_path: Path) -> None:
@@ -330,6 +357,22 @@ def test_independent_matrix_computes_four_metrics_by_try_depth(tmp_path: Path) -
     assert (out / "pass-at-1-and-8-by-try.json").is_file()
 
 
+def test_independent_matrix_rejects_randomized_smoke_task_sets(tmp_path: Path) -> None:
+    cfg = config(tmp_path, W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE)
+    sample_dirs = {index: tmp_path / f"sample-{index:02d}" for index in range(1, 9)}
+    for sample_index, root in sample_dirs.items():
+        task_ids = INDEPENDENT_SMOKE_TASKS if sample_index < 8 else ("clock", "meetup")
+        for task_id in task_ids:
+            write_independent_result(root, task_id, outcomes=[False, False])
+    with pytest.raises(ModalAiderError, match="mismatched task sets"):
+        build_independent_pass_report(
+            cfg,
+            sample_result_dirs=sample_dirs,
+            out=tmp_path / "report",
+            expected_tasks=2,
+        )
+
+
 def test_independent_matrix_rejects_missing_and_exception_cells(tmp_path: Path) -> None:
     cfg = config(
         tmp_path,
@@ -358,6 +401,12 @@ def test_independent_two_try_admission_enforces_short_circuit_and_repair(tmp_pat
     write_independent_result(valid, "repaired", outcomes=[False, True])
     write_independent_result(valid, "failed", outcomes=[False, False])
     admission = validate_independent_aider_results(valid, expected_tasks=3)
+    with pytest.raises(ModalAiderError, match="did not match"):
+        validate_independent_aider_results(
+            valid,
+            expected_tasks=3,
+            expected_task_ids=("first-pass", "repaired", "wrong-task"),
+        )
     assert admission.test_invocations == 5
 
     missing_repair = tmp_path / "missing-repair"
@@ -408,6 +457,7 @@ def test_independent_local_artifacts_recompute_four_metrics_and_reject_tampering
         W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
         W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8="1",
         W8_MODAL_AIDER_EXPECTED_CPP_TASKS="1",
+        W8_MODAL_AIDER_MAX_RUN_SECONDS="14400",
         W8_MODAL_AIDER_BASE_SEED="90",
     )
     root = cfg.local_run_path(tmp_path)
@@ -700,6 +750,7 @@ def test_plan_to_paid_pass_at_8_acknowledgements_are_not_identity(tmp_path: Path
     planned = config(
         tmp_path,
         W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+        W8_MODAL_AIDER_MAX_RUN_SECONDS="14400",
     )
     prepare_local_plan(planned, repo_root=tmp_path)
 
@@ -709,6 +760,7 @@ def test_plan_to_paid_pass_at_8_acknowledgements_are_not_identity(tmp_path: Path
         W8_MODAL_AIDER_ACKNOWLEDGE_PAID_RUN="1",
         W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8="1",
         W8_MODAL_AIDER_EVAL_MODE=INDEPENDENT_EVAL_MODE,
+        W8_MODAL_AIDER_MAX_RUN_SECONDS="14400",
     )
     prepare_local_plan(paid, repo_root=tmp_path)
 

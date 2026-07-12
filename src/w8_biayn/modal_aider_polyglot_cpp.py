@@ -28,12 +28,13 @@ SCHEMA_VERSION = 1
 BENCHMARK_LABEL = "aider-polyglot-cpp-modal-base-eval"
 SEQUENTIAL_EVAL_MODE = "sequential-repair"
 INDEPENDENT_EVAL_MODE = "independent-pass-at-1-and-8"
-INDEPENDENT_RESULT_LABEL = (
-    "repo-derived independent pass@1/pass@8 by cumulative Aider try depth"
-)
+INDEPENDENT_RESULT_LABEL = "repo-derived independent pass@1/pass@8 by cumulative Aider try depth"
 INDEPENDENT_SAMPLES_PER_TASK = 8
 INDEPENDENT_TRIES = 2
-PASS_AT_ESTIMATOR_VERSION = "independent-aider-two-try-v2"
+INDEPENDENT_SMOKE_TASKS = ("binary-search-tree", "grade-school")
+INDEPENDENT_SMOKE_DIR = "sampling-smoke-v1"
+INDEPENDENT_FULL_MAX_RUN_SECONDS = 14_400
+PASS_AT_ESTIMATOR_VERSION = "independent-aider-two-try-v3"
 MODEL_REPO = "zai-org/GLM-4.7-Flash"
 SERVED_MODEL_NAME = "glm-4.7-flash"
 AIDER_MODEL_NAME = "openai/glm-4.7-flash"
@@ -221,16 +222,12 @@ class ModalAiderConfig:
             ).strip(),
             local_root=str(env.get("W8_MODAL_AIDER_LOCAL_ROOT", DEFAULT_LOCAL_ROOT)).strip(),
             resume=_boolean(env, "W8_MODAL_AIDER_RESUME"),
-            eval_mode=str(
-                env.get("W8_MODAL_AIDER_EVAL_MODE", SEQUENTIAL_EVAL_MODE)
-            ).strip(),
+            eval_mode=str(env.get("W8_MODAL_AIDER_EVAL_MODE", SEQUENTIAL_EVAL_MODE)).strip(),
             samples_per_task=_integer(
                 env, "W8_MODAL_AIDER_SAMPLES_PER_TASK", INDEPENDENT_SAMPLES_PER_TASK
             ),
             base_seed=_integer(env, "W8_MODAL_AIDER_BASE_SEED", 0),
-            acknowledge_pass_at_8=_boolean(
-                env, "W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8"
-            ),
+            acknowledge_pass_at_8=_boolean(env, "W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8"),
         )
         config.validate(repo_root=repo_root)
         return config
@@ -296,8 +293,7 @@ class ModalAiderConfig:
             errors.append("top_p must be in (0, 1]")
         if self.eval_mode not in {SEQUENTIAL_EVAL_MODE, INDEPENDENT_EVAL_MODE}:
             errors.append(
-                "W8_MODAL_AIDER_EVAL_MODE must be sequential-repair or "
-                "independent-pass-at-1-and-8"
+                "W8_MODAL_AIDER_EVAL_MODE must be sequential-repair or independent-pass-at-1-and-8"
             )
         if self.base_seed < 0:
             errors.append("W8_MODAL_AIDER_BASE_SEED must be nonnegative")
@@ -306,12 +302,14 @@ class ModalAiderConfig:
                 errors.append("independent pass@8 mode requires exactly 8 samples per task")
             if self.tries != INDEPENDENT_TRIES:
                 errors.append("independent pass@8 mode requires W8_MODAL_AIDER_TRIES=2")
+            if self.smoke_tests != len(INDEPENDENT_SMOKE_TASKS):
+                errors.append("independent pass@8 mode requires exactly 2 fixed smoke tasks")
+            if self.phase == "full" and self.max_run_seconds != INDEPENDENT_FULL_MAX_RUN_SECONDS:
+                errors.append("independent pass@8 full runs require MAX_RUN_SECONDS=14400")
             if self.temperature <= 0:
                 errors.append("independent pass@8 mode requires positive sampling temperature")
             if self.phase in {"smoke", "full"} and not self.acknowledge_pass_at_8:
-                errors.append(
-                    "W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8=1 is required for paid pass@8"
-                )
+                errors.append("W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8=1 is required for paid pass@8")
         repo = Path(repo_root).resolve()
         local = (
             (repo / self.local_root).resolve()
@@ -442,6 +440,9 @@ def render_plan(config: ModalAiderConfig) -> dict[str, Any]:
             "samples_per_task": config.samples_per_task,
             "full_trajectory_count": config.expected_cpp_tasks * config.samples_per_task,
             "sampling_smoke_trajectory_count": config.smoke_tests * config.samples_per_task,
+            "sampling_smoke_tasks": list(INDEPENDENT_SMOKE_TASKS),
+            "sampling_smoke_artifact_dir": INDEPENDENT_SMOKE_DIR,
+            "required_full_max_run_seconds": INDEPENDENT_FULL_MAX_RUN_SECONDS,
             "base_seed": config.base_seed,
             "seed_schedule": [sample_seed(config, index) for index in range(1, 9)],
             "max_tries_per_trajectory": INDEPENDENT_TRIES,
@@ -544,6 +545,8 @@ def aider_benchmark_command(
         "1" if stage == "smoke" else str(config.threads),
     ]
     if stage == "smoke":
+        if config.eval_mode == INDEPENDENT_EVAL_MODE:
+            command.extend(["--keywords", ",".join(INDEPENDENT_SMOKE_TASKS)])
         command.extend(["--num-tests", str(config.smoke_tests)])
     command.extend(
         [
@@ -580,7 +583,14 @@ def independent_sample_command(
     command[command.index("--tries") + 1] = str(INDEPENDENT_TRIES)
     if smoke:
         command[command.index("--threads") + 1] = "1"
-        command.extend(["--num-tests", str(config.smoke_tests)])
+        command.extend(
+            [
+                "--keywords",
+                ",".join(INDEPENDENT_SMOKE_TASKS),
+                "--num-tests",
+                str(config.smoke_tests),
+            ]
+        )
     return command
 
 
@@ -897,7 +907,10 @@ def _two_try_result_row(path: Path) -> dict[str, Any]:
 
 
 def validate_independent_aider_results(
-    result_dir: str | Path, *, expected_tasks: int
+    result_dir: str | Path,
+    *,
+    expected_tasks: int,
+    expected_task_ids: Sequence[str] | None = None,
 ) -> AiderResultAdmission:
     """Admit complete official two-try trajectories without rescoring Aider edits."""
 
@@ -906,6 +919,14 @@ def validate_independent_aider_results(
         expected_tasks=expected_tasks,
         reject_all_exhausted=False,
     )
+    if expected_task_ids is not None:
+        paths = sorted(Path(result_dir).glob("cpp/exercises/practice/*/.aider.results.json"))
+        actual_task_ids = {path.parent.name for path in paths}
+        if actual_task_ids != set(expected_task_ids):
+            raise ModalAiderError(
+                f"independent task set {sorted(actual_task_ids)} did not match "
+                f"{sorted(expected_task_ids)}"
+            )
     for path in sorted(Path(result_dir).glob("cpp/exercises/practice/*/.aider.results.json")):
         _two_try_result_row(path)
     return admission
@@ -1025,9 +1046,7 @@ def build_independent_pass_report(
         if set(cells) != expected_indices:
             raise ModalAiderError(f"task {task_id} does not have exactly eight samples")
         for try_name in ("try1", "try2"):
-            values = [
-                cells[index][f"{try_name}_success"] for index in sorted(expected_indices)
-            ]
+            values = [cells[index][f"{try_name}_success"] for index in sorted(expected_indices)]
             successes = sum(values)
             matrices[try_name].append(
                 {
@@ -1041,12 +1060,12 @@ def build_independent_pass_report(
     metrics: dict[str, float] = {}
     for try_name in ("try1", "try2"):
         rows = matrices[try_name]
-        metrics[f"pass@1_{try_name}"] = sum(
-            row[f"task_pass_at_1_{try_name}"] for row in rows
-        ) / expected_tasks
-        metrics[f"pass@8_{try_name}"] = sum(
-            row[f"task_pass_at_8_{try_name}"] for row in rows
-        ) / expected_tasks
+        metrics[f"pass@1_{try_name}"] = (
+            sum(row[f"task_pass_at_1_{try_name}"] for row in rows) / expected_tasks
+        )
+        metrics[f"pass@8_{try_name}"] = (
+            sum(row[f"task_pass_at_8_{try_name}"] for row in rows) / expected_tasks
+        )
     monotonic_pairs = (
         ("pass@1_try1", "pass@1_try2"),
         ("pass@8_try1", "pass@8_try2"),
@@ -1301,7 +1320,7 @@ def validate_local_artifacts(
         raise ModalAiderError("local receipt does not prove that the Modal App stopped")
     if config.eval_mode == INDEPENDENT_EVAL_MODE:
         protocol = root / INDEPENDENT_EVAL_MODE
-        report_root = protocol if config.phase == "full" else protocol / "smoke"
+        report_root = protocol if config.phase == "full" else protocol / INDEPENDENT_SMOKE_DIR
         summary_path = report_root / "pass-at-1-and-8-by-try.json"
         matrix_paths = {
             try_name: report_root / f"success-matrix.{try_name}.json"
@@ -1368,14 +1387,20 @@ def validate_local_artifacts(
                 else f"--{config.run_id}-sample-{sample_index:02d}"
             )
             official_dirs = [
-                path for path in sample_root.iterdir() if path.is_dir() and path.name.endswith(suffix)
+                path
+                for path in sample_root.iterdir()
+                if path.is_dir() and path.name.endswith(suffix)
             ]
             if len(official_dirs) != 1:
                 raise ModalAiderError(
                     f"local independent sample {sample_index:02d} has no unique official result"
                 )
             sample_result_dirs[sample_index] = official_dirs[0]
-            validate_independent_aider_results(official_dirs[0], expected_tasks=expected)
+            validate_independent_aider_results(
+                official_dirs[0],
+                expected_tasks=expected,
+                expected_task_ids=INDEPENDENT_SMOKE_TASKS if config.phase != "full" else None,
+            )
             stats = json.loads((sample_root / "stats.json").read_text(encoding="utf-8"))
             validate_independent_authoritative_stats(
                 stats, result_dir=official_dirs[0], expected_tasks=expected

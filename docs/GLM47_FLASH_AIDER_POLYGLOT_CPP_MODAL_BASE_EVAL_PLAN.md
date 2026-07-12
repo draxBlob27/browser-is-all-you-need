@@ -688,6 +688,7 @@ export W8_MODAL_AIDER_BASE_SEED='<nonnegative-integer>'
 export W8_MODAL_AIDER_TRIES='2'
 export W8_MODAL_AIDER_TEMPERATURE='0.7'
 export W8_MODAL_AIDER_TOP_P='1.0'
+export W8_MODAL_AIDER_MAX_RUN_SECONDS='14400'
 export W8_MODAL_AIDER_ACKNOWLEDGE_PASS_AT_8='1'
 ```
 
@@ -700,6 +701,13 @@ Aider smoke, and the independent sampling smoke.
 The acknowledgement values are launch safety gates, not immutable benchmark
 identity. They may change from false in a saved no-spend plan to true for that
 run ID's first paid invocation without requiring resume.
+The sampling smoke must pin `binary-search-tree` and `grade-school` through
+Aider's comma-separated `--keywords` filter before `--num-tests 2`; otherwise
+Aider shuffles a different two-task set into each trajectory and matrix
+admission must fail. Corrected evidence uses `sampling-smoke-v1`.
+The paid random-subset smoke took about 70 minutes; independent full runs therefore
+require the supported 14,400-second bound. Since timeout is immutable identity,
+replace a 7,200-second failed run with a fresh run ID.
 
 Before spending, saved secret-free request metadata must prove that the pinned
 Aider -> LiteLLM -> SGLang path transmits each trajectory seed. If it does not,
@@ -794,7 +802,7 @@ The updated artifact subtree is:
 
 ```text
 runs/<run-id>/independent-pass-at-1-and-8/
-  smoke/
+  sampling-smoke-v1/
     sample-01/ ... sample-08/
     success-matrix.try1.json
     success-matrix.try2.json
@@ -832,6 +840,9 @@ named metrics only after `modal_app_stopped: true` is verified.
 ### Resume and failure semantics
 
 Resume stays scoped to `(sample_index, task_id)` and the exact frozen identity.
+The failed pre-v1 random-subset smoke directories remain immutable diagnostics;
+resume starts the fixed pair in `sampling-smoke-v1` and never treats old rows as
+reusable trajectories.
 It may fill missing infrastructure-failed work inside that trajectory using
 Aider continuation, but must never regenerate a model failure, change seeds,
 overwrite a completed trajectory, or carry state across trajectories. A

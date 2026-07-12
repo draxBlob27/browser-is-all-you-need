@@ -382,6 +382,12 @@ stopped-App proof remain blocking before reporting live metrics.
 Treat both paid acknowledgements as launch safety gates, not immutable result
 identity: a reviewed no-spend plan may enable them for the first paid invocation
 without becoming a resume/config mismatch.
+The eight sampling-smoke trajectories must all use the fixed
+`binary-search-tree,grade-school` Aider keyword filter and the versioned
+`sampling-smoke-v1` artifact path; randomized legacy subsets never count.
+Independent full runs require the 14,400-second bound observed necessary after a
+roughly 70-minute sampling smoke; do not resume a 7,200-second identity with a
+changed timeout.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 
