@@ -90,14 +90,20 @@ editable content, so the admitted Aider request budget is 32768 tokens within
 the pinned model's 202752-position context. Failed admission summaries include
 only per-task counters, and committed failure artifacts are downloaded locally
 before the original remote exception is re-raised.
-The singleton SGLang Server is defined with static `min_containers=0`. After
-CPU/Volume admission and model-cache preparation, the launcher dynamically
-holds exactly one replica with `min_containers=1` for the entire benchmark.
-On success or error it returns to `min_containers=0` with a two-second drain
-before artifact transfer, then explicitly stops and verifies the App. The
-1200-second scaledown window remains a fallback, not the active-run lifetime
-mechanism. The operational lease is intentionally resume-compatible with
-artifacts created before this fix because it does not change model requests.
+The singleton SGLang endpoint uses Modal's public timeout-capable
+`@app.function` plus `@modal.web_server` path. Pinned Modal SDK 1.5.2's
+`App.server` hides an internal 300-second Function execution timeout, which
+otherwise recycles the four-H100 container about every five minutes. The
+explicit server lifetime is cold-start timeout plus the complete runner timeout
+plus 600 seconds of teardown slack (18600 seconds for independent full), and is
+recorded in plans and receipts. The definition retains static
+`min_containers=0`; after CPU/Volume admission and model-cache preparation,
+the launcher dynamically holds exactly one replica with `min_containers=1`
+for the entire benchmark. On success or error it returns to
+`min_containers=0` with a two-second drain before artifact transfer, then
+explicitly stops and verifies the App. The 1200-second scaledown window remains
+a fallback. These operational lifecycle safeguards are resume-compatible
+because they do not change model requests.
 Artifact download uses Modal SDK 1.5.2's explicit `FileEntryType.FILE`; it
 skips directories and every other non-regular entry before byte reads while
 retaining byte-for-byte reconciliation for downloaded files. The client first

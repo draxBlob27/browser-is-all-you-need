@@ -31,6 +31,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     SGLANG_ADMISSION_MAX_TOKENS,
     SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS,
     SGLANG_SCALEDOWN_WINDOW_SECONDS,
+    SGLANG_SERVER_TIMEOUT_MARGIN_SECONDS,
     TRANSFORMERS_COMMIT,
     ModalAiderConfig,
     ModalAiderError,
@@ -52,6 +53,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     render_plan,
     sample_seed,
     sglang_server_command,
+    sglang_server_execution_timeout_seconds,
     summarize_aider_exceptions,
     summarize_aider_result_diagnostics,
     summarize_sglang_admission,
@@ -163,12 +165,17 @@ def test_valid_plan_config_and_redacted_plan_are_deterministic(tmp_path: Path) -
     assert first["config"]["sglang_scaledown_window_seconds"] == 1200
     assert first["config"]["sglang_active_min_containers"] == 1
     assert first["config"]["sglang_idle_min_containers"] == 0
+    assert first["config"]["sglang_server_execution_timeout_seconds"] == 11_400
     assert cfg.identity_mapping()["transformers_commit"] == TRANSFORMERS_COMMIT
     assert cfg.identity_mapping()["sglang_scaledown_window_seconds"] == 1200
     assert SGLANG_SCALEDOWN_WINDOW_SECONDS == 20 * 60
     assert SGLANG_ACTIVE_MIN_CONTAINERS == 1
     assert SGLANG_IDLE_MIN_CONTAINERS == 0
     assert SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS == 2
+    assert SGLANG_SERVER_TIMEOUT_MARGIN_SECONDS == 10 * 60
+    assert sglang_server_execution_timeout_seconds(cfg) == (
+        cfg.startup_timeout_seconds + cfg.max_run_seconds + 600
+    )
     assert ARTIFACT_DOWNLOAD_CONCURRENCY == 16
     assert cfg.max_tokens == DEFAULT_MAX_TOKENS == 32_768
     assert "max_tokens: 32768" in model_settings(cfg)
@@ -816,6 +823,7 @@ def test_active_server_lease_is_resume_compatible_with_prior_artifacts(tmp_path:
     prior = original.redacted_mapping()
     prior.pop("sglang_active_min_containers")
     prior.pop("sglang_idle_min_containers")
+    prior.pop("sglang_server_execution_timeout_seconds")
     write_json(run_root / "config.redacted.json", prior)
 
     resumed = config(
@@ -827,6 +835,7 @@ def test_active_server_lease_is_resume_compatible_with_prior_artifacts(tmp_path:
     assert_resume_compatible(resumed, run_root / "config.redacted.json")
     assert "sglang_active_min_containers" not in resumed.identity_mapping()
     assert "sglang_idle_min_containers" not in resumed.identity_mapping()
+    assert "sglang_server_execution_timeout_seconds" not in resumed.identity_mapping()
 
 
 def test_remote_preflight_rejects_stale_runs_before_paid_startup(tmp_path: Path) -> None:
@@ -1022,12 +1031,19 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
 
     assert "import modal" not in pure
     assert "slime_polyglot_cpp" not in pure + modal_app
-    assert "@app.server(" in modal_app
+    assert "@app.server(" not in modal_app
+    assert "@modal.web_server(" in modal_app
+    assert "App.server() does not expose the underlying Function" in modal_app
     assert "min_containers=0" in modal_app
     assert "max_containers=1" in modal_app
     assert "scaledown_window=SGLANG_SCALEDOWN_WINDOW_SECONDS" in modal_app
     assert "scaledown_window=60" not in modal_app
     assert "gpu=CONFIG.gpu" in modal_app
+    assert "timeout=SGLANG_SERVER_EXECUTION_TIMEOUT_SECONDS" in modal_app
+    assert "startup_timeout=CONFIG.startup_timeout_seconds" in modal_app
+    server_definition = modal_app.split("@modal.web_server(", 1)[0]
+    server_definition = server_definition.rsplit("@app.function(", 1)[1]
+    assert "retries=" not in server_definition
     assert "_hold_server_for_benchmark()" in modal_app
     assert (
         "min_containers=SGLANG_ACTIVE_MIN_CONTAINERS" in modal_app
@@ -1042,9 +1058,11 @@ def test_source_shape_keeps_modal_thin_and_paid_path_guarded() -> None:
         entrypoint.index("preflight_remote_run.remote(RUNTIME)")
         < entrypoint.index("preload_model.remote(RUNTIME)")
         < entrypoint.index("_hold_server_for_benchmark()")
-        < entrypoint.index("SGLangServer.get_url()")
+        < entrypoint.index("SGLangServer.get_web_url()")
     )
-    server_start = modal_app.split("class SGLangServer:", 1)[1].split("def _run_aider_stage", 1)[0]
+    server_start = modal_app.split("def SGLangServer() -> None:", 1)[1].split(
+        "def _run_aider_stage", 1
+    )[0]
     assert "assert_resume_compatible(config, prior_config, allow_plan=True)" in server_start
     assert "remote run id already has artifacts" not in server_start
     benchmark_body = modal_app.split("def run_aider_benchmark", 1)[1]
@@ -1152,7 +1170,7 @@ def test_modal_app_imports_from_shallow_remote_path(tmp_path: Path, monkeypatch)
         return False
 
     modal_stub.is_local = is_local
-    for name in ("App", "Image", "Secret", "Volume", "enter", "exit"):
+    for name in ("App", "Image", "Secret", "Volume", "web_server"):
         setattr(modal_stub, name, modal_object)
 
     cfg = config(tmp_path)
@@ -1232,3 +1250,5 @@ def test_modal_app_imports_from_shallow_remote_path(tmp_path: Path, monkeypatch)
         )
 
     assert cfg.startup_timeout_seconds == 3600
+    assert namespace["SGLANG_SERVER_EXECUTION_TIMEOUT_SECONDS"] == 11_400
+    assert namespace["SGLangServer"] is not None

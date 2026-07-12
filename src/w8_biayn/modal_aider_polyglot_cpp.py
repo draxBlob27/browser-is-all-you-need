@@ -51,6 +51,7 @@ SGLANG_ACTIVE_MIN_CONTAINERS = 1
 SGLANG_IDLE_MIN_CONTAINERS = 0
 SGLANG_SCALEDOWN_WINDOW_SECONDS = 20 * 60
 SGLANG_POST_RUN_SCALEDOWN_WINDOW_SECONDS = 2
+SGLANG_SERVER_TIMEOUT_MARGIN_SECONDS = 10 * 60
 ARTIFACT_DOWNLOAD_CONCURRENCY = 16
 DEFAULT_LOCAL_ROOT = ".w8-biayn/modal/glm47-flash-aider-polyglot-cpp"
 MODEL_SETTINGS_PATH = "/run/glm47_flash.model.settings.yml"
@@ -357,6 +358,9 @@ class ModalAiderConfig:
                 "sglang_active_min_containers": SGLANG_ACTIVE_MIN_CONTAINERS,
                 "sglang_idle_min_containers": SGLANG_IDLE_MIN_CONTAINERS,
                 "sglang_scaledown_window_seconds": SGLANG_SCALEDOWN_WINDOW_SECONDS,
+                "sglang_server_execution_timeout_seconds": (
+                    sglang_server_execution_timeout_seconds(self)
+                ),
                 "app_name": self.app_name,
                 "remote_run_path": self.remote_run_path,
             }
@@ -398,6 +402,16 @@ class ModalAiderConfig:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def sglang_server_execution_timeout_seconds(config: ModalAiderConfig) -> int:
+    """Cover SGLang cold start, the complete runner budget, and teardown slack."""
+
+    return (
+        config.startup_timeout_seconds
+        + config.max_run_seconds
+        + SGLANG_SERVER_TIMEOUT_MARGIN_SECONDS
+    )
 
 
 def sha256_json(value: Any) -> str:
@@ -1373,6 +1387,7 @@ def assert_resume_compatible(
         # may be enabled when resuming artifacts created before the lease fix.
         "sglang_active_min_containers",
         "sglang_idle_min_containers",
+        "sglang_server_execution_timeout_seconds",
     }
     mismatches = {
         key: {"prior": prior.get(key), "current": current.get(key)}

@@ -163,15 +163,23 @@ process and fails early if it exits. A startup failure prints and commits only
 a bearer-redacted log tail as `server.failure.json`; raw SGLang output remains
 ephemeral.
 
-The Server definition remains scale-to-zero with static `min_containers=0`.
-After CPU/Volume preflight and model-cache preparation succeed, the launcher
+The server uses Modal's public `@app.function` plus `@modal.web_server`
+composition rather than pinned SDK 1.5.2's `App.server`. The latter does not
+expose its underlying Function execution timeout and silently inherits 300
+seconds, which a paid run showed as repeated five-minute CUDA/tunnel recycling.
+The explicit server execution timeout is
+`startup_timeout_seconds + max_run_seconds + 600`; independent full therefore
+gets 18600 seconds. Plans, server runtime evidence, and final receipts record
+the derived value.
+
+The Function remains scale-to-zero with static `min_containers=0`. After
+CPU/Volume preflight and model-cache preparation succeed, the launcher
 dynamically sets `min_containers=1` to lease exactly one four-H100 replica for
 all Aider work. On success or error it restores `min_containers=0` and a
 two-second drain before artifact transfer, then explicitly stops and verifies
-the App. The 1200-second scaledown window remains an identity-bound fallback;
-it is no longer the mechanism that holds the active run. The active lease is
-an operational safeguard, not benchmark identity, so an otherwise compatible
-pre-lease run can resume with it enabled.
+the App. The 1200-second scaledown window remains an identity-bound fallback.
+The timeout and active lease are operational safeguards, not benchmark
+identity, so a compatible pre-fix run can resume with them enabled.
 
 The authenticated chat admission request uses
 `min(W8_MODAL_AIDER_MAX_TOKENS, 2048)` completion tokens. GLM's thinking phase

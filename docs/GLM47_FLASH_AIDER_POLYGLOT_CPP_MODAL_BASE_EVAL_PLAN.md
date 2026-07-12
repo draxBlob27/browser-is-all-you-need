@@ -280,12 +280,18 @@ must verify that script is executable and still referenced by the dispatcher.
 If official rows contain exceptions, commit and print a bearer-redacted
 `<stage>/exception.summary.json` containing only task, exception type, and the
 final traceback line before blocking admission.
-The singleton SGLang Server must retain `min_containers=0` and use a fixed
-1200-second scaledown window, Modal's maximum, to remain loaded across Aider's
-generation and C++ compile/test gaps. Plans, resume identity, server receipts,
-and final receipts must record this value. The wrapper's explicit stop and
-control-plane verification must still tear the App down immediately on every
-exit rather than waiting for the idle window.
+Pinned Modal SDK 1.5.2's `App.server` is unsuitable for this endpoint because
+it silently retains the underlying Function's 300-second execution timeout.
+Use `@app.function` plus `@modal.web_server` with an explicit execution
+lifetime of startup timeout plus runner timeout plus 600 seconds; record that
+derived operational value in plans, server runtime evidence, and final
+receipts. The singleton SGLang endpoint retains static `min_containers=0`,
+then the launcher sets `min_containers=1` after CPU/model preparation and
+holds it through all Aider work. The fixed 1200-second scaledown window remains
+an identity-bound fallback across generation and compile/test gaps. On every
+exit, restore `min_containers=0`, shorten the drain for artifact transfer,
+then explicitly stop and verify the App rather than waiting for idle scale
+down.
 Recursive results-Volume download under pinned Modal SDK 1.5.2 must compare
 the public `FileEntry.type` directly with `FileEntryType.FILE`. It must skip
 directories, symlinks, FIFOs, sockets, and unspecified entries before calling

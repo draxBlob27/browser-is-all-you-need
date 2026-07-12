@@ -72,6 +72,7 @@ from w8_biayn.modal_aider_polyglot_cpp import (  # noqa: E402
     sha256_file,
     sample_seed,
     sglang_server_command,
+    sglang_server_execution_timeout_seconds,
     summarize_aider_exceptions,
     summarize_aider_result_diagnostics,
     summarize_sglang_admission,
@@ -110,6 +111,7 @@ else:
     CONFIG = _config_from_payload(RUNTIME)
 RUNTIME_JSON = json.dumps(RUNTIME, sort_keys=True)
 SGLANG_API_KEY = secrets.token_urlsafe(48) if IS_LOCAL else ""
+SGLANG_SERVER_EXECUTION_TIMEOUT_SECONDS = sglang_server_execution_timeout_seconds(CONFIG)
 
 app = modal.App(
     CONFIG.app_name,
@@ -331,7 +333,10 @@ def _wait_for_process_json(
     raise ModalAiderError(f"SGLang process startup timed out ({last_error})")
 
 
-@app.server(
+# Modal SDK 1.5.2's App.server() does not expose the underlying Function
+# execution timeout and silently inherits its 300-second default. Use the
+# public Function/web_server pair so one replica can span the complete run.
+@app.function(
     image=server_image,
     gpu=CONFIG.gpu,
     volumes={
@@ -339,20 +344,22 @@ def _wait_for_process_json(
         "/results": results_volume,
     },
     secrets=[server_secret],
+    timeout=SGLANG_SERVER_EXECUTION_TIMEOUT_SECONDS,
+    startup_timeout=CONFIG.startup_timeout_seconds,
     min_containers=0,
     max_containers=1,
     buffer_containers=0,
     scaledown_window=SGLANG_SCALEDOWN_WINDOW_SECONDS,
-    startup_timeout=CONFIG.startup_timeout_seconds,
-    port=8000,
-    unauthenticated=True,
-    exit_grace_period=30,
 )
-class SGLangServer:
-    """Exactly one authenticated four-GPU SGLang server replica."""
+@modal.web_server(
+    port=8000,
+    startup_timeout=CONFIG.startup_timeout_seconds,
+    requires_proxy_auth=False,
+)
+def SGLangServer() -> None:
+    """Start exactly one authenticated four-GPU SGLang server replica."""
 
-    @modal.enter()
-    def start(self) -> None:
+    def start_server() -> None:
         config = _remote_config(json.loads(os.environ["W8_MODAL_AIDER_RUNTIME_CONFIG"]))
         run_root = Path("/results") / config.remote_run_path.lstrip("/")
         run_root.mkdir(parents=True, exist_ok=True)
@@ -390,18 +397,18 @@ class SGLangServer:
         started = time.monotonic()
         # SGLang may print its parsed arguments. Keep raw output ephemeral so
         # the command-line bearer can never enter Modal logs or run artifacts.
-        self.log_handle = Path("/tmp/sglang.log").open("w", encoding="utf-8")
-        self.process = subprocess.Popen(command, stdout=self.log_handle, stderr=subprocess.STDOUT)
+        log_handle = Path("/tmp/sglang.log").open("w", encoding="utf-8")
+        process = subprocess.Popen(command, stdout=log_handle, stderr=subprocess.STDOUT)
         api_key = os.environ["SGLANG_API_KEY"]
         try:
             health = _wait_for_process_json(
                 "http://127.0.0.1:8000/health",
                 api_key,
                 max(30, config.startup_timeout_seconds - 30),
-                self.process,
+                process,
             )
         except Exception as exc:
-            self.log_handle.flush()
+            log_handle.flush()
             log_tail = _redacted_log_tail(Path("/tmp/sglang.log"), api_key)
             failure = {
                 "schema_version": SCHEMA_VERSION,
@@ -412,7 +419,7 @@ class SGLangServer:
                 "error_type": type(exc).__name__,
                 "error": str(exc),
                 "transformers_commit": TRANSFORMERS_COMMIT,
-                "process_returncode": self.process.poll(),
+                "process_returncode": process.poll(),
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "launch_argv": ["<redacted>" if part == api_key else part for part in command],
                 "redacted_log_tail": log_tail,
@@ -441,6 +448,7 @@ class SGLangServer:
             "served_model_name": SERVED_MODEL_NAME,
             "sglang_image": config.sglang_image,
             "scaledown_window_seconds": SGLANG_SCALEDOWN_WINDOW_SECONDS,
+            "server_execution_timeout_seconds": SGLANG_SERVER_EXECUTION_TIMEOUT_SECONDS,
             "transformers_commit": TRANSFORMERS_COMMIT,
             "launch_argv": [
                 "<redacted>" if part == os.environ["SGLANG_API_KEY"] else part for part in command
@@ -455,16 +463,7 @@ class SGLangServer:
         )
         results_volume.commit()
 
-    @modal.exit()
-    def stop(self) -> None:
-        if getattr(self, "process", None) and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-        if getattr(self, "log_handle", None):
-            self.log_handle.close()
+    start_server()
 
 
 def _run_aider_stage(
@@ -966,6 +965,7 @@ def run_aider_benchmark(
         "sglang_active_min_containers": SGLANG_ACTIVE_MIN_CONTAINERS,
         "sglang_idle_min_containers": SGLANG_IDLE_MIN_CONTAINERS,
         "sglang_scaledown_window_seconds": SGLANG_SCALEDOWN_WINDOW_SECONDS,
+        "sglang_server_execution_timeout_seconds": SGLANG_SERVER_EXECUTION_TIMEOUT_SECONDS,
         "modal_sdk_pin": MODAL_SDK_PIN,
         "gpu_requested": config.gpu,
         "transformers_commit": TRANSFORMERS_COMMIT,
@@ -1131,7 +1131,9 @@ def main() -> None:
     preflight_remote_run.remote(RUNTIME)
     cache_receipt = preload_model.remote(RUNTIME)
     _hold_server_for_benchmark()
-    server_url = SGLangServer.get_url()
+    server_url = SGLangServer.get_web_url()
+    if not server_url:
+        raise ModalAiderError("Modal did not publish the SGLang web-server URL")
     try:
         result = run_aider_benchmark.remote(RUNTIME, server_url, cache_receipt, app.app_id)
     except Exception:

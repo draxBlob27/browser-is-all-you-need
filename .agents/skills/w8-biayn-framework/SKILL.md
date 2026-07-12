@@ -306,14 +306,20 @@ spend all 8192 tokens reasoning without editable content, while the pinned
 checkpoint has a 202752-position context. Admission-failure output may include
 only safe per-task counters; download committed failure artifacts locally
 before re-raising the remote exception.
-Define the Server with static `min_containers=0`, then dynamically hold exactly
-one replica with `min_containers=1` after CPU/Volume admission and model-cache
-preparation. Keep that active lease through all Aider work. On success or
-error, restore `min_containers=0` with a two-second drain before transfer;
-explicit stop plus control-plane verification remains mandatory. The
-1200-second scaledown window is a fallback and stays identity-bound. The active
-lease is operational, so compatible artifacts created before it may resume
-without an identity mismatch.
+Pinned Modal SDK 1.5.2's `App.server` path silently inherits the underlying
+Function's 300-second execution timeout. Do not use it for this long-lived
+SGLang endpoint: it recycles the four-H100 container approximately every five
+minutes. Use `@app.function` plus `@modal.web_server` and set the explicit
+execution timeout to startup timeout plus the complete runner timeout plus 600
+seconds. Persist the derived value in plans and receipts. Keep static
+`min_containers=0`, then dynamically hold exactly one replica with
+`min_containers=1` after CPU/Volume admission and model-cache preparation.
+Keep that active lease through all Aider work. On success or error, restore
+`min_containers=0` with a two-second drain before transfer; explicit stop plus
+control-plane verification remains mandatory. The 1200-second scaledown window
+is an identity-bound fallback. The explicit lifetime and active lease are
+operational, so compatible earlier artifacts may resume without an identity
+mismatch.
 Modal SDK 1.5.2 Volume entries expose an `IntEnum`; never classify them through
 `str(entry.type)`. Download only `FileEntryType.FILE`, skip every non-regular
 entry, and retain strict byte reconciliation. Validate the full entry list
