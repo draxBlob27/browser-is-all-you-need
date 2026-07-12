@@ -335,6 +335,7 @@ class ModalMultiSweConfig:
 
     def redacted_mapping(self) -> dict[str, Any]:
         payload = asdict(self)
+        payload["smoke_task_ids"] = list(self.smoke_task_ids)
         for name in ("modal_token_id", "modal_token_secret", "hf_token"):
             payload[name] = "<redacted>" if payload[name] else ""
         payload.update(

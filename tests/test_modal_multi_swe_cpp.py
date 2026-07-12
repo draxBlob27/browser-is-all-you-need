@@ -175,6 +175,22 @@ def test_plan_to_paid_acknowledgement_is_not_identity(tmp_path: Path) -> None:
     prepare_local_plan(cfg, repo_root=tmp_path)
 
 
+def test_resume_identity_survives_json_round_trip(tmp_path: Path) -> None:
+    original = ModalMultiSweConfig.from_env(valid_env(), repo_root=ROOT)
+    serialized = json.loads(json.dumps(original.redacted_mapping()))
+    assert serialized == original.redacted_mapping()
+    assert serialized["smoke_task_ids"] == list(SMOKE_TASK_IDS)
+
+    prior = tmp_path / "config.redacted.json"
+    prior.write_text(json.dumps(serialized), encoding="utf-8")
+    resumed = ModalMultiSweConfig.from_env(
+        valid_env(W8_MODAL_MULTI_SWE_RESUME="1"),
+        repo_root=ROOT,
+    )
+
+    modal_contract.assert_resume_compatible(resumed, prior)
+
+
 def test_request_is_secret_free_and_uses_one_prompt() -> None:
     cfg = ModalMultiSweConfig.from_env(valid_env(), repo_root=ROOT)
     payload = model_request(cfg, "public issue prompt")
