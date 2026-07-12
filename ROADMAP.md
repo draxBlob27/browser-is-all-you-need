@@ -388,6 +388,10 @@ The eight sampling-smoke trajectories must all use the fixed
 Independent full runs require the 14,400-second bound observed necessary after a
 roughly 70-minute sampling smoke; do not resume a 7,200-second identity with a
 changed timeout.
+Treat Aider's misleading `num_exhausted_context_windows` counter as an
+output-limit model diagnostic: a length-finished response can still apply an
+edit and pass tests. It must not independently turn complete non-exception rows
+with C++ test invocations into an infrastructure failure.
 
 ## Optional Side Benchmark: Multi-SWE C++ Base Eval
 

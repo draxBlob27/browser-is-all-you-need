@@ -507,6 +507,11 @@ legacy smoke subsets are diagnostic-only and cannot be resumed as evidence.
 Because the paid smoke consumed about 70 minutes, independent full runs require
 `W8_MODAL_AIDER_MAX_RUN_SECONDS=14400`; changing the old 7200-second identity
 requires a fresh run ID.
+Aider's `num_exhausted_context_windows` field records provider
+`finish_reason=length` output-limit events, not proof of an input-context or
+infrastructure failure. Preserve it as a diagnostic, but never reject an
+otherwise complete non-exception row with a test invocation solely because the
+counter is nonzero.
 
 ## Moonlight Multi-SWE C++ Base Eval
 

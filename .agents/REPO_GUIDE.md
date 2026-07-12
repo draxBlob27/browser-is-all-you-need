@@ -306,6 +306,10 @@ with Aider's comma-separated keyword filter. Store corrected evidence under
 but never reuse them on resume.
 Independent full requires `W8_MODAL_AIDER_MAX_RUN_SECONDS=14400`; a prior
 7200-second run must get a fresh ID because timeout remains immutable identity.
+Aider's `num_exhausted_context_windows` field counts provider
+`finish_reason=length` output-limit events. Keep it diagnostic; never reject
+otherwise complete non-exception rows with C++ test invocations solely because
+that counter is nonzero.
 
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned

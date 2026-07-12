@@ -756,7 +756,6 @@ def validate_aider_results(
     *,
     expected_tasks: int,
     require_chat_histories: bool = True,
-    reject_all_exhausted: bool = True,
 ) -> AiderResultAdmission:
     root = Path(result_dir)
     paths = sorted(root.glob("cpp/exercises/practice/*/.aider.results.json"))
@@ -796,8 +795,6 @@ def validate_aider_results(
         )
     if test_invocations == 0:
         raise ModalAiderError("Aider completed no C++ test invocation")
-    if reject_all_exhausted and exhausted >= test_invocations:
-        raise ModalAiderError("all Aider attempts exhausted their context windows")
     return AiderResultAdmission(
         result_dir=str(root),
         expected_tasks=expected_tasks,
@@ -857,6 +854,11 @@ def summarize_aider_result_diagnostics(root: str | Path) -> list[dict[str, Any]]
                 "task": path.parent.name,
                 "exception": bool(payload.get("exception")),
                 "test_invocations": len(outcomes) if isinstance(outcomes, list) else 0,
+                "passing": (
+                    any(outcome is True for outcome in outcomes)
+                    if isinstance(outcomes, list)
+                    else False
+                ),
                 "exhausted_context_windows": counter(payload, "num_exhausted_context_windows"),
                 "prompt_tokens": counter(payload, "prompt_tokens"),
                 "completion_tokens": counter(payload, "completion_tokens"),
@@ -917,7 +919,6 @@ def validate_independent_aider_results(
     admission = validate_aider_results(
         result_dir,
         expected_tasks=expected_tasks,
-        reject_all_exhausted=False,
     )
     if expected_task_ids is not None:
         paths = sorted(Path(result_dir).glob("cpp/exercises/practice/*/.aider.results.json"))

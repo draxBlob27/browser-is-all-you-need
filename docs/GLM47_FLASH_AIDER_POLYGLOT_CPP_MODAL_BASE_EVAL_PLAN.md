@@ -919,7 +919,10 @@ Checklist:
       exceptions.
 - [ ] Require at least one completed model response and one completed C++ test
       invocation.
-- [ ] Reject an all-truncated smoke.
+- [ ] Record Aider's `num_exhausted_context_windows` counter as the
+      provider-`finish_reason=length` model diagnostic it actually represents;
+      never reject otherwise complete non-exception rows solely because it is
+      nonzero.
 - [ ] Do not require either task to pass; wrong code is a valid model outcome.
 - [ ] Commit smoke artifacts before full evaluation.
 

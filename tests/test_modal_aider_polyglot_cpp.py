@@ -681,6 +681,7 @@ def test_smoke_admission_allows_wrong_code_but_rejects_exception_rows(tmp_path: 
             "task": "all-your-base",
             "exception": False,
             "test_invocations": 2,
+            "passing": True,
             "exhausted_context_windows": 0,
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -689,6 +690,7 @@ def test_smoke_admission_allows_wrong_code_but_rejects_exception_rows(tmp_path: 
             "task": "bank-account",
             "exception": False,
             "test_invocations": 2,
+            "passing": True,
             "exhausted_context_windows": 0,
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -708,18 +710,35 @@ def test_smoke_admission_allows_wrong_code_but_rejects_exception_rows(tmp_path: 
         }
     )
     write_json(exhausted_path, payload)
-    with pytest.raises(ModalAiderError, match="exhausted"):
-        validate_aider_results(exhausted, expected_tasks=1)
+    admitted_exhausted = validate_aider_results(exhausted, expected_tasks=1)
+    assert admitted_exhausted.exhausted_context_windows == 1
     assert summarize_aider_result_diagnostics(exhausted) == [
         {
             "task": "xorcism",
             "exception": False,
             "test_invocations": 1,
+            "passing": False,
             "exhausted_context_windows": 1,
             "prompt_tokens": 321,
             "completion_tokens": 8192,
         }
     ]
+
+    exhausted_with_pass = tmp_path / "exhausted-with-pass"
+    write_result(exhausted_with_pass, "binary-search-tree")
+    write_result(exhausted_with_pass, "grade-school")
+    for task, passed in (("binary-search-tree", False), ("grade-school", True)):
+        path = exhausted_with_pass / f"cpp/exercises/practice/{task}/.aider.results.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.update(
+            {
+                "tests_outcomes": [passed],
+                "num_exhausted_context_windows": 1,
+            }
+        )
+        write_json(path, payload)
+    admitted = validate_aider_results(exhausted_with_pass, expected_tasks=2)
+    assert admitted.exhausted_context_windows == 2
 
 
 def test_artifact_manifest_paths_are_relative_and_hashed(tmp_path: Path) -> None:

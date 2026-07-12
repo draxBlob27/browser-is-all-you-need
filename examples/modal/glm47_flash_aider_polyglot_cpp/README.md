@@ -145,8 +145,13 @@ Smoke admission requires:
 
 The generated code may fail to compile or pass tests. That is a model outcome,
 not an infrastructure failure. Transport/auth failures, exception-only rows,
-missing compiler/test dependencies, all-truncated output, or incomplete
-artifacts block the run.
+missing compiler/test dependencies, missing test invocations, or incomplete
+artifacts block the run. Aider's misleading
+`num_exhausted_context_windows` field counts provider
+`finish_reason=length` output-limit events. Preserve the counter as a model
+diagnostic, but do not reject complete non-exception rows with C++ test
+invocations because of it; length-finished responses can still apply valid
+edits and pass.
 When official rows contain exceptions, the runner commits and prints
 `<stage>/exception.summary.json` with bearer-redacted task names, exception
 types, and final traceback lines. Full tracebacks remain in the official result
