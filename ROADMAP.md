@@ -576,4 +576,9 @@ map to 50 complete records, the strict summary recomputes with a passing oracle
 proof, artifacts reconcile byte-for-byte, every Sandbox terminated/detached,
 and the App receipt says modal_app_stopped: true. Label the result repo-owned,
 correctness-only, and modal-sandbox; never call it an official leaderboard
-score or report PIE speed metrics.
+score or report PIE speed metrics. Stage the two simdjson dependency trees
+beneath one checksum-pinned read-only parent mount; Modal SDK 1.5.2 forbids
+mounting the same Volume at two Sandbox paths. An interrupted oracle-only run
+may migrate source commit/file hashes for an infrastructure fix and reuse only
+records with exact oracle cache keys. Any persisted model-cache, SGLang,
+admission, smoke, full, or final artifact makes source identity strict again.

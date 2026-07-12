@@ -94,9 +94,11 @@ lifetime and the test exec has a 1,200-second ceiling.
 The candidate is written to /home/fix.patch through Modal's filesystem API.
 The shared official-image shell verifies the base ref and trusted test.patch,
 applies the candidate, runs the prepared build/tests, and requires positive
-CTest discovery. The simdjson dependency subpaths are checksum-pinned,
-read-only data-Volume mounts. Every Sandbox is terminated with wait and
-detached in finally.
+CTest discovery. The simdjson dependency trees are checksum-pinned and staged
+beneath one dedicated parent that is mounted once, read-only, from the data
+Volume. This single-parent layout is required because Modal SDK 1.5.2 rejects
+mounting the same Volume object at multiple Sandbox paths. Every Sandbox is
+terminated with wait and detached in finally.
 
 Strict model output is exactly one fenced diff and nothing else. Reasoning is
 kept separate by SGLang; only message.content enters the parser. Recovery is
@@ -114,9 +116,15 @@ summaries, receipt, and a SHA-256 artifact manifest. Modal SDK 1.5.2 downloads
 only exact FileEntryType.FILE entries, validates all paths, uses 16 concurrent
 reads, and reconciles bytes.
 
-Resume is only for an incomplete exact-identity run. Passing oracle records,
-saved responses, and grader records are reusable only by their exact cache
-keys. Completed runs are immutable. A fresh run ID is normal.
+Resume is normally only for an incomplete exact-identity run. One narrow
+recovery exception exists for a run that has only oracle artifacts and has not
+persisted any model-cache, SGLang, admission, smoke, full, or final receipt:
+source commit and file hashes may migrate so an infrastructure fix can continue
+the same paid oracle run. The migration is audit-recorded, and passing oracle
+records still reuse only by their exact cache keys. Once model/server work has
+begun, source identity is strict again. Saved responses and grader records
+always require their exact identities and cache keys. Completed runs are
+immutable. A fresh run ID remains the normal path.
 
 ## Teardown and failure recovery
 

@@ -72,6 +72,9 @@ SOURCE_IDENTITY_PATHS = (
     "examples/modal/glm47_flash_multi_swe_cpp/modal_app.py",
     "examples/modal/glm47_flash_multi_swe_cpp/run.sh",
 )
+SIMDJSON_MODAL_MOUNT_LAYOUT = "single-parent-v1"
+SIMDJSON_MODAL_MOUNT_RELATIVE = "modal-sandbox-dependencies"
+ORACLE_SOURCE_MIGRATION_FIELDS = frozenset({"source_commit", "source_file_hashes"})
 
 
 class ModalMultiSweError(RuntimeError):
@@ -647,33 +650,30 @@ def oracle_cache_key(
     config: ModalMultiSweConfig, task: Mapping[str, Any], lock_row: Mapping[str, Any]
 ) -> str:
     harness = REPO_HARNESSES[(str(task["org"]).lower(), str(task["repo"]).lower())]
-    return sha256_json(
-        {
-            "backend": "modal-sandbox-v1",
-            "protocol_version": ORACLE_PROTOCOL_VERSION,
-            "task_id": task["instance_id"],
-            "base_ref": task.get("base_ref"),
-            "fix_patch_sha256": hashlib.sha256(
-                str(task.get("fix_patch") or "").encode()
-            ).hexdigest(),
-            "test_patch_sha256": hashlib.sha256(
-                str(task.get("test_patch") or "").encode()
-            ).hexdigest(),
-            "image": lock_row["digest"],
-            "platform": "linux/amd64",
-            "repo_harness_revision": task.get("repo_harness_revision"),
-            "offline_dependency_bundle_sha256": task.get("offline_dependency_bundle_sha256"),
-            "script_sha256": hashlib.sha256(
-                official_instance_script(
-                    dict(task), harness, timeout_s=config.test_timeout_seconds
-                ).encode()
-            ).hexdigest(),
-            "cpu": config.sandbox_cpu,
-            "memory_mib": config.sandbox_memory_mib,
-            "timeout_seconds": config.test_timeout_seconds,
-            "network": "blocked",
-        }
-    )
+    identity = {
+        "backend": "modal-sandbox-v1",
+        "protocol_version": ORACLE_PROTOCOL_VERSION,
+        "task_id": task["instance_id"],
+        "base_ref": task.get("base_ref"),
+        "fix_patch_sha256": hashlib.sha256(str(task.get("fix_patch") or "").encode()).hexdigest(),
+        "test_patch_sha256": hashlib.sha256(str(task.get("test_patch") or "").encode()).hexdigest(),
+        "image": lock_row["digest"],
+        "platform": "linux/amd64",
+        "repo_harness_revision": task.get("repo_harness_revision"),
+        "offline_dependency_bundle_sha256": task.get("offline_dependency_bundle_sha256"),
+        "script_sha256": hashlib.sha256(
+            official_instance_script(
+                dict(task), harness, timeout_s=config.test_timeout_seconds
+            ).encode()
+        ).hexdigest(),
+        "cpu": config.sandbox_cpu,
+        "memory_mib": config.sandbox_memory_mib,
+        "timeout_seconds": config.test_timeout_seconds,
+        "network": "blocked",
+    }
+    if task.get("offline_dependency_bundle_sha256"):
+        identity["offline_dependency_mount_layout"] = SIMDJSON_MODAL_MOUNT_LAYOUT
+    return sha256_json(identity)
 
 
 def model_request_sha256(request: Mapping[str, Any]) -> str:
@@ -742,11 +742,17 @@ def prepare_local_plan(config: ModalMultiSweConfig, *, repo_root: str | Path = "
     root = config.local_run_path(repo_root)
     if root.exists() and any(root.iterdir()):
         allowed = {"plan.json", "config.redacted.json"}
-        if {item.name for item in root.iterdir()} - allowed and not config.resume:
+        unexpected = {item.name for item in root.iterdir()} - allowed
+        if unexpected and not config.resume:
             raise ModalMultiSweError(f"local run directory is nonempty: {root}")
         prior = root / "config.redacted.json"
         if prior.is_file():
-            assert_resume_compatible(config, prior, allow_plan=True)
+            assert_resume_compatible(
+                config,
+                prior,
+                allow_plan=True,
+                allow_oracle_source_migration=config.resume and not unexpected,
+            )
     root.mkdir(parents=True, exist_ok=True)
     plan = render_plan(config, lock)
     ensure_secret_free(plan, [config.modal_token_id, config.modal_token_secret, config.hf_token])
@@ -755,9 +761,9 @@ def prepare_local_plan(config: ModalMultiSweConfig, *, repo_root: str | Path = "
     return root
 
 
-def assert_resume_compatible(
-    config: ModalMultiSweConfig, prior_config_path: str | Path, *, allow_plan: bool = False
-) -> None:
+def resume_identity_mismatches(
+    config: ModalMultiSweConfig, prior_config_path: str | Path
+) -> list[str]:
     path = Path(prior_config_path)
     if not path.is_file():
         raise ModalMultiSweError("resume requires prior config.redacted.json")
@@ -772,12 +778,27 @@ def assert_resume_compatible(
         "app_name",
         "remote_run_path",
     }
-    mismatches = [
+    return [
         key
         for key in sorted(set(prior) | set(current))
         if key not in excluded and prior.get(key) != current.get(key)
     ]
-    if mismatches:
+
+
+def assert_resume_compatible(
+    config: ModalMultiSweConfig,
+    prior_config_path: str | Path,
+    *,
+    allow_plan: bool = False,
+    allow_oracle_source_migration: bool = False,
+) -> None:
+    mismatches = resume_identity_mismatches(config, prior_config_path)
+    source_only_migration = (
+        allow_oracle_source_migration
+        and bool(mismatches)
+        and set(mismatches) <= ORACLE_SOURCE_MIGRATION_FIELDS
+    )
+    if mismatches and not source_only_migration:
         raise ModalMultiSweError(f"resume identity mismatch: {mismatches}")
     if not config.resume and not allow_plan:
         raise ModalMultiSweError("existing run requires W8_MODAL_MULTI_SWE_RESUME=1")

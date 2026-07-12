@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -28,7 +29,6 @@ if IS_LOCAL:
 from w8_biayn.integrations.slime_multi_swe_cpp import (  # noqa: E402
     REPO_HARNESSES,
     ORACLE_PROTOCOL_VERSION,
-    SIMDJSON_DEPENDENCY_CACHE_RELATIVE,
     SIMDJSON_OFFLINE_INSTANCE_IDS,
     SCHEMA_VERSION as MULTI_SWE_SCHEMA_VERSION,
     build_prompt,
@@ -59,8 +59,11 @@ from w8_biayn.modal_multi_swe_cpp import (  # noqa: E402
     DATASET_REPO,
     ModalMultiSweConfig,
     ModalMultiSweError,
+    SIMDJSON_MODAL_MOUNT_LAYOUT,
+    SIMDJSON_MODAL_MOUNT_RELATIVE,
     assert_resume_compatible,
     build_artifact_manifest,
+    resume_identity_mismatches,
     response_metadata,
     utc_now,
     validate_image_lock,
@@ -144,7 +147,25 @@ def preflight_remote_run(payload: dict[str, Any]) -> dict[str, Any]:
         raise ModalMultiSweError("remote run id already has artifacts")
     if not present:
         return {}
-    assert_resume_compatible(config, root / "config.redacted.json")
+    post_oracle_paths = (
+        "model-cache.receipt.json",
+        "server.failure.json",
+        "server.receipt.json",
+        "server.runtime.json",
+        "admission.failure.json",
+        "admission.response.json",
+        "run_receipt.json",
+        "smoke",
+        "full",
+    )
+    oracle_only = not any((root / relative).exists() for relative in post_oracle_paths)
+    prior_config = root / "config.redacted.json"
+    mismatches = resume_identity_mismatches(config, prior_config)
+    assert_resume_compatible(
+        config,
+        prior_config,
+        allow_oracle_source_migration=oracle_only,
+    )
     receipt = root / "run_receipt.json"
     if receipt.is_file() and json.loads(receipt.read_text()).get("status") in {
         "complete",
@@ -152,6 +173,17 @@ def preflight_remote_run(payload: dict[str, Any]) -> dict[str, Any]:
     }:
         raise ModalMultiSweError("completed runs are immutable")
     state: dict[str, Any] = {"oracle_records": {}, "smoke": {}, "full": {}}
+    if mismatches:
+        prior = json.loads(prior_config.read_text(encoding="utf-8"))
+        state["oracle_source_migration"] = {
+            "schema_version": 1,
+            "kind": "oracle-only-source-migration",
+            "mismatched_fields": mismatches,
+            "prior_source_commit": prior.get("source_commit"),
+            "current_source_commit": config.source_commit,
+            "exact_oracle_cache_keys_required": True,
+            "migrated_at_utc": utc_now(),
+        }
     dataset_receipt = root / "dataset.receipt.json"
     if dataset_receipt.is_file():
         state["dataset_receipt"] = json.loads(dataset_receipt.read_text())
@@ -250,6 +282,31 @@ def prepare_dataset(payload: dict[str, Any], lock: dict[str, Any]) -> dict[str, 
     offline_dependencies = (
         json.loads(offline_path.read_text(encoding="utf-8")) if offline_path.is_file() else None
     )
+    modal_sandbox_dependencies = None
+    if offline_dependencies is not None:
+        cache_root = prepared / str(offline_dependencies["cache_root"])
+        mount_root = prepared / SIMDJSON_MODAL_MOUNT_RELATIVE
+        marker = mount_root / ".w8-biayn-bundle-sha256"
+        bundle_sha256 = str(offline_dependencies["simdjson_bundle_sha256"])
+        mount_valid = (
+            marker.is_file()
+            and marker.read_text(encoding="utf-8").strip() == bundle_sha256
+            and (mount_root / "cxxopts").is_dir()
+            and (mount_root / ".cache" / "simdjson-data").is_dir()
+        )
+        if not mount_valid:
+            if mount_root.exists():
+                shutil.rmtree(mount_root)
+            shutil.copytree(cache_root / "cxxopts", mount_root / "cxxopts")
+            shutil.copytree(cache_root / "simdjson-data", mount_root / ".cache" / "simdjson-data")
+            marker.write_text(bundle_sha256 + "\n", encoding="utf-8")
+        modal_sandbox_dependencies = {
+            "layout": SIMDJSON_MODAL_MOUNT_LAYOUT,
+            "sub_path": SIMDJSON_MODAL_MOUNT_RELATIVE,
+            "mount_path": "/home/simdjson/dependencies",
+            "simdjson_bundle_sha256": bundle_sha256,
+            "read_only": True,
+        }
     receipt = {
         "status": "complete",
         "dataset_repo": DATASET_REPO,
@@ -266,6 +323,7 @@ def prepare_dataset(payload: dict[str, Any], lock: dict[str, Any]) -> dict[str, 
         "image_lock_sha256": lock["sha256"],
         "completed_at_utc": utc_now(),
         "offline_dependencies": offline_dependencies,
+        "modal_sandbox_dependencies": modal_sandbox_dependencies,
     }
     write_json(prepared / "dataset.receipt.json", receipt)
     data_volume.commit()
@@ -419,19 +477,11 @@ class SGLangServer:
 def _sandbox_volumes(task: dict[str, Any]) -> dict[str, Any]:
     if task["instance_id"] not in SIMDJSON_OFFLINE_INSTANCE_IDS:
         return {}
-    prefix = (
-        "revisions/"
-        + CONFIG.dataset_revision
-        + "/prepared/"
-        + str(SIMDJSON_DEPENDENCY_CACHE_RELATIVE)
-    )
+    prefix = "revisions/" + CONFIG.dataset_revision + "/prepared/" + SIMDJSON_MODAL_MOUNT_RELATIVE
     return {
-        "/home/simdjson/dependencies/cxxopts": data_volume.with_mount_options(
-            read_only=True, sub_path=prefix + "/cxxopts"
-        ),
-        "/home/simdjson/dependencies/.cache/simdjson-data": data_volume.with_mount_options(
-            read_only=True, sub_path=prefix + "/simdjson-data"
-        ),
+        "/home/simdjson/dependencies": data_volume.with_mount_options(
+            read_only=True, sub_path=prefix
+        )
     }
 
 

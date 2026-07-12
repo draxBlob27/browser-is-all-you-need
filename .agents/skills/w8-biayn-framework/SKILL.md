@@ -648,6 +648,13 @@ generation completes before full grading; every Sandbox terminates/detaches;
 regular-file-only bounded artifact download; explicit App stop and
 control-plane verification before any score.
 
+Under Modal SDK 1.5.2, stage the affected simdjson dependency trees beneath one
+checksum-pinned parent and mount that one data-Volume subpath read-only; the SDK
+rejects mounting the same Volume object at multiple Sandbox paths. Permit
+source commit/file-hash migration only for incomplete oracle-only runs with no
+model/server artifacts, persist the migration receipt, and reuse passing oracle
+records only by exact cache key. All later resume identity stays strict.
+
 The source/no-spend/offline-test path is implemented, while paid validation is
 pending. Require the paid ladder and a complete stopped-App receipt before
 reporting a model result.

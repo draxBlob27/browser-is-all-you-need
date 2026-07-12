@@ -191,6 +191,72 @@ def test_resume_identity_survives_json_round_trip(tmp_path: Path) -> None:
     modal_contract.assert_resume_compatible(resumed, prior)
 
 
+def test_oracle_only_resume_allows_only_source_identity_migration(tmp_path: Path) -> None:
+    resumed = config(tmp_path, W8_MODAL_MULTI_SWE_RESUME="1")
+    prior_mapping = resumed.redacted_mapping()
+    prior_mapping["source_commit"] = "0" * 40
+    prior_mapping["source_file_hashes"] = {"old/source.py": "1" * 64}
+    prior = tmp_path / "prior-config.json"
+    prior.write_text(json.dumps(prior_mapping), encoding="utf-8")
+
+    with pytest.raises(ModalMultiSweError, match="source_commit"):
+        modal_contract.assert_resume_compatible(resumed, prior)
+    modal_contract.assert_resume_compatible(
+        resumed,
+        prior,
+        allow_oracle_source_migration=True,
+    )
+
+    prior_mapping["model_revision"] = "c" * 40
+    prior.write_text(json.dumps(prior_mapping), encoding="utf-8")
+    with pytest.raises(ModalMultiSweError, match="model_revision"):
+        modal_contract.assert_resume_compatible(
+            resumed,
+            prior,
+            allow_oracle_source_migration=True,
+        )
+
+
+def test_local_oracle_only_plan_accepts_source_migration_without_other_artifacts(
+    tmp_path: Path,
+) -> None:
+    initial = config(tmp_path)
+    root = prepare_local_plan(initial, repo_root=tmp_path)
+    prior = json.loads((root / "config.redacted.json").read_text(encoding="utf-8"))
+    prior["source_commit"] = "0" * 40
+    prior["source_file_hashes"] = {"old/source.py": "1" * 64}
+    (root / "config.redacted.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    resumed = config(tmp_path, W8_MODAL_MULTI_SWE_RESUME="1")
+    assert prepare_local_plan(resumed, repo_root=tmp_path) == root
+
+    (root / "config.redacted.json").write_text(json.dumps(prior), encoding="utf-8")
+    (root / "downloaded-artifact.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ModalMultiSweError, match="source_commit"):
+        prepare_local_plan(resumed, repo_root=tmp_path)
+
+
+def test_simdjson_mount_layout_is_bound_only_to_affected_oracle_keys(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = config(tmp_path)
+    row = task()
+    lock_row = {"digest": row["sandbox_image_digest"]}
+    identities: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        modal_contract,
+        "sha256_json",
+        lambda value: identities.append(value) or "cache-key",
+    )
+
+    modal_contract.oracle_cache_key(cfg, row, lock_row)
+    assert "offline_dependency_mount_layout" not in identities[-1]
+
+    row["offline_dependency_bundle_sha256"] = "d" * 64
+    modal_contract.oracle_cache_key(cfg, row, lock_row)
+    assert identities[-1]["offline_dependency_mount_layout"] == "single-parent-v1"
+
+
 def test_request_is_secret_free_and_uses_one_prompt() -> None:
     cfg = ModalMultiSweConfig.from_env(valid_env(), repo_root=ROOT)
     payload = model_request(cfg, "public issue prompt")
@@ -339,6 +405,8 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     assert "server.failure.json" in app
     assert "admission.failure.json" in app
     assert "resume_state=resume_state" in app
+    assert "allow_oracle_source_migration=oracle_only" in app
+    assert "model-cache.receipt.json" in app
     assert "generate-lock" in pure
     assert "docker" not in run
     assert "min_containers=0" in app and "max_containers=1" in app
@@ -350,6 +418,19 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     assert "modal deploy" not in run
     assert os.access(RUN_SH, os.X_OK)
     subprocess.run(["bash", "-n", str(RUN_SH)], check=True)
+
+
+def test_modal_152_simdjson_uses_one_read_only_parent_volume_mount() -> None:
+    app = MODAL_APP.read_text(encoding="utf-8")
+    mount_section = app.split("def _sandbox_volumes", 1)[1].split("def grade_patch", 1)[0]
+
+    assert mount_section.count("data_volume.with_mount_options") == 1
+    assert '"/home/simdjson/dependencies"' in mount_section
+    assert "read_only=True, sub_path=prefix" in mount_section
+    assert '"/home/simdjson/dependencies/cxxopts"' not in mount_section
+    assert '"/home/simdjson/dependencies/.cache/simdjson-data"' not in mount_section
+    assert 'mount_root / "cxxopts"' in app
+    assert 'mount_root / ".cache" / "simdjson-data"' in app
 
 
 def test_runbook_and_repo_docs_name_pending_paid_validation() -> None:
@@ -455,13 +536,20 @@ def test_oracle_resume_reuses_exact_passes_and_checkpoints_each_task(
         dataset_receipt={"prompts": prompts},
         grade=lambda *_args: pytest.fail("exact passing oracle must be reused"),
         persist=writes.append,
-        resume_state={"oracle_records": prior},
+        resume_state={
+            "oracle_records": prior,
+            "oracle_source_migration": {
+                "kind": "oracle-only-source-migration",
+                "exact_oracle_cache_keys_required": True,
+            },
+        },
     )
 
     assert admitted["oracle_summary"]["all_passed"] is True
     checkpoints = [write for write in writes if "data/oracle.summary.json" in write]
     assert len(checkpoints) == EXPECTED_CPP_TASKS + 1
     assert checkpoints[-1]["data/oracle.summary.json"]["record_count"] == EXPECTED_CPP_TASKS
+    assert writes[0]["data/oracle-source-migration.json"]["exact_oracle_cache_keys_required"]
 
 
 def test_stage_resume_reuses_matching_response_and_grader_record(

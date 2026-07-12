@@ -1080,4 +1080,8 @@ digest-locked, network-blocked Modal Sandboxes before model loading. Full is
 also gated by a real two-task smoke. Source, immutable image lock, runbook, and
 offline tests are implemented; paid Modal validation is pending. No model score
 may be reported before a complete 50-task local artifact reconciliation and
-control-plane verified stopped-App receipt.
+control-plane verified stopped-App receipt. Affected simdjson dependencies use
+one checksum-pinned read-only parent mount because Modal SDK 1.5.2 rejects
+mounting one Volume at multiple paths. Incomplete oracle-only runs may migrate
+source identity for an infrastructure fix, but reuse remains exact-cache-key
+only and any persisted model/server artifact restores strict source identity.

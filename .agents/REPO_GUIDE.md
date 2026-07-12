@@ -576,8 +576,12 @@ and official leaderboard claims. It fixes the dataset revision and reviewed
 uses one secret-free network-blocked Modal Sandbox per patch, and releases the
 one strict H100!:4 SGLang replica before artifact transfer. Only
 message.content enters the existing strict parser. Sandboxes must receive no
-credentials/model/results Volumes, must mount only affected simdjson dependency
-subpaths read-only, and must terminate with wait plus detach in finally.
+credentials/model/results Volumes, must stage affected simdjson dependencies
+under one checksum-pinned parent and mount that data-Volume subpath once
+read-only, and must terminate with wait plus detach in finally. Modal SDK 1.5.2
+rejects mounting the same Volume object at multiple Sandbox paths. Source-only
+resume migration is allowed solely before any model/server artifact exists;
+passing oracle reuse remains exact-cache-key only and is audit-recorded.
 
 Source and offline tests are implemented; paid validation remains pending.
 Never print or document a score until 50 responses/records, passing oracle

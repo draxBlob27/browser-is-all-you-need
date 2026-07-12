@@ -582,8 +582,10 @@ For every oracle or model patch:
    by bounded orchestration overhead.
 6. Do not attach any Secret.
 7. Do not attach model or results Volumes.
-8. For affected simdjson tasks only, attach the two exact checksum-pinned data
-   Volume subpaths read-only at the current expected dependency locations.
+8. For affected simdjson tasks only, stage the two exact checksum-pinned
+   dependency trees beneath one dedicated parent and attach that single data
+   Volume subpath read-only at /home/simdjson/dependencies. Modal SDK 1.5.2
+   rejects mounting the same Volume object at multiple Sandbox paths.
 9. Write the candidate patch to `/home/fix.patch` through the Sandbox
    filesystem API.
 10. Execute the shared official-instance shell script with an exec timeout.
@@ -840,8 +842,9 @@ committed.
 
 ## Resume And Idempotency
 
-Fresh run IDs are the normal path. `W8_MODAL_MULTI_SWE_RESUME=1` is only for an
-incomplete exact-identity run.
+Fresh run IDs are the normal path. W8_MODAL_MULTI_SWE_RESUME=1 is normally only
+for an incomplete exact-identity run. An oracle-only infrastructure recovery
+may migrate source commit/file hashes under the narrow rules below.
 
 Identity comparison must cover:
 
@@ -860,6 +863,9 @@ Identity comparison must cover:
 Resume rules:
 
 - completed runs are immutable and cannot resume;
+- source commit/file hashes may migrate only when no model-cache, SGLang,
+  admission, smoke, full, or final receipt exists; persist an
+  oracle-source-migration.json audit record;
 - successful oracle records reuse only by exact oracle cache key;
 - saved model responses reuse only by exact request hash and model identity;
 - complete model-outcome grader records reuse only by response hash and grader
@@ -877,7 +883,8 @@ Resume rules:
 - The random SGLang bearer reaches the server and request orchestrator only.
 - Grading Sandboxes receive no secrets and no model/results Volume.
 - Grading Sandboxes have outbound networking fully blocked.
-- Only pinned simdjson dependency subpaths are mounted, read-only, when needed.
+- Only the pinned simdjson dependency parent subpath is mounted once,
+  read-only, when needed.
 - The model request contains public issue context only, never oracle fields.
 - Generated patches are untrusted and run only in fresh isolated Sandboxes.
 - Server raw logs remain ephemeral because argv may contain the bearer.
@@ -971,7 +978,8 @@ Use a fake Sandbox object to assert:
 - summary recomputes from per-task records and rejects mismatches;
 - recovered diagnostics never alter strict metrics;
 - no PIE speed metrics appear;
-- resume rejects every identity mismatch listed above;
+- resume rejects every identity mismatch listed above except the audited
+  source-only migration of an incomplete oracle-only run;
 - completed run cannot resume;
 - artifact manifest paths and hashes are safe;
 - download accepts only exact `FileEntryType.FILE` and reconciles bytes;

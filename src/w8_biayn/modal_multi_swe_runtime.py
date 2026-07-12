@@ -93,20 +93,22 @@ def prepare_and_admit(
         ]
         if mismatches:
             raise ModalMultiSweError(f"resume dataset identity mismatch: {mismatches}")
-    persist(
-        {
-            "plan.json": render_plan(config, lock),
-            "config.redacted.json": config.redacted_mapping(),
-            "source.receipt.json": {
-                "source_commit": config.source_commit,
-                "source_dirty": config.source_dirty,
-                "source_file_hashes": config.source_file_hashes,
-            },
-            "dataset.receipt.json": dict(dataset_receipt),
-            "image-lock.json": dict(lock),
-            "image-lock.sha256": str(lock["sha256"]) + "\n",
-        }
-    )
+    identity_files = {
+        "plan.json": render_plan(config, lock),
+        "config.redacted.json": config.redacted_mapping(),
+        "source.receipt.json": {
+            "source_commit": config.source_commit,
+            "source_dirty": config.source_dirty,
+            "source_file_hashes": config.source_file_hashes,
+        },
+        "dataset.receipt.json": dict(dataset_receipt),
+        "image-lock.json": dict(lock),
+        "image-lock.sha256": str(lock["sha256"]) + "\n",
+    }
+    source_migration = resume_state.get("oracle_source_migration")
+    if isinstance(source_migration, dict):
+        identity_files["data/oracle-source-migration.json"] = source_migration
+    persist(identity_files)
     records = []
     data_files = {
         "data/sandbox-images.json": {
