@@ -1094,3 +1094,6 @@ endpoint/status/count/hash/key metadata, never HTTP response text. Source-only
 repair may continue a preparation or admission-failure run with an exact
 model-cache receipt, but successful admission or any benchmark-stage artifact
 restores strict identity.
+The GPU server image intentionally omits the dataset image-lock environment;
+remote module hydration tolerates that absence, while the local orchestrator
+still validates and requires the reviewed lock before any remote or paid work.

@@ -593,3 +593,6 @@ status/count/body-size/hash/JSON-key diagnostics, never HTTP body text. Permit
 source-only repair through preparation and admission failures—including an
 exact model-cache receipt—but block it after successful admission or any
 smoke/full/final artifact.
+Keep the dataset image lock control-plane-only: do not attach it to the GPU
+server image. Server module hydration must tolerate its absence, while local
+orchestration must require the reviewed lock before preflight or paid work.

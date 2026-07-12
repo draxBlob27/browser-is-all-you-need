@@ -669,6 +669,9 @@ diagnostics may retain endpoint/status/count/body-size/hash/truncation/JSON
 keys, never HTTP body text. Permit source-only migration through preparation
 and admission failures with exact oracle/model identities; block it after
 successful admission or any benchmark-stage artifact.
+Keep the dataset image lock out of the GPU server image. Modal Server module
+hydration must accept its absence, but local orchestration must require the
+reviewed lock before preflight, dataset/oracle, or paid work.
 
 The source/no-spend/offline-test path is implemented, while paid validation is
 pending. Require the paid ladder and a complete stopped-App receipt before

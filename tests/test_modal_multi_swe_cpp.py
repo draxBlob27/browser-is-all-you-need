@@ -594,6 +594,24 @@ def test_source_shape_enforces_sandbox_and_lifecycle_contract() -> None:
     subprocess.run(["bash", "-n", str(RUN_SH)], check=True)
 
 
+def test_server_import_does_not_require_control_only_image_lock() -> None:
+    app = MODAL_APP.read_text(encoding="utf-8")
+    bootstrap = app.split("if IS_LOCAL:\n    CONFIG", 1)[1].split("RUNTIME_JSON =", 1)[0]
+    image_build = app.split("pure_source =", 1)[1].split(
+        "else:\n    control_image", 1
+    )[0]
+    control_section, server_section = image_build.split("server_image =", 1)
+
+    assert 'os.environ.get("W8_MODAL_MULTI_SWE_IMAGE_LOCK")' in bootstrap
+    assert 'os.environ["W8_MODAL_MULTI_SWE_IMAGE_LOCK"]' not in bootstrap
+    assert '"W8_MODAL_MULTI_SWE_IMAGE_LOCK": LOCK_JSON' in control_section
+    assert "W8_MODAL_MULTI_SWE_IMAGE_LOCK" not in server_section
+    assert "lock = _require_image_lock(LOCK)" in app
+    assert app.index("lock = _require_image_lock(LOCK)") < app.index(
+        "resume_state = preflight_remote_run.remote(RUNTIME)"
+    )
+
+
 def test_modal_152_simdjson_uses_one_fresh_read_only_parent_volume_mount() -> None:
     app = MODAL_APP.read_text(encoding="utf-8")
     mount_section = app.split("def _sandbox_volumes", 1)[1].split("def grade_patch", 1)[0]

@@ -98,6 +98,12 @@ class AdmissionRequestError(ModalMultiSweError):
         self.diagnostics = diagnostics
 
 
+def _require_image_lock(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ModalMultiSweError("local benchmark orchestration requires the image lock")
+    return value
+
+
 if IS_LOCAL:
     CONFIG = ModalMultiSweConfig.from_env(repo_root=ROOT)
     RUNTIME = CONFIG.runtime_mapping()
@@ -105,7 +111,8 @@ if IS_LOCAL:
 else:
     RUNTIME = json.loads(os.environ["W8_MODAL_MULTI_SWE_RUNTIME_CONFIG"])
     CONFIG = _config(RUNTIME)
-    LOCK = json.loads(os.environ["W8_MODAL_MULTI_SWE_IMAGE_LOCK"])
+    lock_payload = os.environ.get("W8_MODAL_MULTI_SWE_IMAGE_LOCK")
+    LOCK = json.loads(lock_payload) if lock_payload is not None else None
 RUNTIME_JSON = json.dumps(RUNTIME, sort_keys=True)
 LOCK_JSON = json.dumps(LOCK, sort_keys=True)
 SGLANG_API_KEY = secrets.token_urlsafe(48) if IS_LOCAL else ""
@@ -684,16 +691,17 @@ def download_run() -> Path:
 def main() -> None:
     """Enforce oracle-before-model ordering, smoke, full, download, and release."""
 
+    lock = _require_image_lock(LOCK)
     resume_state = preflight_remote_run.remote(RUNTIME)
     # Dataset staging and all-task oracle execution are intentionally delegated
     # to the checked-in production helpers below before this call is allowed to
     # allocate model weights or the SGLang Server.
     from w8_biayn.modal_multi_swe_runtime import prepare_and_admit, evaluate
 
-    staged = prepare_dataset.remote(RUNTIME, LOCK)
+    staged = prepare_dataset.remote(RUNTIME, lock)
     admitted = prepare_and_admit(
         config=CONFIG,
-        lock=LOCK,
+        lock=lock,
         tasks=staged["tasks"],
         dataset_receipt=staged["receipt"],
         grade=grade_with_retry,
@@ -797,7 +805,7 @@ def main() -> None:
     )
     result = evaluate(
         config=CONFIG,
-        lock=LOCK,
+        lock=lock,
         staged=admitted,
         server_url=url,
         api_key=key,

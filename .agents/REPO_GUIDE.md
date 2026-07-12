@@ -596,6 +596,10 @@ size/hash/truncation/JSON keys without body text. Source-only migration may
 cross preparation and admission-failure artifacts with exact oracle/model
 identities, but successful admission or any benchmark-stage artifact restores
 strict identity.
+Keep the dataset image lock off the GPU server image. Modal Server hydration
+must tolerate that control-only environment variable being absent, while local
+orchestration must require the reviewed lock before preflight, dataset/oracle,
+or paid work.
 
 Source and offline tests are implemented; paid validation remains pending.
 Never print or document a score until 50 responses/records, passing oracle

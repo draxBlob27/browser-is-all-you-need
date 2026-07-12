@@ -1118,6 +1118,8 @@ Update the shared target once; never replace or fork the symlinks.
 - [x] Write canonical lane README.
 - [x] Update all repo-wide guidance surfaces.
 - [x] Run focused and full offline validation.
+- [x] Keep the dataset image lock control-plane-only; allow GPU Server module
+      hydration without its env while failing local orchestration closed.
 - [ ] Execute paid ladder through two-task smoke.
 - [ ] Turn each paid failure into a regression.
 - [ ] Execute full only after clean smoke.

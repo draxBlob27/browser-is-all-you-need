@@ -120,6 +120,10 @@ checking /v1/models and authenticated chat admission. Models polling is bounded
 to 120 seconds and chat admission to 900 seconds, with five-second retries for
 the checked-in transient HTTP status set. Failure artifacts retain only status,
 body byte count/SHA-256/truncation, and JSON keys—never response text.
+The server image intentionally receives only runtime configuration, not the
+dataset image lock. Modal Server hydration may therefore import modal_app.py
+without W8_MODAL_MULTI_SWE_IMAGE_LOCK; the local orchestrator still requires
+and validates the reviewed lock before preflight, dataset, oracle, or paid work.
 
 ## Artifacts and resume
 
@@ -169,3 +173,11 @@ probe, network-blocked filesystem/exec/terminate test, ordinary and special
 oracle parity, all 50 oracles, model cache, SGLang admission, one task, fixed
 smoke, then full. Every infrastructure failure becomes an offline regression
 before continuing.
+
+Paid-incident checklist:
+
+- [x] Server module hydration does not require the control-only image-lock env.
+- [x] Local orchestration remains fail-closed without the reviewed image lock.
+- [ ] Resume the fixed smoke and complete authenticated SGLang admission.
+- [ ] Complete both fixed smoke tasks and verify stopped-App evidence.
+- [ ] Run full only after the smoke is clean.
