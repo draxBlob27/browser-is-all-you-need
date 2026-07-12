@@ -1,9 +1,10 @@
 # GLM-4.7-Flash Multi-SWE C++ Base Eval On Modal
 
-Status: implementation specification only. No source lane, paid Modal smoke, or
-model result described here exists yet. An implementing agent must not present
-this benchmark as implemented, operationally proven, or scored until every
-offline gate and the paid validation ladder in this document has passed.
+Status: source lane, immutable image lock, no-spend plan, operator runbook, and
+offline contract tests are implemented. Paid Modal validation has not run.
+This benchmark is not operationally proven or scored; the paid validation
+ladder remains blocking, and no model result may be presented before a complete
+50-task stopped-App receipt and local artifact reconciliation exist.
 
 Target: add an optional, repo-owned base evaluation of
 `zai-org/GLM-4.7-Flash` on the 50 C++ instances in
@@ -1051,50 +1052,50 @@ Update the shared target once; never replace or fork the symlinks.
 
 ### Phase A: shared contracts and pure module
 
-- [ ] Extract shared GLM pure helpers without changing the Aider lane.
-- [ ] Expose backend-neutral Multi-SWE official script/result helpers.
-- [ ] Add `ModalMultiSweConfig`, identity mapping, validation, and redaction.
-- [ ] Add deterministic plan and request builders.
-- [ ] Add image-lock parsing and verification.
-- [ ] Add receipt, resume, summary, and artifact validation.
-- [ ] Add offline tests for all pure logic.
-- [ ] Run both existing reference test files.
+- [x] Extract shared GLM pure helpers without changing the Aider lane.
+- [x] Expose backend-neutral Multi-SWE official script/result helpers.
+- [x] Add `ModalMultiSweConfig`, identity mapping, validation, and redaction.
+- [x] Add deterministic plan and request builders.
+- [x] Add image-lock parsing and verification.
+- [x] Add receipt, resume, summary, and artifact validation.
+- [x] Add offline tests for all pure logic.
+- [x] Run both existing reference test files.
 
 ### Phase B: dataset and Modal Sandbox backend
 
-- [ ] Pin the dataset revision and generate the reviewed 50-image lock.
-- [ ] Implement CPU dataset/offline-dependency staging.
-- [ ] Implement exact external Image construction.
-- [ ] Implement network-blocked per-task Sandbox grading.
-- [ ] Implement output draining, bounded logs, result classification, and
+- [x] Pin the dataset revision and generate the reviewed 50-image lock.
+- [x] Implement CPU dataset/offline-dependency staging.
+- [x] Implement exact external Image construction.
+- [x] Implement network-blocked per-task Sandbox grading.
+- [x] Implement output draining, bounded logs, result classification, and
       unconditional terminate/detach.
-- [ ] Implement incremental oracle persistence and exact-key resume.
-- [ ] Prove all-task oracle admission before GPU work.
+- [x] Implement incremental oracle persistence and exact-key resume.
+- [x] Enforce all-task oracle admission before GPU work.
 
 ### Phase C: GLM serving and evaluation orchestration
 
-- [ ] Implement/reuse exact model cache validation.
-- [ ] Implement the one-replica four-H100 SGLang Server.
-- [ ] Implement authenticated response-shape admission.
-- [ ] Implement fixed two-task smoke.
-- [ ] Implement full generation-first, grading-second flow.
-- [ ] Reduce GPU scale-down after generation.
-- [ ] Implement per-task durable uploads and summary recomputation.
+- [x] Implement/reuse exact model cache validation.
+- [x] Implement the one-replica four-H100 SGLang Server.
+- [x] Implement authenticated response-shape admission.
+- [x] Implement fixed two-task smoke.
+- [x] Implement full generation-first, grading-second flow.
+- [x] Reduce GPU scale-down after generation.
+- [x] Implement per-task durable uploads and summary recomputation.
 
 ### Phase D: wrapper, artifacts, and teardown
 
-- [ ] Add export-only `run.sh` with default plan.
-- [ ] Add early cleanup traps and paid acknowledgement.
-- [ ] Add stale/concurrent App/run preflight.
-- [ ] Add bounded regular-file-only artifact download.
-- [ ] Add explicit App stop and control-plane verification.
-- [ ] Add final local validation and concise summary.
+- [x] Add export-only `run.sh` with default plan.
+- [x] Add early cleanup traps and paid acknowledgement.
+- [x] Add stale/concurrent App/run preflight.
+- [x] Add bounded regular-file-only artifact download.
+- [x] Add explicit App stop and control-plane verification.
+- [x] Add final local validation and concise summary.
 
 ### Phase E: docs and live validation
 
-- [ ] Write canonical lane README.
-- [ ] Update all repo-wide guidance surfaces.
-- [ ] Run focused and full offline validation.
+- [x] Write canonical lane README.
+- [x] Update all repo-wide guidance surfaces.
+- [x] Run focused and full offline validation.
 - [ ] Execute paid ladder through two-task smoke.
 - [ ] Turn each paid failure into a regression.
 - [ ] Execute full only after clean smoke.
@@ -1219,3 +1220,24 @@ artifacts: .w8-biayn/modal/glm47-flash-multi-swe-cpp/runs/<run-id>
 ```
 
 Anything less is incomplete infrastructure evidence, not a model result.
+
+## Implementation Receipt
+
+Completed in source:
+
+- [x] Shared pure GLM server/cache contracts.
+- [x] Backend-neutral official-image shell and result-classifier surfaces.
+- [x] Pure configuration, redaction, plan, lock, request, resume, summary, and
+      artifact contracts.
+- [x] Exact dataset revision and reviewed 50-task linux/amd64 image digest lock.
+- [x] CPU dataset/dependency staging and all-task oracle-before-model ordering.
+- [x] Native network-blocked Modal Sandbox adapter with bounded resources,
+      output capture, retry, terminate(wait=True), and detach.
+- [x] One-replica four-H100 serving, fixed smoke, generation-first full flow,
+      post-generation scale-down, incremental artifacts, wrapper, and docs.
+- [x] Focused offline tests plus existing reference-suite coverage.
+
+Still blocking any model claim:
+
+- [ ] Execute the paid validation ladder through the fixed two-task smoke.
+- [ ] Execute and reconcile the complete 50-task run.

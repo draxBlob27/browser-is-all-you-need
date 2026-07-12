@@ -1033,3 +1033,24 @@ uv run w8-biayn cpp harness preflight --dry-run
 
 For documentation-only changes, run the skill validator and the docs guardrail
 tests when practical.
+
+
+## GLM-4.7-Flash Multi-SWE C++ Base Eval On Modal
+
+The optional source lane at
+examples/modal/glm47_flash_multi_swe_cpp/ runs the base GLM checkpoint on the
+50 C++ Multi-SWE-bench mini tasks with the existing repo-owned single-diff
+contract. It is separate from PIE training, the Moonlight SLIME Multi-SWE lane,
+and official Multi-SWE leaderboard evaluation.
+
+The only entrypoint is:
+
+    bash examples/modal/glm47_flash_multi_swe_cpp/run.sh
+
+It defaults to a redacted no-spend plan. Paid smoke/full require explicit
+acknowledgement; both run the all-50 fix_patch proof through exact
+digest-locked, network-blocked Modal Sandboxes before model loading. Full is
+also gated by a real two-task smoke. Source, immutable image lock, runbook, and
+offline tests are implemented; paid Modal validation is pending. No model score
+may be reported before a complete 50-task local artifact reconciliation and
+control-plane verified stopped-App receipt.

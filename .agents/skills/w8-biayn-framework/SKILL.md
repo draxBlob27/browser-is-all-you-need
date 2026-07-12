@@ -609,3 +609,23 @@ uv run w8-biayn slime doctor
 uv run w8-biayn slime setup --force
 uv run w8-biayn cpp harness preflight --dry-run
 ```
+
+
+## GLM Multi-SWE C++ Modal Evaluation
+
+Use examples/modal/glm47_flash_multi_swe_cpp/run.sh for the optional
+GLM-4.7-Flash single-turn Multi-SWE C++ Modal lane. It defaults to a redacted
+no-spend plan and is not SLIME, PIE training, or an official leaderboard run.
+
+Preserve these invariants: exact dataset revision and reviewed 50-image
+linux/amd64 digest lock; all-task fix_patch Modal-Sandbox oracle before model
+load; one strict H100!:4 SGLang replica with separated reasoning/content; only
+message.content reaches the existing parser; fresh network-blocked,
+secret-free 2-CPU/2048-MiB Sandboxes; read-only simdjson subpath mounts only;
+generation completes before full grading; every Sandbox terminates/detaches;
+regular-file-only bounded artifact download; explicit App stop and
+control-plane verification before any score.
+
+The source/no-spend/offline-test path is implemented, while paid validation is
+pending. Require the paid ladder and a complete stopped-App receipt before
+reporting a model result.

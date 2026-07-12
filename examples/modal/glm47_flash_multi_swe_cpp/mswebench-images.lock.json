@@ -1,0 +1,209 @@
+{
+  "dataset_repo": "ByteDance-Seed/Multi-SWE-bench_mini",
+  "dataset_revision": "d0fab3ccc7dff232fcaac234cf8af9a2efeaccf6",
+  "expected_tasks": 50,
+  "platform": "linux/amd64",
+  "schema_version": 1,
+  "tasks": {
+    "catchorg__Catch2-1608": {
+      "digest": "mswebench/catchorg_m_catch2@sha256:2794f13e3aa3cbd47b102051526f7cb7fb09eca2b494967bd4f6f93e94f12a43",
+      "tag": "mswebench/catchorg_m_catch2:pr-1608"
+    },
+    "catchorg__Catch2-1609": {
+      "digest": "mswebench/catchorg_m_catch2@sha256:cae191be6a97bb52d5348576c152a9f285d8682d07587d1c17ced69dcc9000d2",
+      "tag": "mswebench/catchorg_m_catch2:pr-1609"
+    },
+    "catchorg__Catch2-1616": {
+      "digest": "mswebench/catchorg_m_catch2@sha256:0e7d4f5a4684924c0f87a73f4905f02bc3b3b1f5d859f020bcc92cca39fbbb96",
+      "tag": "mswebench/catchorg_m_catch2:pr-1616"
+    },
+    "catchorg__Catch2-2288": {
+      "digest": "mswebench/catchorg_m_catch2@sha256:2a3966dc53dec0b2020ae09f9a47af1d30d00e15d6e92c427194b0909bd6a037",
+      "tag": "mswebench/catchorg_m_catch2:pr-2288"
+    },
+    "fmtlib__fmt-1171": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:0fa6db578f073c6b2278da620ca90e8e87f914f94f9d7652510646a7567db791",
+      "tag": "mswebench/fmtlib_m_fmt:pr-1171"
+    },
+    "fmtlib__fmt-1390": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:8bcf145080b621bc2f0b85275b35aac3ed48764631b32e24dae2c375b7e033bf",
+      "tag": "mswebench/fmtlib_m_fmt:pr-1390"
+    },
+    "fmtlib__fmt-1407": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:01f3bc247fe084ec74b7a53e90a9358bb28dc09c097263bc849858728d638635",
+      "tag": "mswebench/fmtlib_m_fmt:pr-1407"
+    },
+    "fmtlib__fmt-2070": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:b104b8625aca8992e266b8656b0e33036db6b5ee633bb705490c483b615334f4",
+      "tag": "mswebench/fmtlib_m_fmt:pr-2070"
+    },
+    "fmtlib__fmt-2158": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:bc5d39ebb5fda2b807f4cb28bb1ce7c96cedf875a3aea708cdc9d771fcfe18f6",
+      "tag": "mswebench/fmtlib_m_fmt:pr-2158"
+    },
+    "fmtlib__fmt-2310": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:3c993bce654fa629fd3395887b5bc4f10626d8804b24db636538a994ef90ed4a",
+      "tag": "mswebench/fmtlib_m_fmt:pr-2310"
+    },
+    "fmtlib__fmt-2317": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:1c0c39ee9a9b08d34017dd8991b2c88f5df09e4aebc94bacb62446df823e3070",
+      "tag": "mswebench/fmtlib_m_fmt:pr-2317"
+    },
+    "fmtlib__fmt-2394": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:a277e173e1671c25bd1fb412e45665be5e8b6c2f96f30887fa3dbc12e1dac949",
+      "tag": "mswebench/fmtlib_m_fmt:pr-2394"
+    },
+    "fmtlib__fmt-3248": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:b669105dae1bc1d0b3712ae615cf118a8dc4b043c4b762ab0dc34e3ca7873bd4",
+      "tag": "mswebench/fmtlib_m_fmt:pr-3248"
+    },
+    "fmtlib__fmt-3271": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:fe408221b8374d4ec435577f1efe7fda532dd5ff076f1968a765baf1689e3079",
+      "tag": "mswebench/fmtlib_m_fmt:pr-3271"
+    },
+    "fmtlib__fmt-3555": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:fd7ff39acb25fc69013852013c317c74b3552a0e5f9a58a148ece715216ad501",
+      "tag": "mswebench/fmtlib_m_fmt:pr-3555"
+    },
+    "fmtlib__fmt-3729": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:6ed9aa694e652a7c7ca65e91ebcb69bc8f094eaa0124e2ccb54ba56a911e2776",
+      "tag": "mswebench/fmtlib_m_fmt:pr-3729"
+    },
+    "fmtlib__fmt-3732": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:90431ffbc3cf310a48bbf8859ca3fcd683397fcdad11108939a8714be1acc21e",
+      "tag": "mswebench/fmtlib_m_fmt:pr-3732"
+    },
+    "fmtlib__fmt-3824": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:76540ee8b780bdc67f26ff63dc62252178e0e53fc3e1d2b9a8cd9b8b8dd9cffa",
+      "tag": "mswebench/fmtlib_m_fmt:pr-3824"
+    },
+    "fmtlib__fmt-3913": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:78c661caaaed6c1d63b38eb902b6db9bed50e1dc53e8a55fd962894bf1ee3b8d",
+      "tag": "mswebench/fmtlib_m_fmt:pr-3913"
+    },
+    "fmtlib__fmt-4057": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:aa3971cde27bd897ca72b430d24ab61e4dba9a51f997724d24d23ffd8633d927",
+      "tag": "mswebench/fmtlib_m_fmt:pr-4057"
+    },
+    "fmtlib__fmt-4310": {
+      "digest": "mswebench/fmtlib_m_fmt@sha256:2a386d8c003302077fd6e0cdb6efb5bae9fa2159dbc8e0ea7767a69c448ac435",
+      "tag": "mswebench/fmtlib_m_fmt:pr-4310"
+    },
+    "nlohmann__json-1138": {
+      "digest": "mswebench/nlohmann_m_json@sha256:3d6ace732b1ae004de7e342ebf018ac5f622f190e55194d2647850155eca6531",
+      "tag": "mswebench/nlohmann_m_json:pr-1138"
+    },
+    "nlohmann__json-1314": {
+      "digest": "mswebench/nlohmann_m_json@sha256:834df58f67b72427004692617223bd84668a2fa2942a40637d8f71e0d5e5c44e",
+      "tag": "mswebench/nlohmann_m_json:pr-1314"
+    },
+    "nlohmann__json-1323": {
+      "digest": "mswebench/nlohmann_m_json@sha256:a9d483a9aac0cfc78e3f520396c858ed1fe7f672ff5d5850795c099fc2ddd538",
+      "tag": "mswebench/nlohmann_m_json:pr-1323"
+    },
+    "nlohmann__json-1555": {
+      "digest": "mswebench/nlohmann_m_json@sha256:4c826a0938fdb1adbfba023f1ad0deb7b6ceb5b8b5a8e364b9bcce3d879f0472",
+      "tag": "mswebench/nlohmann_m_json:pr-1555"
+    },
+    "nlohmann__json-1769": {
+      "digest": "mswebench/nlohmann_m_json@sha256:ee090f82d536b99107004b5890b453ce5b1b4be12cabc862e2d1bac8b68fc2ee",
+      "tag": "mswebench/nlohmann_m_json:pr-1769"
+    },
+    "nlohmann__json-18": {
+      "digest": "mswebench/nlohmann_m_json@sha256:067f981caa522a1edd8cae2ed9379823281165d129e8b3bb740642a96e659a5e",
+      "tag": "mswebench/nlohmann_m_json:pr-18"
+    },
+    "nlohmann__json-1821": {
+      "digest": "mswebench/nlohmann_m_json@sha256:8ff9f3b23f4a09880f88aecdff950ad9cadab0750e40afa0047c2ed6c5891422",
+      "tag": "mswebench/nlohmann_m_json:pr-1821"
+    },
+    "nlohmann__json-2099": {
+      "digest": "mswebench/nlohmann_m_json@sha256:f2dfcf708e5ee81cb7136c6a59780cc85e0f746c3edccc4af34f41fecaedbbc3",
+      "tag": "mswebench/nlohmann_m_json:pr-2099"
+    },
+    "nlohmann__json-2319": {
+      "digest": "mswebench/nlohmann_m_json@sha256:ef4e84f0339cfecd2dce235a31c7b9ff8909ada44919602990ef26cd1dddbe8a",
+      "tag": "mswebench/nlohmann_m_json:pr-2319"
+    },
+    "nlohmann__json-2332": {
+      "digest": "mswebench/nlohmann_m_json@sha256:cd47dc8dcef5bbd1a3125f18ac6ce06f25fa1813663331860f2d131a25f6bc99",
+      "tag": "mswebench/nlohmann_m_json:pr-2332"
+    },
+    "nlohmann__json-2866": {
+      "digest": "mswebench/nlohmann_m_json@sha256:6bd4d38ba4efd8c110d65cbad74de3f817241df1ffbd051d7af53dce1395be65",
+      "tag": "mswebench/nlohmann_m_json:pr-2866"
+    },
+    "nlohmann__json-3332": {
+      "digest": "mswebench/nlohmann_m_json@sha256:23569807052e43d73735550da05456b6679d7b00bc4717161bf269dd6f1b314a",
+      "tag": "mswebench/nlohmann_m_json:pr-3332"
+    },
+    "nlohmann__json-3415": {
+      "digest": "mswebench/nlohmann_m_json@sha256:979cabb8c092fc2d9383a56ab135e22eb9db263082d595e90b633090d921ad18",
+      "tag": "mswebench/nlohmann_m_json:pr-3415"
+    },
+    "nlohmann__json-3446": {
+      "digest": "mswebench/nlohmann_m_json@sha256:ddc7752a462d79a0f318b68620b105ad66a14c625247bacb6f4bd66efb979068",
+      "tag": "mswebench/nlohmann_m_json:pr-3446"
+    },
+    "nlohmann__json-3463": {
+      "digest": "mswebench/nlohmann_m_json@sha256:8694316f4bbc170da16c256b8324ea38a844a9c56f59a846b3628cec122d1813",
+      "tag": "mswebench/nlohmann_m_json:pr-3463"
+    },
+    "nlohmann__json-3543": {
+      "digest": "mswebench/nlohmann_m_json@sha256:934f321cfb94bd9a50df29cf2d7541d9bc1e1bb9536808cf67b35952a2c277c4",
+      "tag": "mswebench/nlohmann_m_json:pr-3543"
+    },
+    "nlohmann__json-3605": {
+      "digest": "mswebench/nlohmann_m_json@sha256:1e8500796f793cf41374572e84e9999940d59c127cf246af35e8e6ec14f72dc0",
+      "tag": "mswebench/nlohmann_m_json:pr-3605"
+    },
+    "nlohmann__json-3664": {
+      "digest": "mswebench/nlohmann_m_json@sha256:325ad0a703087f19741800065b321353ec1be4bca3dd74b2a13434d376e4d738",
+      "tag": "mswebench/nlohmann_m_json:pr-3664"
+    },
+    "nlohmann__json-4512": {
+      "digest": "mswebench/nlohmann_m_json@sha256:6b12d639567233189c816cfec945d750a891fa6199639b2286f6d6cee6627fc3",
+      "tag": "mswebench/nlohmann_m_json:pr-4512"
+    },
+    "nlohmann__json-4536": {
+      "digest": "mswebench/nlohmann_m_json@sha256:065adf308fff2428b8017af1b1828895f2a0e97b13254978501665500ddc194e",
+      "tag": "mswebench/nlohmann_m_json:pr-4536"
+    },
+    "nlohmann__json-545": {
+      "digest": "mswebench/nlohmann_m_json@sha256:63eb794609ba10de7f6caa230d39e68f9f62205520523531a07fbd445b0b71a9",
+      "tag": "mswebench/nlohmann_m_json:pr-545"
+    },
+    "simdjson__simdjson-1615": {
+      "digest": "mswebench/simdjson_m_simdjson@sha256:88ef594d088ba61c2fb63701d8ed02adc19ed124d4455be6bfc1ae374f50403c",
+      "tag": "mswebench/simdjson_m_simdjson:pr-1615"
+    },
+    "simdjson__simdjson-1712": {
+      "digest": "mswebench/simdjson_m_simdjson@sha256:176f076ffced70705edeb61599ceba4d445d7701df3a287384dc3eaf5dff0e59",
+      "tag": "mswebench/simdjson_m_simdjson:pr-1712"
+    },
+    "simdjson__simdjson-2016": {
+      "digest": "mswebench/simdjson_m_simdjson@sha256:154b7b66dcf1b72aaefe09b2ab435a0f1dc3cb54c7d12ca652337f154afb8ebe",
+      "tag": "mswebench/simdjson_m_simdjson:pr-2016"
+    },
+    "simdjson__simdjson-485": {
+      "digest": "mswebench/simdjson_m_simdjson@sha256:f2019f6ea3744214ba11086bb4e6f3e96bb238d8dd36e85b848dddb7be0834c7",
+      "tag": "mswebench/simdjson_m_simdjson:pr-485"
+    },
+    "simdjson__simdjson-524": {
+      "digest": "mswebench/simdjson_m_simdjson@sha256:6f37f7e72ac8eb1b8d9e2be68e5fde9e9d653a2249b8405d4eee1aa8a6c9a69c",
+      "tag": "mswebench/simdjson_m_simdjson:pr-524"
+    },
+    "simdjson__simdjson-559": {
+      "digest": "mswebench/simdjson_m_simdjson@sha256:dd74166249032ced3f7effdf3b6e62690df0015806d3b49185532d1792874783",
+      "tag": "mswebench/simdjson_m_simdjson:pr-559"
+    },
+    "simdjson__simdjson-644": {
+      "digest": "mswebench/simdjson_m_simdjson@sha256:1b9fc04489cec9c09c4055371b0ffd65375a956d614023a336b1fae378b6e254",
+      "tag": "mswebench/simdjson_m_simdjson:pr-644"
+    },
+    "simdjson__simdjson-958": {
+      "digest": "mswebench/simdjson_m_simdjson@sha256:8cb61ec379f095cd70882f51049d52686bb7c5a87845781f88ebb0f86394f6f1",
+      "tag": "mswebench/simdjson_m_simdjson:pr-958"
+    }
+  }
+}

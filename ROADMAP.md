@@ -531,3 +531,27 @@ report asset directories.
 
 When a result is worth preserving in git, write a concise markdown summary that
 links to durable external artifacts without vendoring large/generated files.
+
+
+## Optional Side Benchmark: GLM Multi-SWE C++ On Modal
+
+Question:
+
+> How does base GLM-4.7-Flash perform on the 50 C++ Multi-SWE-bench mini
+> instances under the repository's single-turn diff contract when serving and
+> isolated grading run on Modal?
+
+The canonical export-only flow is
+examples/modal/glm47_flash_multi_swe_cpp/README.md. Plan is no-spend by
+default. Smoke/full require the checked-in exact dataset revision and 50-image
+linux/amd64 digest lock, all-task fix_patch admission in the same
+network-blocked Modal Sandbox backend, one strict H100!:4 SGLang replica,
+separated reasoning/content, and the fixed two-task smoke.
+
+Decision gate: source and offline contracts are implemented, but paid
+validation is pending. Do not publish a result until all 50 saved responses
+map to 50 complete records, the strict summary recomputes with a passing oracle
+proof, artifacts reconcile byte-for-byte, every Sandbox terminated/detached,
+and the App receipt says modal_app_stopped: true. Label the result repo-owned,
+correctness-only, and modal-sandbox; never call it an official leaderboard
+score or report PIE speed metrics.

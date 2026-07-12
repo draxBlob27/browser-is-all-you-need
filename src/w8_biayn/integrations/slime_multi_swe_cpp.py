@@ -856,9 +856,8 @@ def prepare_simdjson_offline_dependencies(
             payload = {}
         if isinstance(payload, dict):
             existing = payload
-    cache_valid = (
-        existing.get("simdjson_bundle_sha256") == bundle_sha256
-        and all((cache_root / dependency.name).is_dir() for dependency in SIMDJSON_OFFLINE_DEPENDENCIES)
+    cache_valid = existing.get("simdjson_bundle_sha256") == bundle_sha256 and all(
+        (cache_root / dependency.name).is_dir() for dependency in SIMDJSON_OFFLINE_DEPENDENCIES
     )
     if not cache_valid:
         if cache_root.exists():
@@ -879,9 +878,7 @@ def prepare_simdjson_offline_dependencies(
                 "commit": dependency.commit,
                 "url": dependency.url,
                 "sha256": dependency.sha256,
-                "path": (
-                    SIMDJSON_DEPENDENCY_CACHE_RELATIVE / dependency.name
-                ).as_posix(),
+                "path": (SIMDJSON_DEPENDENCY_CACHE_RELATIVE / dependency.name).as_posix(),
             }
             for dependency in SIMDJSON_OFFLINE_DEPENDENCIES
         ],
@@ -902,8 +899,7 @@ def prepare_simdjson_offline_dependencies(
         "harness_revision": SIMDJSON_HARNESS_REVISION,
         "bundle_sha256": bundle_sha256,
         "affected_task_ids": sorted(
-            str(task.get("instance_id") or task_path.parent.name)
-            for task_path, task in affected
+            str(task.get("instance_id") or task_path.parent.name) for task_path, task in affected
         ),
     }
     write_json(manifest_path, manifest)
@@ -1187,34 +1183,24 @@ def verify_multi_swe_dataset(data_root: str | Path) -> dict[str, Any]:
     tasks = load_prepared_multi_swe_tasks(root)
     for task_path, task in tasks:
         expected_revision = _repo_harness_revision(task)
-        if (
-            expected_revision is not None
-            and task.get("repo_harness_revision") != expected_revision
-        ):
+        if expected_revision is not None and task.get("repo_harness_revision") != expected_revision:
             raise ValueError(f"stale Multi-SWE task harness in {task_path}")
     if oracle_check.get("task_count") != len(tasks):
         raise ValueError(f"Multi-SWE oracle/task-count mismatch in {manifest_path}")
     affected_simdjson_tasks = [
-        (task_path, task)
-        for task_path, task in tasks
-        if _uses_simdjson_offline_dependencies(task)
+        (task_path, task) for task_path, task in tasks if _uses_simdjson_offline_dependencies(task)
     ]
     if affected_simdjson_tasks:
         dependency_receipt_path = root / str(files.get("offline_dependencies") or "")
         if not dependency_receipt_path.is_file():
-            raise ValueError(
-                f"missing Multi-SWE simdjson offline-dependency receipt under {root}"
-            )
+            raise ValueError(f"missing Multi-SWE simdjson offline-dependency receipt under {root}")
         dependency_receipt = json.loads(dependency_receipt_path.read_text(encoding="utf-8"))
         expected_bundle = simdjson_offline_bundle_sha256()
         if (
-            dependency_receipt.get("simdjson_harness_revision")
-            != SIMDJSON_HARNESS_REVISION
+            dependency_receipt.get("simdjson_harness_revision") != SIMDJSON_HARNESS_REVISION
             or dependency_receipt.get("simdjson_bundle_sha256") != expected_bundle
         ):
-            raise ValueError(
-                f"stale Multi-SWE simdjson offline-dependency receipt under {root}"
-            )
+            raise ValueError(f"stale Multi-SWE simdjson offline-dependency receipt under {root}")
         dependency_cache = root / SIMDJSON_DEPENDENCY_CACHE_RELATIVE
         for dependency in SIMDJSON_OFFLINE_DEPENDENCIES:
             if not (dependency_cache / dependency.name).is_dir():
@@ -1618,7 +1604,7 @@ def run_multi_swe_tests(task: dict[str, Any], patch: str) -> MultiSweTestResult:
     return _run_multi_swe_tests_from_checkout(task, patch, timeout_s=timeout_s)
 
 
-def _official_instance_script(
+def official_instance_script(
     task: dict[str, Any],
     harness: MultiSweRepoHarness,
     *,
@@ -1735,6 +1721,11 @@ timeout {timeout_s}s bash -lc {quoted_test_body}
 """.strip()
 
 
+# Compatibility alias for historical callers. New backends use the public,
+# backend-neutral name above.
+_official_instance_script = official_instance_script
+
+
 def _official_multi_swe_docker_args(
     patch_path: Path,
     *,
@@ -1766,9 +1757,7 @@ def _official_multi_swe_docker_args(
     if _uses_simdjson_offline_dependencies(task):
         cache_value = str(task.get("_offline_dependency_cache") or "").strip()
         if not cache_value:
-            raise ValueError(
-                f"missing offline dependency cache for {task.get('instance_id')}"
-            )
+            raise ValueError(f"missing offline dependency cache for {task.get('instance_id')}")
         cache_root = Path(cache_value).resolve()
         for dependency, container_path in (
             ("cxxopts", "/home/simdjson/dependencies/cxxopts"),
@@ -1776,9 +1765,7 @@ def _official_multi_swe_docker_args(
         ):
             source = cache_root / dependency
             if not source.is_dir():
-                raise ValueError(
-                    f"missing offline simdjson dependency {dependency!r}: {source}"
-                )
+                raise ValueError(f"missing offline simdjson dependency {dependency!r}: {source}")
             command.extend(["-v", f"{source}:{container_path}:ro"])
     command.append(image)
     return command
@@ -1793,10 +1780,7 @@ def _host_visible_simdjson_dependency_cache(task: dict[str, Any]) -> Path:
     if bundle_sha256 != simdjson_offline_bundle_sha256():
         raise ValueError(f"stale offline dependency bundle for {task.get('instance_id')}")
 
-    target = (
-        Path(gettempdir())
-        / f"w8-biayn-multi-swe-simdjson-{bundle_sha256[:16]}"
-    ).resolve()
+    target = (Path(gettempdir()) / f"w8-biayn-multi-swe-simdjson-{bundle_sha256[:16]}").resolve()
     ready = target / ".w8-biayn-ready"
     if ready.is_file() and ready.read_text(encoding="utf-8").strip() == bundle_sha256:
         return target
@@ -1846,7 +1830,7 @@ def run_official_instance_tests(
         ) + [
             "bash",
             "-lc",
-            _official_instance_script(task, harness, timeout_s=timeout),
+            official_instance_script(task, harness, timeout_s=timeout),
         ]
         try:
             result = subprocess.run(
@@ -1885,6 +1869,41 @@ def run_official_instance_tests(
         tests_collected=tests_collected,
         sandbox_image=image,
         sandbox_image_id=image_id,
+    )
+
+
+def classify_official_test_result(
+    *,
+    returncode: int | None,
+    logs: str,
+    timed_out: bool = False,
+    sandbox_image: str | None = None,
+    sandbox_image_id: str | None = None,
+) -> MultiSweTestResult:
+    """Classify one official-image execution identically across backends."""
+
+    tests_collected = _ctest_tests_collected(logs)
+    effective_returncode = 124 if timed_out and returncode is None else returncode
+    no_tests_collected = (
+        False
+        if effective_returncode is None
+        else _ctest_collected_no_tests(
+            logs,
+            returncode=effective_returncode,
+            tests_collected=tests_collected,
+        )
+    )
+    contract_error = effective_returncode in {_OFFICIAL_CONTRACT_ERROR, _TRUSTED_PATCH_ERROR}
+    return MultiSweTestResult(
+        returncode=returncode,
+        logs=logs,
+        timeout=timed_out or effective_returncode == 124,
+        harness_error=contract_error or no_tests_collected,
+        patch_apply_error=effective_returncode == _CANDIDATE_PATCH_ERROR,
+        no_tests_collected=no_tests_collected,
+        tests_collected=tests_collected,
+        sandbox_image=sandbox_image,
+        sandbox_image_id=sandbox_image_id,
     )
 
 
