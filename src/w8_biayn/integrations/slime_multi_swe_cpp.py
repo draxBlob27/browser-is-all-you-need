@@ -1285,6 +1285,24 @@ def build_prompt(
     max_body_chars: int = 12000,
     max_issue_chars: int = 12000,
 ) -> str:
+    public_context = build_public_issue_context(
+        row,
+        harness=harness,
+        instance_id=instance_id,
+        max_body_chars=max_body_chars,
+        max_issue_chars=max_issue_chars,
+    )
+    return f"{public_context}\n\n{_output_contract()}".strip()
+
+
+def build_public_issue_context(
+    row: dict[str, Any],
+    *,
+    harness: MultiSweRepoHarness,
+    instance_id: str,
+    max_body_chars: int = 12000,
+    max_issue_chars: int = 12000,
+) -> str:
     title = str(row.get("title") or "").strip()
     body = _truncate(str(row.get("body") or "").strip(), max_body_chars)
     issues = _resolved_issues_text(row.get("resolved_issues"), max_chars=max_issue_chars)
@@ -1301,7 +1319,6 @@ def build_prompt(
         parts.append(f"Issue or pull request body:\n{body}")
     if issues:
         parts.append(f"Resolved issue context:\n{issues}")
-    parts.append(_output_contract())
     return "\n\n".join(parts).strip()
 
 

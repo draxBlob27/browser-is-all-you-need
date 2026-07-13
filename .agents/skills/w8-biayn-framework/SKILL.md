@@ -359,7 +359,10 @@ resume reuses only validated complete sample rows with stats, archives an
 interrupted sample under `incomplete-attempts/`, and restarts only that sample
 from the pinned tree and seed. Preserve the prior local failure download under
 `resume-download-archives/` before exact resumed transfer. The active-server
-lease is compatible with pre-lease artifacts.
+lease is compatible with pre-lease artifacts. Generate offline visual reports
+with `python -m w8_biayn.modal_aider_visualization`; it reads only local
+evidence, supports explicit partial-prefix diagnostics, and writes under
+`reports/<run-id>/` instead of the canonical run tree.
 
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned
@@ -688,3 +691,55 @@ and fail closed without executing oracles on any mismatch.
 The source/no-spend/offline-test path and fixed paid smoke are complete, while
 full paid validation is pending. Require a complete stopped-App receipt before
 reporting a model result.
+
+## Agentic GLM Multi-SWE C++ Modal Evaluation
+
+Use examples/modal/glm47_flash_agentic_multi_swe_cpp/run.sh for the optional
+SWE-agent successor to the single-turn GLM Multi-SWE lane. It is export-only,
+defaults to no-spend plan, and has distinct benchmark/result identities. Keep
+run IDs to 3-40 lowercase letters, digits, or hyphens; this admits the
+documented timestamp forms and keeps the derived Modal App name at most 62
+characters.
+
+Preserve the exact SWE-agent commit and dependency lock, one deterministic
+trajectory per task, the 40-call and fixed token/time budgets, and both paid
+gates for full. Before model loading or GPU startup, require the reviewed
+50-image lock plus all 50 exact fix-patch oracle proofs and all 50 exact
+sanitized-workspace proofs. Oracle import may come from the completed
+single-turn family; workspace import must come from a completed agentic run.
+Both fail closed on any cache-key mismatch and import no model response.
+
+The model-controlled Agent Sandbox must be the exact official task image with
+blocked network, no Secrets, no Volumes, and unprivileged w8agent execution.
+Trusted root code owns the base snapshot and canaries, removes original
+history/hidden assets, preserves and receipt-binds exact empty directories for
+uninitialized gitlinks, requires populated submodules to match their indexed
+commits, rewrites only required upstream root-state tool paths, tracks one
+logical cwd without a persistent privileged shell, and bounds every
+command and stream. Persist hashes, lengths, actions, bounded observations, and
+numeric usage; never persist private reasoning or the raw SWE-agent trajectory.
+Use the exact image's default C++ mode for the workspace compile/output canary
+because reviewed legacy images may reject C++20 flags; this must not change task
+grader commands.
+
+After stopping the agent, reject symlinks, hardlinks, special files, traversal,
+binary changes, forbidden paths, and oversized trees. Synthesize the final
+file-state diff in trusted code and require it to apply to a second pristine
+reconstruction. Agent-limit outcomes may still grade a valid final state;
+infrastructure failures do not enter the denominator.
+
+The pinned hook persists every completed step incrementally, but only through
+hashed/bounded safe events and tool receipts. Hold exactly one H100!:4 server
+replica only during trajectories. Full repeats the fixed smoke, lowers the
+server for smoke grading, re-acquires and re-admits it, then runs all 50.
+Require all selected trajectory and patch units before lowering min_containers
+to zero with the two-second drain. Grade afterward in separate fresh,
+network-blocked official-image Sandboxes. Resume only complete
+identity-compatible units and restart an incomplete unit once from pristine
+state.
+
+Source/no-spend/offline tests are complete; paid CPU canaries, SGLang
+admission, one trajectory, fixed smoke, and full evidence are pending. Do not
+report a score before 50 complete trajectories and records, passing exact
+oracle/workspace proofs, byte-reconciled artifacts, and stopped-App proof.
+Use the lane README as the canonical runbook.

@@ -506,7 +506,10 @@ tries inside each trajectory. It reports exactly `pass@1_try1`,
 only from its own try 1. Source and offline tests implement the four-metric
 protocol; paid seed inspection, the sampling smoke, a complete full run, and
 stopped-App evidence remain pending. The canonical lane runbook contains the
-formulas, smoke, artifact, and spend contract.
+formulas, smoke, artifact, and spend contract. The offline visualization
+surface is `uv run python -m w8_biayn.modal_aider_visualization --run-root
+<runs/run-id> --output-root <reports/run-id>`; it is read-only, supports
+explicit partial-prefix diagnostics, and writes outside canonical evidence.
 The paid acknowledgements are launch safety gates rather than immutable result
 identity, so the same planned run ID may move from false acknowledgements in
 no-spend plan mode to true acknowledgements for its first paid invocation.
@@ -1109,3 +1112,46 @@ still validates and requires the reviewed lock before any remote or paid work.
 Cross-run oracle import is full-only, records source lineage, imports no model
 responses, and has no execution fallback: any missing, stale, non-passing, or
 unreconciled source evidence blocks before model load or GPU allocation.
+
+## GLM-4.7-Flash Agentic Multi-SWE C++ Base Eval On Modal
+
+The optional successor lane at
+examples/modal/glm47_flash_agentic_multi_swe_cpp/ evaluates the same locked 50
+C++ Multi-SWE tasks with one isolated, deterministic SWE-agent trajectory per
+task. It has a distinct benchmark and result family from the completed
+single-turn baseline. The only entrypoint is:
+
+    bash examples/modal/glm47_flash_agentic_multi_swe_cpp/run.sh
+
+Plan is no-spend by default. Paid phases require
+W8_MODAL_AGENTIC_MULTI_SWE_ACKNOWLEDGE_PAID_RUN=1; full also requires
+W8_MODAL_AGENTIC_MULTI_SWE_ACKNOWLEDGE_LONG_GPU_LEASE=1. SWE-agent is fixed at
+5f40e63360d654adcd91e30ed11473389bc4909b with a checked-in dependency lock.
+Agentic run IDs admit 3-40 lowercase letters, digits, or hyphens, so the
+documented timestamp names fit while the derived Modal App name stays within
+62 characters. All 50 unchanged grader oracles and all 50 sanitized-workspace
+proofs must pass
+or import by exact cache key before model loading or GPU startup.
+
+The agent runs unprivileged in a network-blocked, secret-free, Volume-free
+official-image Sandbox. Trusted root code materializes only the exact tracked
+tree, removes original history and hidden assets, owns the baseline, synthesizes
+and validates the final file-state diff, and applies the existing forbidden-path
+policy. Empty uninitialized gitlink directories are preserved and receipt-bound
+to their indexed commits; populated submodules must match exactly. The workspace
+compile/output probe uses each exact image's default C++
+mode because some reviewed legacy images reject a C++20 flag; task grader
+commands remain unchanged. Safe hashed/bounded step and tool receipts persist
+incrementally; raw model reasoning and the upstream trajectory never do. Full
+repeats the fixed
+smoke, releases and re-admits the server, then runs all 50. Every stage lowers
+the H100!:4 lease to zero before its patches are graded in separate fresh
+official-image Sandboxes.
+
+Source, no-spend planning, the runner lock, wrapper, runbook, and offline tests
+are implemented. Paid CPU canaries, real SGLang/model admission, one
+trajectory, fixed two-task smoke, and full validation remain pending. Do not
+report a model score before 50 complete trajectories/records, passing oracle
+and workspace proofs, byte-reconciled artifacts, and control-plane-verified
+stopped-App evidence. See the lane README for exports, budgets, artifact
+schemas, resume rules, and the reporting gate.

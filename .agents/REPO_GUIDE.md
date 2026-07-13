@@ -326,7 +326,10 @@ resume reuses only validated complete sample rows with stats, archives an
 interrupted sample under `incomplete-attempts/`, and restarts only that sample
 from the pinned tree and seed. Preserve the prior local failure download under
 `resume-download-archives/` before exact resumed transfer. The active-server
-lease is compatible with pre-lease artifacts.
+lease is compatible with pre-lease artifacts. Generate offline visual reports
+with `python -m w8_biayn.modal_aider_visualization`; it reads only local
+evidence, supports explicit partial-prefix diagnostics, and writes under
+`reports/<run-id>/` instead of the canonical run tree.
 
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned
@@ -616,3 +619,51 @@ full paid validation remains pending.
 Never print or document a score until 50 responses/records, passing oracle
 proof, artifact reconciliation, and control-plane verified stopped-App evidence
 are complete.
+
+## Optional Agentic GLM Multi-SWE Modal Lane
+
+The separately named multi-turn lane lives at
+examples/modal/glm47_flash_agentic_multi_swe_cpp/, with offline contracts in
+src/w8_biayn/modal_agentic_multi_swe_cpp.py,
+src/w8_biayn/modal_agentic_multi_swe_runtime.py, and
+src/w8_biayn/integrations/modal_swe_agent_driver.py. Its only entrypoint is
+run.sh. Plan is no-spend; smoke/full require the paid acknowledgement and full
+also requires the long-GPU-lease acknowledgement. Keep run IDs to 3-40
+lowercase letters, digits, or hyphens; this admits the documented timestamp
+forms and keeps the derived Modal App name at most 62 characters.
+
+Keep this lane distinct from the single-turn Modal lane, SLIME, PIE training,
+Aider, and official leaderboard claims. Preserve exactly one bounded,
+deterministic SWE-agent trajectory per task; the fixed SWE-agent commit and
+dependency lock; all-50 oracle and workspace admission before GPU startup; and
+one H100!:4 active lease only while trajectories need the model.
+
+Agent Sandboxes must use the exact official task image with blocked network,
+no Secrets, no Volumes, and the unprivileged w8agent user. Trusted root code
+must verify and sanitize the base checkout, remove original history and hidden
+assets, preserve and receipt-bind exact empty uninitialized gitlink directories,
+require populated submodules to match their indexed commits, own the baseline
+and canaries, stop the agent, reject unsafe or
+oversized final trees, synthesize the final diff, apply the existing forbidden
+path policy, and prove the patch against a second pristine reconstruction.
+Use the exact image's default C++ mode for the workspace compile/output canary
+because reviewed legacy images may reject C++20 flags; do not change task
+grader commands. Never persist raw model reasoning or the upstream raw
+trajectory.
+
+Persist each completed step incrementally through the pinned hook, but only as
+request/response hashes, actions, bounded observations, numeric usage, and
+bounded tool receipts. Full must repeat the fixed smoke, lower the server for
+smoke grading, re-acquire and re-admit it, then run all 50. Require each complete
+patch/outcome set before lowering the server to zero and draining it. Grade only
+afterward in separate fresh official-image Sandboxes, using the existing narrow
+simdjson mount where required. Resume may reuse only complete
+identity-compatible task units; restart an interrupted unit once from pristine
+state and archive only safe failure diagnostics.
+
+Source and offline tests are implemented; paid CPU canaries, SGLang admission,
+one trajectory, fixed smoke, and full evidence remain pending. Never print or
+document a score before 50 complete trajectories/records, exact passing oracle
+and workspace proofs, byte reconciliation, and a control-plane-verified
+stopped-App receipt. Keep detailed commands, budgets, schemas, artifacts, and
+reporting gates in the lane README.

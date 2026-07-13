@@ -387,7 +387,10 @@ try-1 and cumulative-try-2 matrices. State and feedback may continue from try
 1 to try 2 only within one trajectory; all eight trajectories remain isolated.
 Source and offline regressions implement the two-try/four-metric protocol.
 Seed inspection, the 2-by-8-by-try smoke, a complete 26-by-8-by-try run, and
-stopped-App proof remain blocking before reporting live metrics.
+stopped-App proof remain blocking before reporting live metrics. Offline
+visualization runs through `python -m w8_biayn.modal_aider_visualization`,
+keeps reports under `reports/<run-id>/`, and labels prefix-only evidence as
+partial diagnostics rather than final pass@8.
 Treat both paid acknowledgements as launch safety gates, not immutable result
 identity: a reviewed no-spend plan may enable them for the first paid invocation
 without becoming a resume/config mismatch.
@@ -607,3 +610,47 @@ server image. Server module hydration must tolerate its absence, while local
 orchestration must require the reviewed lock before preflight or paid work.
 Persist imported proof lineage in the new run and never import the source
 smoke's model responses or mutate the completed source run.
+
+## Optional Side Benchmark: Agentic GLM Multi-SWE C++ On Modal
+
+Question:
+
+> How does exact-revision base GLM-4.7-Flash perform on the locked 50 C++
+> Multi-SWE mini tasks when one bounded SWE-agent trajectory may inspect and
+> edit sanitized source, while the unchanged fresh Modal grader judges a
+> trusted file-state diff?
+
+The separately named source lane and offline contracts are implemented under
+examples/modal/glm47_flash_agentic_multi_swe_cpp/. Phase one remains exactly
+one deterministic trajectory per task. Safe step/tool receipts are incremental,
+and full repeats the fixed smoke with a release/re-admission boundary before its
+50-task stage. It is not SLIME, PIE training, Aider, pass@8, or an official
+leaderboard result.
+
+Agentic run IDs are limited to 3-40 lowercase letters, digits, or hyphens. This
+admits the documented timestamped plan/smoke/full names while keeping the
+derived Modal App name at most 62 characters.
+
+Decision gate: plan, config, exact SWE-agent/dependency identity, sanitizer and
+finalizer, Modal adapter, all-50 oracle/workspace admission, trajectory resume,
+release-before-grading orchestration, artifact validation, wrapper, tests, and
+runbook are complete. Paid CPU canaries, real SGLang admission, one trajectory,
+the fixed two-task smoke, and the stopped-App full receipt remain pending. Full
+must not launch before a clean smoke.
+
+All model-controlled commands stay in unprivileged, network-blocked,
+secret-free, Volume-free Agent Sandboxes. Trusted code removes hidden assets
+and original history, owns the baseline, rejects unsafe final trees, and
+synthesizes a patch that must apply to a pristine reconstruction. Exact empty
+directories for uninitialized gitlinks remain present and receipt-bound;
+populated submodules must match their indexed commits. The
+workspace compile/output canary uses the exact image's default C++ mode for
+legacy-image compatibility and does not alter task grader commands. The server
+holds one H100!:4 replica only while trajectories run, then releases it before
+separate fresh-Sandbox grading.
+
+Never publish a score until all 50 trajectory, patch, and record units are
+complete; all 50 exact oracle and workspace proofs pass; summaries recompute;
+local and remote artifacts reconcile byte-for-byte; and the control plane
+proves the App stopped. The canonical paid ladder and exports live only in the
+lane README.
