@@ -444,6 +444,21 @@ Official result directories retain per-task `.aider.results.json` and
 repo-owned `stats.json` parser only preserves fields printed by Aider; it does
 not recalculate pass rates.
 
+The read-only offline visualization report is implemented as:
+
+```bash
+uv run python -m w8_biayn.modal_aider_visualization \
+  --run-root .w8-biayn/modal/glm47-flash-aider-polyglot-cpp/runs/<run-id> \
+  --output-root .w8-biayn/modal/glm47-flash-aider-polyglot-cpp/reports/<run-id>
+```
+
+Add `--allow-partial` only for a validated contiguous prefix diagnostic. The
+visualizer follows
+`docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_VISUALIZATION_SPEC.md`, recomputes
+admitted rows before rendering, never reads credentials, and writes generated
+figures under the separate ignored `reports/<run-id>/` tree rather than inside
+canonical `runs/<run-id>/` evidence.
+
 All state under `.w8-biayn/` is ignored. Never commit results, histories,
 generated settings, model weights, tokens, or receipts.
 
