@@ -82,6 +82,9 @@ def test_moonlight_cpp_perf_runner_has_base_sft_grpo_slime_modes() -> None:
     assert "--num-rollout 0" in text
     assert "--eval-prompt-data cpp_perf" in text
     assert "--rollout-function-path slime.rollout.sft_rollout.generate_rollout" in text
+    assert 'SFT_NUM_ROLLOUT="${SLIME_SFT_NUM_ROLLOUT:-1}"' in text
+    assert '--num-rollout "${SFT_NUM_ROLLOUT}"' in text
+    assert "sft_num_rollout=${SFT_NUM_ROLLOUT}" in text
     assert "--loss-type sft_loss" in text
     assert "--disable-compute-advantages-and-returns" in text
     assert 'SFT_START_ROLLOUT_ID="${SLIME_SFT_START_ROLLOUT_ID:-0}"' in text

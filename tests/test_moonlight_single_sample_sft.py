@@ -100,6 +100,8 @@ def test_single_sample_sft_wrapper_uses_non_lora_moonlight_lane() -> None:
     assert '--prompt-data "${DATA_DIR}/sft/train.jsonl"' in runner
     assert "--input-key messages" in runner
     assert "--metadata-key metadata" in runner
+    assert 'SFT_NUM_ROLLOUT="${SLIME_SFT_NUM_ROLLOUT:-1}"' in runner
+    assert '--num-rollout "${SFT_NUM_ROLLOUT}"' in runner
     assert "--loss-type sft_loss" in runner
     assert "--debug-train-only" in runner
 
@@ -111,3 +113,4 @@ def test_single_sample_docs_use_valid_moonlight_sft_global_batch() -> None:
         assert "SLIME_SFT_GLOBAL_BATCH_SIZE=1" not in text
         assert "SLIME_SFT_ROLLOUT_BATCH_SIZE=2" in text
         assert "SLIME_SFT_GLOBAL_BATCH_SIZE=2" in text
+        assert "SLIME_SFT_NUM_ROLLOUT=1" in text

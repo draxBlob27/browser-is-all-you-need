@@ -83,6 +83,7 @@ GRPO_SKIP_FINAL_TRAIN_SLEEP="${SLIME_GRPO_SKIP_FINAL_TRAIN_SLEEP:-1}"
 FINAL_TRAIN_SLEEP_SKIP="${SLIME_FINAL_TRAIN_SLEEP_SKIP:-0}"
 
 SFT_NUM_EPOCH="${SLIME_SFT_NUM_EPOCH:-1}"
+SFT_NUM_ROLLOUT="${SLIME_SFT_NUM_ROLLOUT:-1}"
 SFT_ROLLOUT_BATCH_SIZE="${SLIME_SFT_ROLLOUT_BATCH_SIZE:-2}"
 SFT_GLOBAL_BATCH_SIZE="${SLIME_SFT_GLOBAL_BATCH_SIZE:-2}"
 SFT_LR="${SLIME_SFT_LR:-1e-5}"
@@ -627,6 +628,7 @@ stage_args() {
         --input-key messages
         --metadata-key metadata
         --rollout-shuffle
+        --num-rollout "${SFT_NUM_ROLLOUT}"
         --num-epoch "${SFT_NUM_EPOCH}"
         --start-rollout-id "${SFT_START_ROLLOUT_ID}"
         --rollout-batch-size "${SFT_ROLLOUT_BATCH_SIZE}"
@@ -876,6 +878,7 @@ sft_hf_save_template=${SFT_HF_SAVE_TEMPLATE}
 grpo_hf_save_template=${GRPO_HF_SAVE_TEMPLATE}
 sft_hf_checkpoint=${SFT_HF_CHECKPOINT}
 grpo_hf_checkpoint=${GRPO_HF_CHECKPOINT}
+sft_num_rollout=${SFT_NUM_ROLLOUT}
 sft_skip_final_train_sleep=${SFT_SKIP_FINAL_TRAIN_SLEEP}
 grpo_skip_weight_update=${GRPO_SKIP_WEIGHT_UPDATE}
 grpo_load_weights_only=${GRPO_LOAD_WEIGHTS_ONLY}
