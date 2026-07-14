@@ -14,6 +14,12 @@ EXAMPLE_ROOT = Path("examples/slime/moonlight_cpp_perf")
 PREPARE_SCRIPT = EXAMPLE_ROOT / "prepare_single_sample_sft_data.sh"
 SFT_SCRIPT = EXAMPLE_ROOT / "sft.sh"
 RUNNER = EXAMPLE_ROOT / "moonlight_cpp_perf.sh"
+DOCS = (
+    Path("docs/moonlight_single_sample_sft.md"),
+    Path("examples/slime/moonlight_cpp_perf/README.md"),
+    Path("README.md"),
+    Path("ROADMAP.md"),
+)
 
 
 def test_single_sample_builder_writes_expected_manifest_and_jsonl(tmp_path: Path) -> None:
@@ -96,3 +102,12 @@ def test_single_sample_sft_wrapper_uses_non_lora_moonlight_lane() -> None:
     assert "--metadata-key metadata" in runner
     assert "--loss-type sft_loss" in runner
     assert "--debug-train-only" in runner
+
+
+def test_single_sample_docs_use_valid_moonlight_sft_global_batch() -> None:
+    for path in DOCS:
+        text = path.read_text(encoding="utf-8")
+        assert "SLIME_SFT_ROLLOUT_BATCH_SIZE=1" not in text
+        assert "SLIME_SFT_GLOBAL_BATCH_SIZE=1" not in text
+        assert "SLIME_SFT_ROLLOUT_BATCH_SIZE=2" in text
+        assert "SLIME_SFT_GLOBAL_BATCH_SIZE=2" in text

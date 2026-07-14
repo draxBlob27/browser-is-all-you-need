@@ -134,8 +134,8 @@ export SLIME_RUN_ID=moonlight-aider-whole-single-sft
 export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"
 export SLIME_CPP_AUTO_PREPARE_DATA=0
 
-export SLIME_SFT_ROLLOUT_BATCH_SIZE=1
-export SLIME_SFT_GLOBAL_BATCH_SIZE=1
+export SLIME_SFT_ROLLOUT_BATCH_SIZE=2
+export SLIME_SFT_GLOBAL_BATCH_SIZE=2
 export SLIME_SFT_NUM_EPOCH=1
 export SLIME_SAVE_INTERVAL=1
 
