@@ -405,9 +405,10 @@ The lane writes local state under
 
 ### Moonlight Single-Sample Aider Whole SFT
 
-For the format-discipline smoke in
+For the compact Aider-like single-sample smoke in
 `docs/moonlight_single_sample_sft.md`, build the one-row Aider `whole` dataset
-and run only the existing non-LoRA Moonlight SFT stage. This is not PIE
+and run only the existing non-LoRA Moonlight SFT stage. The row includes task
+text plus complete pre-edit `leap.h` and `leap.cpp` contents. This is not PIE
 performance training, GRPO, or benchmark evidence.
 
 From the host:

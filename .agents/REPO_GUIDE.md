@@ -186,8 +186,8 @@ bash examples/slime/moonlight_cpp_perf/compare.sh
 ```
 
 Optional Moonlight single-sample Aider `whole` format SFT smoke. This is a
-format-discipline check only, not PIE training evidence. Build the one-row data
-with:
+compact Aider-like task-text-plus-starter-files check only, not PIE training
+evidence. Build the one-row data with:
 
 ```bash
 uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \

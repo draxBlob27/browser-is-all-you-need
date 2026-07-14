@@ -17,8 +17,9 @@ service.
 1. `README.md`: this runbook.
 2. `moonlight_cpp_perf.sh`: shared stage runner and all defaults.
 3. `prepare_data.sh`: builds SLIME JSONL files from validated PIE task JSON.
-4. `prepare_single_sample_sft_data.sh`: optional one-row Aider `whole` format
-   SFT smoke data writer; it is not part of the PIE uplift sequence.
+4. `prepare_single_sample_sft_data.sh`: optional one-row compact
+   Aider-like `whole` format SFT smoke data writer; it is not part of the PIE
+   uplift sequence.
 5. `eval_base.sh`: runs base eval and writes `base.records.jsonl` /
    `base.summary.json` using SLIME rollout-only mode.
 6. `sft.sh`: runs SLIME SFT and writes Megatron plus HuggingFace checkpoints.
@@ -106,8 +107,9 @@ stable W&B run id: `${SLIME_RUN_ID}-base-eval`, `${SLIME_RUN_ID}-sft`,
 ## Single-Sample Aider Whole SFT Smoke
 
 This optional smoke trains the same non-LoRA Moonlight SFT stage on one
-Aider `whole` edit-format chat sample from
-`docs/single_sample_for_sft.md`. It is a format-discipline experiment only:
+compact Aider-like `whole` edit-format chat sample from
+`docs/single_sample_for_sft.md`. The prompt includes task text plus complete
+pre-edit `leap.h` and `leap.cpp` contents. It is a single-sample experiment only:
 do not use it as PIE uplift evidence, do not run GRPO or the PIE evaluator as
 the proof, and do not use the LoRA or GLM lanes.
 

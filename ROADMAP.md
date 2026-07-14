@@ -489,7 +489,7 @@ loadable by the lane's SGLang path. The LoRA lane checks the active
 SLIME/Megatron help surface before SFT/GRPO so rank-16 LoRA arguments cannot be
 silently ignored.
 
-Optional Moonlight format-discipline smoke:
+Optional Moonlight compact Aider-like single-sample smoke:
 
 ```bash
 uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \
@@ -510,7 +510,8 @@ export SLIME_SAVE_INTERVAL=1
 bash examples/slime/moonlight_cpp_perf/sft.sh
 ```
 
-This single-sample Aider `whole` edit-format SFT smoke does not run
+This single-sample Aider `whole` edit-format SFT smoke uses task text
+plus complete pre-edit `leap.h` and `leap.cpp` contents. It does not run
 `prepare_data.sh`, PIE eval, GRPO, GLM, or LoRA, and it must not be reported as
 uplift or benchmark evidence.
 

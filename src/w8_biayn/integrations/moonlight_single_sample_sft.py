@@ -12,11 +12,42 @@ from typing import Sequence
 TASK_ID = "aider-whole-format-001"
 DEFAULT_OUT = Path(".w8-biayn/data/aider-whole-single")
 
-USER_PROMPT = (
-    "Use whole edit format. Modify the supplied files `leap.cpp` and `leap.h` to "
-    "implement a leap-year checker. Return only complete file listings. Each fenced "
-    "block must be preceded by its filename."
-)
+USER_PROMPT = """Use Aider whole edit format. Modify the supplied editable files to solve the task. Return only complete file listings. Each fenced block must be preceded by the bare filename on the line immediately before the fence. Do not return a diff. Do not include test files, reference example files, or explanatory prose in the answer.
+
+# Introduction
+
+Leap years keep the calendar year synchronized with the astronomical year.
+
+# Instructions
+
+Implement a leap-year checker.
+
+A leap year is evenly divisible by 4, except years evenly divisible by 100 are not leap years unless they are also evenly divisible by 400.
+
+# Supplied editable files
+
+leap.h
+```cpp
+#if !defined(LEAP_H)
+#define LEAP_H
+
+namespace leap {
+
+}  // namespace leap
+
+#endif
+```
+
+leap.cpp
+```cpp
+#include "leap.h"
+
+namespace leap {
+
+}  // namespace leap
+```
+
+Do not change the names of existing functions, classes, namespaces, or files, as they may be referenced from unit tests. Only use standard libraries unless the starter task already requires a provided dependency."""
 
 ASSISTANT_RESPONSE = """leap.h
 ```
@@ -58,7 +89,7 @@ TRAIN_ROW = {
         "subset": "train",
         "format": "aider-whole",
         "model_family": "moonlight",
-        "purpose": "single-sample-sft-smoke",
+        "purpose": "aider-like-single-sample-sft",
     },
 }
 

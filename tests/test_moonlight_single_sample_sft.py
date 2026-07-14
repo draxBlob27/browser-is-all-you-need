@@ -49,9 +49,26 @@ def test_single_sample_builder_writes_expected_manifest_and_jsonl(tmp_path: Path
         "subset": "train",
         "format": "aider-whole",
         "model_family": "moonlight",
-        "purpose": "single-sample-sft-smoke",
+        "purpose": "aider-like-single-sample-sft",
     }
     assert [message["role"] for message in row["messages"]] == ["user", "assistant"]
+
+
+def test_single_sample_user_message_is_aider_like_self_contained_prompt() -> None:
+    prompt = moonlight_single_sample_sft.TRAIN_ROW["messages"][0]["content"]
+
+    assert prompt.startswith("Use Aider whole edit format.")
+    assert "# Introduction" in prompt
+    assert "Leap years keep the calendar year synchronized" in prompt
+    assert "# Instructions" in prompt
+    assert "Implement a leap-year checker." in prompt
+    assert "A leap year is evenly divisible by 4" in prompt
+    assert "# Supplied editable files" in prompt
+    assert "leap.h\n```cpp\n#if !defined(LEAP_H)" in prompt
+    assert "leap.cpp\n```cpp\n#include \"leap.h\"" in prompt
+    assert "Do not return a diff." in prompt
+    assert "Do not include test files, reference example files" in prompt
+    assert ".meta/example" not in prompt
 
 
 def test_single_sample_assistant_message_is_aider_whole_format() -> None:

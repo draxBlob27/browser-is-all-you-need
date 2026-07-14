@@ -70,11 +70,13 @@ Create:
 ```
 
 `sft/train.jsonl` must contain exactly one JSON object on one line. The
-`messages` content should come from `single_sample_for_sft.md`; add stable
-metadata so the SLIME SFT loader has the expected keys:
+`messages` content comes from `single_sample_for_sft.md`: the user turn is
+compact but Aider-like, with task text plus complete pre-edit `leap.h` and
+`leap.cpp` contents. Add stable metadata so the SLIME SFT loader has the
+expected keys:
 
 ```json
-{"messages":[{"role":"user","content":"Use whole edit format. Modify the supplied files `leap.cpp` and `leap.h` to implement a leap-year checker. Return only complete file listings. Each fenced block must be preceded by its filename."},{"role":"assistant","content":"leap.h\n```\n#if !defined(LEAP_H)\n#define LEAP_H\n\nnamespace leap {\n\nbool is_leap_year(int year);\n\n}  // namespace leap\n\n#endif\n```\n\nleap.cpp\n```\n#include \"leap.h\"\n\nnamespace leap {\n\nbool is_leap_year(int year) {\n    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);\n}\n\n}  // namespace leap\n```"}],"label":"aider-whole-format-001","task_id":"aider-whole-format-001","metadata":{"task_id":"aider-whole-format-001","source":"single_sample_for_sft.md","subset":"train","format":"aider-whole","model_family":"moonlight","purpose":"single-sample-sft-smoke"}}
+{"label":"aider-whole-format-001","messages":[{"content":"Use Aider whole edit format. Modify the supplied editable files to solve the task. Return only complete file listings. Each fenced block must be preceded by the bare filename on the line immediately before the fence. Do not return a diff. Do not include test files, reference example files, or explanatory prose in the answer.\n\n# Introduction\n\nLeap years keep the calendar year synchronized with the astronomical year.\n\n# Instructions\n\nImplement a leap-year checker.\n\nA leap year is evenly divisible by 4, except years evenly divisible by 100 are not leap years unless they are also evenly divisible by 400.\n\n# Supplied editable files\n\nleap.h\n```cpp\n#if !defined(LEAP_H)\n#define LEAP_H\n\nnamespace leap {\n\n}  // namespace leap\n\n#endif\n```\n\nleap.cpp\n```cpp\n#include \"leap.h\"\n\nnamespace leap {\n\n}  // namespace leap\n```\n\nDo not change the names of existing functions, classes, namespaces, or files, as they may be referenced from unit tests. Only use standard libraries unless the starter task already requires a provided dependency.","role":"user"},{"content":"leap.h\n```\n#if !defined(LEAP_H)\n#define LEAP_H\n\nnamespace leap {\n\nbool is_leap_year(int year);\n\n}  // namespace leap\n\n#endif\n```\n\nleap.cpp\n```\n#include \"leap.h\"\n\nnamespace leap {\n\nbool is_leap_year(int year) {\n    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);\n}\n\n}  // namespace leap\n```","role":"assistant"}],"metadata":{"format":"aider-whole","model_family":"moonlight","purpose":"aider-like-single-sample-sft","source":"single_sample_for_sft.md","subset":"train","task_id":"aider-whole-format-001"},"task_id":"aider-whole-format-001"}
 ```
 
 `manifest.json` can be minimal, but it should make the custom dataset explicit:
