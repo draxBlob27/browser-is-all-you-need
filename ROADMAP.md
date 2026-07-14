@@ -22,6 +22,8 @@ preserved, then measure speed.
 - SGLang: the rollout/inference backend used by the SLIME lanes.
 - Moonlight: the active Moonlight-16B-A3B model lane.
 - GLM: the active GLM-4.7-Flash model lane.
+- Primary SFT dataset pipeline: the design-only, multi-task Aider-style C++
+  data curation contract in `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`.
 - Polyglot: optional Aider Polyglot C++ base-eval benchmark, separate from the PIE training proof.
 - Multi-SWE: optional C++ issue-resolution base-eval benchmark, separate from the PIE training proof.
 - Docker sandbox: the compile/test/runtime harness for C++ reward execution.
@@ -225,6 +227,68 @@ The underlying bridge is `w8_biayn.integrations.slime_cpp_perf`. It writes
 SLIME JSONL and task copies while reusing the same prompt and reward contract.
 
 Decision gate: inspect the generated manifest and sample rows before training.
+
+## Primary SFT Dataset Generation Pipeline (Design Only)
+
+The primary multi-task Aider-style SFT data contract is
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. It is separate from PIE
+`v0 -> v1` construction and from the optional benchmark lanes. No implementation
+commands exist yet.
+
+The initial profile targets 96 total admitted roots:
+
+- 72 train roots and therefore 72 SFT rows;
+- 12 validation roots;
+- 12 internal-test roots;
+- an exact frozen inventory of 75 non-benchmark Exercism candidates: 60
+  practice roots and 15 concept roots;
+- at least 21 human-approved LLM-assisted roots, with extra LLM backfill for
+  any rejected or category-deferred source candidate;
+- 16 roots in each of the six stable Aider C++ topic groups;
+- zero overlap with the 26 official Aider Polyglot C++ roots or related copies.
+
+Before any paid curator call, complete mechanical admission/classification of
+the frozen source inventory, compute exact missing total/category/split cells,
+and require candidate capacity of at least three times the resulting required
+LLM admissions. Do not rely on a fixed candidate-count assumption.
+
+This profile preserves the pinned Exercism C++17 dialect; it does not inherit
+the separate PIE C++20 claim. Source admission compiles only the exercise
+target, discovers and runs Catch directly without CTest/default-`ALL` ambiguity,
+and repeats the passing reference under a fresh ASan/UBSan build. Normal and
+sanitizer runs use the explicit `Unix Makefiles` generator, locked compiler,
+enforced sandbox policy, and separate positive discovery with matching counts.
+Shared Catch support is stored and hashed once. LLM tasks use the repo-owned
+C++17
+CMake/Catch scaffold and cannot supply executable build metadata.
+
+Tests, references, and Docker receipts are required to admit labels but stay
+hidden from prompts. Contamination compares semantic task roles while excluding
+only hash-allowlisted shared support/scaffold boilerplate. Candidate admission
+and dataset split/release use separate state machines; late final-row failures
+invalidate the split and trigger backfill before exact release review. Mutable
+run state remains in a sibling `.state/` directory while the ready root is
+immutable.
+
+The V1 automation boundary is explicit: discovery, generation, Docker gates,
+rendering, screening, and reconciliation are automatic, while the source
+inventory, LLM usage terms, every LLM-assisted task, every contamination
+near-match, the final split, and the exact rendered release package require
+scope-specific fingerprint-bound human decisions. This is a semi-autonomous
+pilot, not an unattended release process.
+
+Decision gate: schema-v2 `readiness.json` must bind the exact config, source,
+benchmark, split, review, admission, support, tokenizer policy, and train-row
+hashes plus the per-row token/mask ledger and exact release-review subject.
+Rows are final-answer-only raw message lists. The locked repo adapter forwards
+the exact GLM template kwargs with thinking disabled and applies explicit qwen
+assistant-only loss; dataset-loader chat templating is forbidden. A sanitized
+internal-research export removes all private assets but retains recomputable
+token evidence. The producer runs full verification; the GLM consumer runs
+`verify-export` on only the sanitized bytes, pins the exact model/tokenizer/
+adapter identities, rejects template/token/mask/sequence drift, and disables
+auto-prepare before SFT. Readiness still requires no target-model responses,
+repair rows, training, benchmark run, or uplift.
 
 ## Stage 3: Baseline The Base Model
 
@@ -490,6 +554,10 @@ SLIME/Megatron help surface before SFT/GRPO so rank-16 LoRA arguments cannot be
 silently ignored.
 
 Optional Moonlight compact Aider-like single-sample smoke:
+
+This is a seed/plumbing fixture for the primary pipeline design, not the
+multi-task pipeline itself. Read
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` before extending it.
 
 ```bash
 uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \

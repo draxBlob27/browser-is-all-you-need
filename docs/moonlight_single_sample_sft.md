@@ -2,6 +2,22 @@
 
 ## Goal
 
+This is a subordinate plumbing handoff. The implementation contract for the
+multi-task primary SFT dataset generation pipeline is
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. Do not scale this hard-coded
+one-row writer into a parallel pipeline or treat this smoke as the production
+dataset builder.
+
+The one-row artifact retains its historical top-level filename and unlabeled
+assistant-fence representation. The primary V1.3 pipeline instead renders
+exact canonical POSIX relative paths with `cpp` fences and verifies application
+with the same Docker grader. Its 96-root pilot starts from 75 frozen Exercism
+candidates, requires at least 21 human-approved LLM-assisted admissions, and is
+semi-autonomous. Its production GLM handoff uses raw messages through the
+kwargs-aware repo adapter, binds per-row token/mask evidence, and requires
+consumer `verify-export`; this smoke proves none of those dataset-readiness or
+consumer-admission gates.
+
 Implement a local supervised fine-tuning smoke that trains
 `moonshotai/Moonlight-16B-A3B-Instruct` on the single Aider `whole` edit-format
 sample documented in `single_sample_for_sft.md`.
@@ -258,6 +274,18 @@ The probe writes:
 Open `response.txt` to inspect the generated answer. `summary.json` records
 basic whole-format diagnostics, including fence count and whether each opening
 fence had a filename immediately before it.
+
+Compile and test the saved held-out `two-fer` response with the local grader:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/grade_single_sample_sft_response.sh
+```
+
+The grader parses the strict whole-file blocks, materializes `two_fer.h` and
+`two_fer.cpp`, compiles them with the local C++20 test, and writes
+`grade/two-fer/summary.json` plus compile and test logs beneath the probe
+directory. This remains a one-sample plumbing check, not evidence for the
+primary SFT dataset pipeline.
 
 ## Failure Modes To Check
 

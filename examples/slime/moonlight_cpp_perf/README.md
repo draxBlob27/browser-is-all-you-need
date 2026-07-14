@@ -12,6 +12,21 @@ Docker sandbox through `w8_biayn.cpp_perf.reward.compute_reward`; in other
 words, the reward dependency is a local Docker sandbox, not an external
 service.
 
+The separate multi-task primary SFT dataset generation pipeline is specified
+in `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` and is not yet
+implemented. The one-row Aider helpers in this lane are seed fixtures for that
+design, not a production-scale dataset builder.
+
+The V1.3 primary design is an exact 96-root 72/12/12 pilot, beginning with 75
+frozen non-benchmark Exercism candidates and requiring at least 21
+human-approved LLM-assisted admissions. It uses exact POSIX relative paths and
+`cpp` fences in its deterministic renderer. The historical one-row helpers may
+use a simpler top-level representation and do not satisfy primary-pipeline
+readiness. They also do not prove the V1.3 exact grader identity, final release
+review/rollback, per-row token/mask ledger, raw-message kwargs-aware adapter, or
+consumer `verify-export` contract. Do not route a primary bundle through these
+one-row preparation helpers.
+
 ## Files To Read In Order
 
 1. `README.md`: this runbook.
@@ -209,6 +224,16 @@ bash examples/slime/moonlight_cpp_perf/probe_single_sample_sft_response.sh \
 
 The generated answer is saved as
 `.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/probes/aider-whole-heldout-two-fer/response.txt`.
+
+Compile and test the saved held-out response:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/grade_single_sample_sft_response.sh
+```
+
+The strict whole-file parser and local C++20 test write the result to
+`grade/two-fer/summary.json` beneath that probe directory, alongside compiler
+and test logs.
 
 ## Smallest Honest 4x A100 Sequence
 

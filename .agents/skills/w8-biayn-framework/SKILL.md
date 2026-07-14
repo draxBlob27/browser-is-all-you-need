@@ -1,6 +1,6 @@
 ---
 name: w8-biayn-framework
-description: "Maintain, extend, test, document, and operate the w8-biayn C++ performance-RL pipeline now focused on SLIME-based Moonlight and GLM training: PIE task setup, SLIME JSONL conversion, Megatron/SGLang launch wrappers, Docker C++ rewards, local run receipts, and held-out uplift evaluation. Use for work in this repo, especially when touching SLIME, Moonlight, GLM, PIE data, C++ reward/eval, repo guidance, or legacy SkyRL/rLLM migration boundaries."
+description: "Maintain, extend, test, document, and operate the w8-biayn C++ performance-RL and primary Aider-style SFT dataset pipelines: SLIME Moonlight/GLM training, PIE task setup, SFT JSONL curation, Megatron/SGLang launch wrappers, Docker C++ rewards, receipts, and held-out evaluation. Use for work in this repo, especially SLIME, Moonlight, GLM, PIE, Aider SFT data, C++ reward/eval, repo guidance, or legacy boundaries."
 ---
 
 # w8-biayn Framework
@@ -15,7 +15,9 @@ Read these before changing behavior:
 1. `AGENTS.md`
 2. `README.md`
 3. `ROADMAP.md`
-4. Relevant code under `src/w8_biayn/`
+4. `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` for Aider-style SFT
+   dataset work
+5. Relevant code under `src/w8_biayn/`
 
 If `/tmp/ENGINEERING_SPEC_v2_cpp_only.md` exists, it may provide historical
 context, but checked-in guidance is the active source of truth.
@@ -47,22 +49,25 @@ Allowed upstream use:
 - SuperCoder: schema, correctness, and eval lessons only.
 - SkyRL/rLLM: legacy reference only.
 
-Use `uv run w8-biayn upstreams clone` for pinned upstream copies under `.cache/upstreams/`. Temporary study clones may live under `/tmp`; do not vendor upstream repos or data. Experimental sidecar frameworks such as SLIME may be pinned for exploration only when explicitly requested; they must not replace the active SkyRL/rLLM C++ training path without an explicit project-phase change. When working on the SLIME sidecar lane, prefer the repo-owned `w8-biayn slime setup` Docker-first flow instead of trying to force SLIME runtime dependencies into the main project virtualenv. For an explicit SLIME C++ PIE run, build prompt JSONL with `w8-biayn data slime build` and use the separate `examples/slime/cpp_perf/` launcher and `generate_with_cpp_perf.py` reward hook. For the text-only SLIME bring-up path, prefer the repo-owned DAPO-Math prep script plus `examples/slime/multi_agent/run_multi_agent_text.sh` wrapper instead of editing the upstream example directly.
-
 Use `uv run w8-biayn upstreams clone` for pinned upstream copies under
 `.cache/upstreams/`. Temporary study clones may live under `/tmp`; do not vendor
 upstream repos or data.
 
+SLIME, Megatron, and SGLang are the active training stack. Enter the generated
+SLIME container through `.w8-biayn/slime/run-container.sh` and use the
+repo-owned lane wrappers. SkyRL/rLLM paths are legacy reference only and must
+not be restored as the active path without an explicit rollback request.
+
 ## Active Repository Map
 
+- Primary Aider-style SFT dataset specification:
+  `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
 - Bootstrap: `scripts/bootstrap.sh`
 - CLI: `src/w8_biayn/cli.py`
 - Dataset setup and manifests: `src/w8_biayn/cpp_perf/data.py`
 - Coverage measurement: `src/w8_biayn/cpp_perf/coverage.py`
 - PIE parsing/task construction: `src/w8_biayn/cpp_perf/pie.py`
-- SkyRL dataset conversion: `src/w8_biayn/cpp_perf/skyrl_dataset.py`
 - SLIME dataset conversion: `src/w8_biayn/cpp_perf/slime_dataset.py`
-- Eval aggregation: `src/w8_biayn/cpp_perf/eval.py`
 - Contest-style output judging: `src/w8_biayn/cpp_perf/judge.py`
 - Task schema: `src/w8_biayn/cpp_perf/schema.py`
 - Prompt/SFT helpers: `src/w8_biayn/cpp_perf/prompts.py`
@@ -97,13 +102,10 @@ upstream repos or data.
 - ReTool lane: `examples/slime/retool/`
 - Moonlight MoE smoke: `examples/slime/moonlight_moe_smoke/`
 
-Legacy SkyRL/rLLM/GCP control-plane files include
-`src/w8_biayn/cpp_perf/skyrl_dataset.py`, `src/w8_biayn/sky_config.py`,
-`src/w8_biayn/run_status.py`, `src/w8_biayn/mlflow_metrics.py`,
-`src/w8_biayn/grpo_readiness.py`, `src/w8_biayn/integrations/skyrl_*.py`,
-`src/w8_biayn/integrations/cpp_perf_env.py`, and
-`src/w8_biayn/integrations/cpp_eval_main.py`. Leave them alone unless the task
-explicitly asks for legacy work.
+The old SkyRL/rLLM/GCP control-plane modules were removed from this branch and
+remain available in git history. Thin CLI shims may still report that a legacy
+surface is unavailable. Do not recreate or extend those modules unless the
+task explicitly asks for rollback or legacy compatibility work.
 
 ## Required User Path
 
@@ -215,6 +217,52 @@ bash examples/slime/moonlight_cpp_perf/grpo.sh
 bash examples/slime/moonlight_cpp_perf/eval_grpo.sh
 bash examples/slime/moonlight_cpp_perf/compare.sh
 ```
+
+The primary SFT dataset generation pipeline is specified in
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. It is design-only until its
+future `w8-biayn data aider-sft ...` CLI, canonical task schema, oracle gates,
+splitter, LLM curator/scaffold, renderer, sanitized exporter, and verifier
+exist. The pilot target is 96 admitted roots (72/12/12), starting from exactly
+75 frozen non-benchmark Exercism candidates and admitting at least 21
+human-approved LLM-assisted roots, with LLM backfill for source
+rejections/category deferrals and zero overlap with the 26 official Aider C++
+roots.
+
+Complete mechanical source admission/classification before any paid LLM call,
+derive the exact missing total/category/split cells, and require candidate
+capacity of at least three times required LLM admissions. Do not carry forward
+the obsolete fixed candidate cap.
+
+For this pipeline, preserve the source grader's C++17 dialect. Compile the
+exercise target separately, discover/run Catch without CTest/default-`ALL`
+ambiguity, and run a fresh locked sanitizer build. Normal and sanitizer
+configure must pass the explicit `Unix Makefiles` generator and locked compiler
+inside the enforced fingerprinted sandbox; sanitizer admission has its own
+positive discovery and must match the normal count. Reuse repeated Catch files
+through one content-addressed support bundle. LLM tasks use the repo-owned
+C++17 CMake/Catch scaffold and cannot emit build commands. Contamination is
+role-aware: allowlisted support/scaffold matches are excluded, semantic task
+matches are not.
+
+V1 is semi-autonomous: mechanical stages may run automatically, but source
+inventory, LLM usage terms, every LLM admission, contamination near-matches,
+the final split, and the exact rendered release package require scope-specific
+fingerprint-bound human approval. Keep candidate states separate from dataset
+split/release. A late rendered-row/token/contamination failure invalidates the
+split and returns to quota-preserving backfill before `dataset_release`. Mutable
+state and locks live in the sibling `.state/` directory; the ready root is
+immutable. Readiness uses mandatory schema-v2 bindings for the token ledger and
+release-review subject.
+
+Rows reach SLIME as final-answer-only raw message lists. The thin repo adapter
+forwards exact template kwargs with thinking disabled and applies explicit qwen
+assistant loss; dataset-loader `--apply-chat-template` is forbidden. Export the
+private-asset-free internal bundle with recomputable token/mask records. The
+producer runs full `verify`; the lane runs `verify-export` using only sanitized
+bytes, pins exact model/tokenizer/template/adapter identities, rejects token/
+mask/sequence drift, and disables auto-prepare. Readiness requires no
+target-model responses, repair rows, training, benchmarking, or uplift. Treat
+the current one-row helpers below as seed fixtures, not the primary pipeline.
 
 Optional Moonlight single-sample Aider `whole` format SFT smoke. This is a
 compact Aider-like task-text-plus-starter-files check only, not PIE training
@@ -654,7 +702,9 @@ launch flow, benchmark protocol, or supported active pipelines change, update:
 2. `ROADMAP.md`
 3. `.agents/REPO_GUIDE.md`
 4. this skill
-5. tests when command behavior changes
+5. `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` when its SFT pipeline
+   contract is affected
+6. tests when command behavior changes
 
 ## Validation
 

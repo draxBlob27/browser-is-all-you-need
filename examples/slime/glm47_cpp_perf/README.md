@@ -5,6 +5,37 @@ model to `zai-org/GLM-4.7-Flash` and uses the pinned SLIME GLM-4.7 30B-A3B
 Megatron profile. It keeps the same PIE C++ data, local Docker reward harness,
 stage order, evaluation aggregation, and comparison artifacts.
 
+The design for the separate, multi-task primary SFT dataset generation
+pipeline for Aider-style C++ rows is
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. It is not implemented yet.
+This lane is the intended SLIME SFT consumer once that bundle is admitted; do
+not infer that the future `w8-biayn data aider-sft ...` commands already exist.
+The V1.3 design produces exactly 72 training rows from a 96-root 72/12/12
+split, starts from 75 frozen Exercism candidates, and requires at least 21
+human-approved LLM-assisted roots. Only a ready bundle's sanitized
+`sft/train.jsonl`, `sft/token-records.jsonl`, redacted lock, and export receipt
+may be handed to this lane; private graders, references, candidates, and
+validation/test answers are not model inputs.
+
+The future producer must first run full network-free verification on the
+immutable schema-v2 ready root, then create the sanitized `slime-sft` export.
+This lane must run `w8-biayn data aider-sft verify-export` using only that bundle
+and set `SLIME_CPP_AUTO_PREPARE_DATA=0`. The export contains `sft/train.jsonl`
+plus its per-row token/mask ledger; private graders, references, and evaluator
+indexes remain absent.
+
+The export and lane must agree on the exact GLM model/tokenizer revision (or
+locked equivalent local hashes), chat-template hash and kwargs, required
+disabled-thinking policy, repo-owned `w8-aider-sft-mask-v1` rollout adapter,
+explicit `qwen` loss mask, and 4096-token sequence limit. Raw `messages` must
+reach that adapter, which forwards the exact kwargs to tokenizer calls;
+dataset-loader `--apply-chat-template` is forbidden because it destroys the
+message-list boundary before the mask path. Any Hugging Face download must pass
+the frozen revision. The current manifest-only guard, floating model download,
+and stock rollout/mask path that does not forward the locked kwargs are
+insufficient; they are future implementation work, not behavior provided
+today.
+
 It does not use E2B or a hosted sandbox. C++ scoring uses the repo's local
 Docker sandbox through `w8_biayn.cpp_perf.reward.compute_reward`.
 
@@ -169,7 +200,7 @@ model stack requires it:
 - SLIME model args: `scripts/models/glm4.7-30B-A3B.sh`
 - GPUs: `8`
 - tensor/pipeline/context/expert parallelism: TP `2`, PP `2`, CP `2`, EP `8`
-- sequence length: `2048`
+- sequence length: `4096`
 - dynamic batching: on, `SLIME_MAX_TOKENS_PER_GPU=8192`
 - SGLang memory fraction: `0.70`
 - SGLang DP attention and DP LM head: on

@@ -380,6 +380,68 @@ SLIME_DOCKER_MEMLOCK_ULIMIT=1 .w8-biayn/slime/run-container.sh
 It also raises the in-container open-file soft limit to
 `SLIME_NOFILE_SOFT_LIMIT=65536` before bootstrapping SLIME.
 
+## Primary SFT Dataset Generation Pipeline
+
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` is the authoritative design
+for the repository-level primary SFT dataset generation pipeline for
+Aider-style C++ tasks. The implementation has not started; the future commands
+shown in that document are contracts, not currently runnable CLI surface.
+
+The revised data-only pilot admits exactly 96 roots, split into 72 train, 12
+validation, and 12 internal-test roots with exactly 16 roots in each of the six
+Aider C++ topic groups. It starts from a frozen 75-root non-benchmark Exercism
+inventory (60 practice plus 15 concept roots) and admits at least 21
+LLM-assisted roots; any rejected or category-deferred source root is replaced
+by an additional LLM root without weakening gates. Source admission and
+classification finish before any paid curator call; the pipeline computes the
+exact missing cells and requires candidate capacity of at least three times the
+resulting required LLM admissions instead of assuming a fixed candidate cap.
+It requires hidden executable tests and verified references for admission, but
+tests and references never enter model-visible prompts. All 26 official Aider Polyglot
+C++ roots and related copies stay excluded.
+
+This Aider pilot is distinct from the C++20 PIE pipeline. It preserves the
+pinned Exercism tasks' actual C++17 grader dialect and uses a repo-owned C++17
+CMake/Catch scaffold for LLM-assisted tasks. The adapter compiles the exercise
+target separately, discovers and runs the Catch executable without CTest, and
+runs a fresh ASan/UBSan reference build.
+Normal and sanitizer builds pass the explicit `Unix Makefiles` generator and
+locked compiler path inside the same enforced, fingerprinted network-disabled
+sandbox; sanitizer admission performs its own positive test discovery and must
+match the normal test count. Repeated `catch.hpp`/`tests-main.cpp` files live in
+one content-addressed grader-support bundle, so their shared
+hashes and the 656,882-byte Catch header neither violate task-file limits nor
+become false benchmark contamination. LLM output may not define build scripts,
+commands, or dependencies.
+
+Pipeline readiness means deterministic rows, passing normal/sanitizer oracles,
+role-aware contamination and family isolation, per-row token/mask evidence,
+scope-specific human review, exact `dataset_release` approval, reconciled
+manifests, and a schema-v2 receipt binding every lock, manifest, decision,
+ledger, support bundle, tokenizer policy, training JSONL, and token-record
+ledger.
+Candidate admission and dataset split/release have separate states. Final-row
+screening can invalidate a frozen split and must return to quota-preserving
+backfill before release review. Mutable run state and locks live in a sibling
+`.state/` directory; the ready root is immutable. V1 is deliberately
+semi-autonomous: source inventory, LLM usage terms, every LLM-assisted
+admission, each contamination near-match, the final split, and the exact final
+release package need fingerprint-bound human approval.
+
+Rows use final-answer-only Aider `whole` supervision and reach SLIME as raw
+message lists. A thin repo-owned rollout/mask adapter forwards the exact locked
+chat-template kwargs (including disabled thinking) and applies explicit qwen
+assistant-only loss; dataset-loader `--apply-chat-template` is forbidden. The
+sanitized internal-research export includes the training rows and recomputable
+per-row token/mask ledger while excluding tests, references, candidates,
+evaluator indexes, and review material. The producer runs full `verify`; the
+future GLM consumer runs `verify-export` using only the sanitized bundle, pins
+the exact model/tokenizer/adapter identities, disables auto-prepare, and rejects
+any token, mask, template, or sequence mismatch before SFT. Dataset readiness
+still requires no training, target-model responses, repair rows, benchmark
+evaluation, or uplift. Existing one-row helpers remain seed fixtures, not the
+multi-task pipeline.
+
 ## Moonlight C++ Performance
 
 Run inside the SLIME container:
@@ -498,6 +560,15 @@ bash examples/slime/moonlight_cpp_perf/probe_single_sample_sft_response.sh \
 
 The response is written under
 `.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/probes/aider-whole-heldout-two-fer/response.txt`.
+
+Compile and test that saved held-out response with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/grade_single_sample_sft_response.sh
+```
+
+Its pass/fail receipt is written to the same probe tree at
+`grade/two-fer/summary.json`, with separate compiler and test logs.
 
 
 ## Moonlight Polyglot C++ Base Eval
@@ -1088,6 +1159,8 @@ Formal uplift requires GRPO to beat base and SFT on
 ## Repository Map
 
 ```text
+docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md
+                                             primary Aider-style SFT dataset implementation contract
 scripts/bootstrap.sh                         fresh-machine bootstrap
 scripts/prepare_dapo_math_dataset.py         optional SLIME text-smoke data prep
 scripts/wandb_milestone.py                   standalone pipeline-milestone logger (elapsed curve + timeline table)

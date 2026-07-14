@@ -33,7 +33,9 @@ Before changing behavior, read:
 1. `README.md`
 2. `ROADMAP.md`
 3. `.agents/skills/w8-biayn-framework/SKILL.md`
-4. Relevant implementation files under `src/w8_biayn/`
+4. `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` when implementing or
+   changing Aider-style SFT task generation
+5. Relevant implementation files under `src/w8_biayn/`
 
 The previous `/tmp/ENGINEERING_SPEC_v2_cpp_only.md` may not exist on every
 machine. Treat checked-in guidance as the active source when that file is
@@ -87,6 +89,49 @@ Do not rely on globally installed tools unless bootstrap installs them or
 
 Dataset conversion is a deliverable. No one-off PIE or SuperCoder munging is
 allowed.
+
+The authoritative design for the primary SFT dataset generation pipeline is
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. It is currently design-only:
+do not claim its future CLI or 96-task pilot is implemented. The pilot contract
+targets 96 total admitted Aider-style C++ roots (72 train, 12 validation, 12
+internal test), starts from an exact 75-task non-benchmark Exercism inventory
+(60 practice plus 15 concept roots), and admits at least 21 human-approved
+LLM-assisted roots, with LLM backfill for rejected or category-deferred source
+candidates. Complete source admission/classification before any paid authoring
+call, compute exact missing cells, and require candidate capacity of at least
+three times required LLM admissions; do not preserve the obsolete fixed-cap
+assumption. It keeps tests/references hidden from rows, excludes all 26
+official Aider C++ roots and related copies, and defines readiness without
+model responses, repair rows, training, benchmarking, or uplift. V1 is
+semi-autonomous: mechanical work may run automatically, but source inventory,
+LLM usage terms, every LLM task, contamination near-matches, the final split,
+and the exact final release package need scope-specific fingerprint-bound human
+approval. Read and update that document before
+implementing or changing this pipeline.
+
+Primary Aider SFT implementation must preserve the pinned source tasks' C++17
+dialect, use a repo-owned C++17 CMake/Catch scaffold for LLM tasks, and reject
+LLM-authored build commands. Compile the exercise target separately, discover
+and run Catch without CTest/default-`ALL` ambiguity, and rerun the reference in
+a fresh locked sanitizer build. Pass the explicit `Unix Makefiles` generator
+and locked compiler to normal/sanitizer configure, enforce the fingerprinted
+sandbox, and require separate positive sanitizer discovery with matching test
+counts. Store repeated Catch support once by digest;
+exclude only allowlisted support/scaffold roles from semantic contamination.
+Keep candidate admission separate from reviewed dataset split/release. A late
+render/token/contamination failure invalidates the frozen split and returns to
+quota-preserving backfill before exact `dataset_release` approval. Keep mutable
+state/locks in the sibling `.state/` directory, make the ready root immutable,
+use scope-specific decision fingerprints, and bind the token-record ledger and
+release subject in schema-v2 readiness.
+Rows are final-answer-only raw message lists. A thin repo-owned SLIME adapter
+must forward the exact template kwargs (thinking disabled), apply explicit qwen
+assistant loss, and persist/recompute per-row token/mask hashes and counts;
+dataset-loader `--apply-chat-template` is forbidden. Export a private-asset-free
+internal SLIME bundle with its token ledger. The producer runs full `verify`;
+the GLM lane runs `verify-export` on only the sanitized bundle, pins exact
+model/tokenizer/template/adapter identities, rejects token/mask/sequence drift,
+and disables auto-prepare before training.
 
 All source downloads, archive normalization, coverage measurement, task construction, SkyRL conversion, SLIME conversion, GCS upload, and GCS restore must be represented as `w8-biayn data ...` commands with tests and docs.
 
@@ -184,6 +229,15 @@ bash examples/slime/moonlight_cpp_perf/grpo.sh
 bash examples/slime/moonlight_cpp_perf/eval_grpo.sh
 bash examples/slime/moonlight_cpp_perf/compare.sh
 ```
+
+Primary Aider-style SFT dataset generation is specified in
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. The multi-task pipeline is
+not implemented yet. Its existing one-task converter and graders are seed
+surfaces only; future work must use the repo-owned `w8-biayn data aider-sft ...`
+CLI contract, canonical tasks, image-bound oracle admission, contamination and
+family checks, root-level split rollback/release review, raw-message GLM
+adapter/token evidence, LLM-authoring provenance, and producer `verify` plus
+consumer `verify-export` receipts described there.
 
 Optional Moonlight single-sample Aider `whole` format SFT smoke. This is a
 compact Aider-like task-text-plus-starter-files check only, not PIE training
@@ -532,6 +586,8 @@ explicit provider/status commands for actual resource accounting.
 ## Repository Map
 
 ```text
+docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md
+                                             primary Aider-style SFT dataset implementation contract
 scripts/bootstrap.sh                         fresh-machine bootstrap
 scripts/prepare_dapo_math_dataset.py         optional SLIME text-smoke data prep
 scripts/wandb_milestone.py                   standalone pipeline-milestone logger (elapsed curve + timeline table)
@@ -579,7 +635,9 @@ launch flow, benchmark protocol, or supported active pipelines change, update:
 2. `ROADMAP.md`
 3. this file
 4. `.agents/skills/w8-biayn-framework/SKILL.md`
-5. tests when command behavior changes
+5. `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` when its SFT pipeline
+   contract is affected
+6. tests when command behavior changes
 
 Do not commit generated `RUN_REPORT*` files, report asset directories, checkpoints,
 model exports, PIE data, CodeNet data, SuperCoder data, gem5 outputs, logs, or

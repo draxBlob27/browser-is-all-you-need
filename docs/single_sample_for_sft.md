@@ -2,6 +2,29 @@
 
 ## Purpose And Scope
 
+For multi-task dataset implementation, the authoritative specification is
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`, the primary SFT dataset
+generation pipeline. This document supplies the format diagnosis, compact row
+rationale, and one-row fixture only. It does not define discovery, LLM-assisted
+authoring, admission, splitting, backfill, or dataset readiness.
+
+The historical one-row JSON below uses top-level filenames and unlabeled
+assistant fences. Do not copy those incidental fixture choices into the
+primary pipeline. Contract `aider-sft-pipeline-v1.3` renders exact canonical
+POSIX relative paths in lexical order and uses `cpp` fences, then applies and
+re-grades the rendered state before admission. Its pilot is exactly 96 roots
+(72/12/12), starts from 75 frozen source candidates, and requires at least 21
+human-approved LLM-assisted admissions.
+
+The primary pilot preserves the pinned Exercism/Aider C++17 grader contract and
+uses a repo-owned C++17 scaffold for LLM-assisted tasks. Its GLM rows are
+final-answer-only raw message lists and bind exact chat-template kwargs,
+required disabled thinking, the repo-owned rollout/mask adapter, explicit
+`qwen` assistant-only loss, and per-row rendered-token/loss-mask evidence.
+Dataset-loader `--apply-chat-template` is forbidden for that handoff. This
+historical one-row fixture does not establish any of those production readiness
+properties.
+
 This document records one supervised fine-tuning sample intended to improve
 model output discipline for Aider's `whole` edit format. It also distinguishes
 the small synthetic row currently materialized by the repository from a
