@@ -440,20 +440,32 @@ it rebuilds PIE data instead of using the custom one-row SFT JSONL.
 
 ### Response-Only Aider Task Probe And Grade
 
-To inspect a model on one task without training, serve any OpenAI-compatible
-model endpoint and run the probe-and-grade helper against a task folder:
+To inspect a model on the local Leap task without training, first materialize
+the task folder, then run the probe-and-grade helper against an already served
+OpenAI-compatible model endpoint:
 
 ```bash
-export SLIME_RUN_ID=moonlight-response-only-two-fer
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
 
-bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh   --task-dir .w8-biayn/data/polyglot-benchmark/cpp/exercises/practice/two-fer   --base-url http://127.0.0.1:30000   --model auto   --max-tokens 2048
+export SLIME_RUN_ID=moonlight-response-only-leap
+
+bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh \
+  --task-dir .w8-biayn/data/aider-tasks/leap \
+  --base-url http://127.0.0.1:30000 \
+  --model auto \
+  --max-tokens 2048
 ```
 
-For a custom task without `.meta/config.json` `files.solution`, pass editable
-files explicitly:
+For another custom task without `.meta/config.json` `files.solution`, pass
+editable files explicitly:
 
 ```bash
-bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh   --task-dir /path/to/my-task   --editable-file my_task.h   --editable-file my_task.cpp   --base-url http://127.0.0.1:30000   --model auto
+bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh \
+  --task-dir /path/to/my-task \
+  --editable-file my_task.h \
+  --editable-file my_task.cpp \
+  --base-url http://127.0.0.1:30000 \
+  --model auto
 ```
 
 The helper saves `prompt.txt`, `prompt.json`, `response.json`, `response.txt`,

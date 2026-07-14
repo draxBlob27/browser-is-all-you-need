@@ -516,10 +516,15 @@ plus complete pre-edit `leap.h` and `leap.cpp` contents. It does not run
 uplift or benchmark evidence.
 
 Response-only task inspection, with no training, uses the same prompt shape but
-runs directly against an already served model and then grades the returned files:
+runs directly against an already served model and then grades the returned
+files. For the local Leap task:
 
 ```bash
-bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh   --task-dir .w8-biayn/data/polyglot-benchmark/cpp/exercises/practice/two-fer   --base-url http://127.0.0.1:30000   --model auto
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
+bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh \
+  --task-dir .w8-biayn/data/aider-tasks/leap \
+  --base-url http://127.0.0.1:30000 \
+  --model auto
 ```
 
 It saves `response.txt`, applies returned whole-file blocks to a clean task

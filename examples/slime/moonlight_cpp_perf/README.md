@@ -133,10 +133,22 @@ This path does not train. It sends one task to an already running
 OpenAI-compatible model server, saves the model response, applies Aider
 `whole` file listings to a clean task copy, and runs that task's CMake tests.
 
-```bash
-export SLIME_RUN_ID=moonlight-response-only-two-fer
+For the local Leap task, first materialize the task folder:
 
-bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh   --task-dir .w8-biayn/data/polyglot-benchmark/cpp/exercises/practice/two-fer   --base-url http://127.0.0.1:30000   --model auto   --max-tokens 2048
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
+```
+
+Then probe and grade it:
+
+```bash
+export SLIME_RUN_ID=moonlight-response-only-leap
+
+bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh \
+  --task-dir .w8-biayn/data/aider-tasks/leap \
+  --base-url http://127.0.0.1:30000 \
+  --model auto \
+  --max-tokens 2048
 ```
 
 For a custom task, either provide `.meta/config.json` with `files.solution` or
