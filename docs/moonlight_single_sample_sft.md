@@ -123,6 +123,20 @@ files and also respects `SLIME_CPP_DATA_DIR`:
 bash examples/slime/moonlight_cpp_perf/prepare_single_sample_sft_data.sh
 ```
 
+If you want the local Leap task folder created for response-only grading to be
+the SFT source, materialize that task first and then convert it into the same
+SLIME SFT directory shape:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_sft_data.sh --force
+```
+
+That writes `.w8-biayn/data/aider-leap-sft/sft/train.jsonl`. The user turn is
+the task prompt built from `.docs` plus editable starter files. The assistant
+turn is built from `.meta/example.h` and `.meta/example.cpp`, but the response
+filenames remain `leap.h` and `leap.cpp`.
+
 Enter the generated container:
 
 ```bash
@@ -133,7 +147,7 @@ Inside the container, run the non-LoRA Moonlight SFT stage:
 
 ```bash
 export SLIME_RUN_ID=moonlight-aider-whole-single-sft
-export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"
+export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"  # or "$PWD/.w8-biayn/data/aider-leap-sft"
 export SLIME_CPP_AUTO_PREPARE_DATA=0
 
 export SLIME_SFT_ROLLOUT_BATCH_SIZE=2

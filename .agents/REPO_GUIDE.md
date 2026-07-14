@@ -194,6 +194,18 @@ uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \
   --out .w8-biayn/data/aider-whole-single
 ```
 
+To convert the local Leap task folder itself into one-row SFT data, first create
+the task and then build the SFT JSONL from its `.docs`, starter files, and
+`.meta/example.*` reference files:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_sft_data.sh --force
+```
+
+This writes `.w8-biayn/data/aider-leap-sft`; point `SLIME_CPP_DATA_DIR` there
+for the SFT stage when training on the task-folder version.
+
 Then run the existing non-LoRA `examples/slime/moonlight_cpp_perf/sft.sh` with
 `SLIME_CPP_DATA_DIR` pointed at that directory and
 `SLIME_CPP_AUTO_PREPARE_DATA=0`. Do not run `prepare_data.sh`, GRPO, GLM, or

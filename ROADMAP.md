@@ -496,6 +496,17 @@ uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \
   --out .w8-biayn/data/aider-whole-single
 ```
 
+The local Leap Aider task can also be converted into one-row SFT data. This
+uses the task folder's `.docs` and starter files for the user prompt, and its
+`.meta/example.*` files as the assistant target:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_sft_data.sh --force
+```
+
+The Leap SFT dataset is written to `.w8-biayn/data/aider-leap-sft`.
+
 Then, inside the SLIME container, run the existing non-LoRA SFT wrapper with:
 
 ```bash

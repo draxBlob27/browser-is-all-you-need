@@ -127,6 +127,19 @@ Or use the lane wrapper, which writes the same files and respects
 bash examples/slime/moonlight_cpp_perf/prepare_single_sample_sft_data.sh
 ```
 
+To turn the local Leap task folder into SFT data, first materialize the task and
+then convert its `.docs` plus `.meta/example.*` reference files into the one-row
+chat JSONL:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_sft_data.sh --force
+```
+
+This writes `.w8-biayn/data/aider-leap-sft/sft/train.jsonl`. Use that directory
+as `SLIME_CPP_DATA_DIR` when the SFT run should train on the task-folder version
+instead of the hard-coded handoff sample.
+
 ## Response-Only Aider Task Probe And Grade
 
 This path does not train. It sends one task to an already running
@@ -160,7 +173,7 @@ Inside the SLIME container, run only the SFT stage against that data:
 
 ```bash
 export SLIME_RUN_ID=moonlight-aider-whole-single-sft
-export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"
+export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"  # or "$PWD/.w8-biayn/data/aider-leap-sft"
 export SLIME_CPP_AUTO_PREPARE_DATA=0
 export SLIME_SFT_ROLLOUT_BATCH_SIZE=2
 export SLIME_SFT_GLOBAL_BATCH_SIZE=2

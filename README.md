@@ -420,11 +420,25 @@ uv run w8-biayn upstreams clone slime
 uv run w8-biayn slime setup
 ```
 
+If you want the materialized local Leap task folder to be the SFT source
+instead, create the task and convert its `.docs` plus `.meta/example.*`
+reference files into one training row:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
+bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_sft_data.sh --force
+```
+
+That writes `sft/train.jsonl` and `manifest.json` under
+`.w8-biayn/data/aider-leap-sft`. The user message is the same Aider-style prompt
+used by the response-only probe; the assistant message is the complete
+`leap.h` and `leap.cpp` reference answer from `.meta/example.*`.
+
 Inside the SLIME container:
 
 ```bash
 export SLIME_RUN_ID=moonlight-aider-whole-single-sft
-export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"
+export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"  # or "$PWD/.w8-biayn/data/aider-leap-sft"
 export SLIME_CPP_AUTO_PREPARE_DATA=0
 export SLIME_SFT_ROLLOUT_BATCH_SIZE=2
 export SLIME_SFT_GLOBAL_BATCH_SIZE=2
