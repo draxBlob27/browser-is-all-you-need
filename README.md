@@ -510,6 +510,11 @@ formulas, smoke, artifact, and spend contract. The offline visualization
 surface is `uv run python -m w8_biayn.modal_aider_visualization --run-root
 <runs/run-id> --output-root <reports/run-id>`; it is read-only, supports
 explicit partial-prefix diagnostics, and writes outside canonical evidence.
+Visualization schema v2 assigns every pinned task to one of six stable topic
+groups (3-6 tasks each) and to a balanced Easy/Medium/Hard split (8/9/9), then
+reports initial and cumulative-try-2 performance for both dimensions. The
+difficulty label is a repo-owned task-complexity taxonomy, not a value inferred
+from the evaluated model's outcomes.
 The paid acknowledgements are launch safety gates rather than immutable result
 identity, so the same planned run ID may move from false acknowledgements in
 no-spend plan mode to true acknowledgements for its first paid invocation.

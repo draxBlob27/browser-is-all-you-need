@@ -329,7 +329,10 @@ from the pinned tree and seed. Preserve the prior local failure download under
 lease is compatible with pre-lease artifacts. Generate offline visual reports
 with `python -m w8_biayn.modal_aider_visualization`; it reads only local
 evidence, supports explicit partial-prefix diagnostics, and writes under
-`reports/<run-id>/` instead of the canonical run tree.
+`reports/<run-id>/` instead of the canonical run tree. Keep its stable
+six-group topic taxonomy (3-6 tasks per group) and balanced 8/9/9
+Easy/Medium/Hard task-complexity taxonomy distinct from model-derived outcome
+rates.
 
 Optional Moonlight Multi-SWE C++ base-eval benchmark. This is not active PIE
 training and not an official Multi-SWE leaderboard run; it is a repo-owned

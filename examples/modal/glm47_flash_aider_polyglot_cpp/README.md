@@ -459,6 +459,39 @@ admitted rows before rendering, never reads credentials, and writes generated
 figures under the separate ignored `reports/<run-id>/` tree rather than inside
 canonical `runs/<run-id>/` evidence.
 
+Visualization schema v2 gives every pinned task one stable topic and one stable
+difficulty label. Topics are deliberately medium-grained: six
+mutually-exclusive groups with 3-6 tasks each, enough to expose meaningful
+capability differences without producing tiny one-task categories.
+
+| Topic | Pinned tasks |
+|---|---|
+| Algorithms & data structures | binary-search-tree, circular-buffer, grade-school, knapsack, linked-list, sublist |
+| Text & parsing | crypto-square, diamond, kindergarten-garden, phone-number |
+| Numerical reasoning | all-your-base, allergies, complex-numbers, perfect-numbers, space-age |
+| Time & date | clock, gigasecond, meetup |
+| State & concurrency | bank-account, dnd-character, parallel-letter-frequency, robot-name |
+| Logic, grids & games | queen-attack, spiral-matrix, yacht, zebra-puzzle |
+
+The separate Easy/Medium/Hard label is a repo-owned complexity taxonomy based
+on algorithmic depth, ownership/state/concurrency, and test-surface complexity.
+It is fixed across runs and must not be rewritten from a particular model's
+observed successes. The existing per-task success-count chart remains the
+empirical difficulty view.
+
+| Difficulty | Count | Pinned tasks |
+|---|---:|---|
+| Easy | 8 | allergies, clock, complex-numbers, diamond, gigasecond, perfect-numbers, queen-attack, space-age |
+| Medium | 9 | all-your-base, crypto-square, dnd-character, grade-school, kindergarten-garden, meetup, phone-number, sublist, yacht |
+| Hard | 9 | bank-account, binary-search-tree, circular-buffer, knapsack, linked-list, parallel-letter-frequency, robot-name, spiral-matrix, zebra-puzzle |
+
+The HTML, Markdown, normalized JSON, `cells.csv`, and `tasks.csv` expose both
+labels. `topic-categories.csv` and `difficulty-categories.csv` provide task
+membership, initial/cumulative-try-2 trajectory success, retry recovery, and
+task coverage. The matching SVGs are
+`05-topic-category-performance.svg` and
+`06-difficulty-category-performance.svg`.
+
 All state under `.w8-biayn/` is ignored. Never commit results, histories,
 generated settings, model weights, tokens, or receipts.
 

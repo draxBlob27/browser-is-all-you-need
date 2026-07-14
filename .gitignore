@@ -12,6 +12,7 @@
 
 __pycache__/
 *.py[cod]
+*.orig
 *.egg-info/
 dist/
 .venv/

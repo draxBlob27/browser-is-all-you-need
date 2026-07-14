@@ -390,7 +390,11 @@ Seed inspection, the 2-by-8-by-try smoke, a complete 26-by-8-by-try run, and
 stopped-App proof remain blocking before reporting live metrics. Offline
 visualization runs through `python -m w8_biayn.modal_aider_visualization`,
 keeps reports under `reports/<run-id>/`, and labels prefix-only evidence as
-partial diagnostics rather than final pass@8.
+partial diagnostics rather than final pass@8. It also assigns all 26 tasks to
+six stable, mutually-exclusive topic groups of 3-6 tasks and to a balanced
+8/9/9 Easy/Medium/Hard task-complexity taxonomy, with grouped initial and
+cumulative-try-2 summaries. These labels stay fixed across runs; observed
+success counts remain a separate empirical difficulty signal.
 Treat both paid acknowledgements as launch safety gates, not immutable result
 identity: a reviewed no-spend plan may enable them for the first paid invocation
 without becoming a resume/config mismatch.

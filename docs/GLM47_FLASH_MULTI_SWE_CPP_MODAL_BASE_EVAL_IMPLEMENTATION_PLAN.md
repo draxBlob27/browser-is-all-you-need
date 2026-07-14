@@ -17,6 +17,10 @@ This document is written as the implementation contract for an AI coding
 agent. It deliberately separates decisions already made from work still to be
 proved with source, tests, and paid receipts.
 
+The separately named future agentic successor is designed in
+`docs/GLM47_FLASH_AGENTIC_MULTI_SWE_CPP_MODAL_BASE_EVAL_IMPLEMENTATION_PLAN.md`.
+Do not change this single-turn result family when implementing that document.
+
 ## Objective
 
 Answer exactly this question:

@@ -21,7 +21,11 @@ from w8_biayn.modal_aider_polyglot_cpp import (
     sample_seed,
     write_json,
 )
-from w8_biayn.modal_aider_visualization import generate_visualization_report
+from w8_biayn.modal_aider_visualization import (
+    AIDER_CPP_DIFFICULTY_TASKS,
+    AIDER_CPP_TOPIC_TASKS,
+    generate_visualization_report,
+)
 
 
 def valid_env(**overrides: str) -> dict[str, str]:
@@ -71,9 +75,11 @@ def write_result(
         "completion_tokens": 200 + len(task),
         "duration": 30.0 + sample_index,
         "user_asks": len(outcomes),
-        "error_outputs": 1 if task.endswith("b") and not any(outcomes) else 0,
-        "num_exhausted_context_windows": 1 if task.endswith("c") and not any(outcomes) else 0,
-        "syntax_errors": 1 if task.endswith("b") and not any(outcomes) else 0,
+        "error_outputs": 1 if task == "grade-school" and not any(outcomes) else 0,
+        "num_exhausted_context_windows": (
+            1 if task == "zebra-puzzle" and not any(outcomes) else 0
+        ),
+        "syntax_errors": 1 if task == "grade-school" and not any(outcomes) else 0,
         "test_timeouts": 0,
     }
     write_json(task_root / ".aider.results.json", payload)
@@ -126,9 +132,9 @@ def write_sample(
         {"sample_index": sample_index, "copy_isolated_from_other_samples": True},
     )
     for task in tasks:
-        if task == "task-a":
+        if task == "allergies":
             outcomes = [True] if sample_index <= 2 else [False, sample_index == 3]
-        elif task == "task-b":
+        elif task == "grade-school":
             outcomes = [False, sample_index in {1, 4}]
         else:
             outcomes = [False, False]
@@ -191,7 +197,7 @@ def make_fixture(
     cfg = config(tmp_path)
     root = cfg.local_run_path(tmp_path)
     protocol = root / INDEPENDENT_EVAL_MODE
-    tasks = ("task-a", "task-b", "task-c")
+    tasks = ("allergies", "grade-school", "zebra-puzzle")
     result_dirs = {
         sample_index: write_sample(cfg, protocol, sample_index, tasks, secret=secret)
         for sample_index in range(1, sample_count + 1)
@@ -207,6 +213,20 @@ def make_fixture(
     else:
         write_root_receipts(cfg, root)
     return cfg, root
+
+
+def test_task_taxonomy_is_complete_mutually_exclusive_and_balanced() -> None:
+    topics = [task for tasks in AIDER_CPP_TOPIC_TASKS.values() for task in tasks]
+    difficulties = [task for tasks in AIDER_CPP_DIFFICULTY_TASKS.values() for task in tasks]
+
+    assert len(topics) == len(set(topics)) == 26
+    assert set(topics) == set(difficulties)
+    assert [len(tasks) for tasks in AIDER_CPP_TOPIC_TASKS.values()] == [6, 4, 5, 3, 4, 4]
+    assert {label: len(tasks) for label, tasks in AIDER_CPP_DIFFICULTY_TASKS.items()} == {
+        "Easy": 8,
+        "Medium": 9,
+        "Hard": 9,
+    }
 
 
 def test_final_visualization_generates_report_without_touching_run_tree(tmp_path: Path) -> None:
@@ -225,11 +245,39 @@ def test_final_visualization_generates_report_without_touching_run_tree(tmp_path
     }
     assert (out / "index.html").is_file()
     assert (out / "figures/01-four-metrics.svg").is_file()
-    assert (out / "figures/12-evidence-completeness.svg").is_file()
+    assert (out / "figures/05-topic-category-performance.svg").is_file()
+    assert (out / "figures/06-difficulty-category-performance.svg").is_file()
+    assert (out / "figures/14-evidence-completeness.svg").is_file()
     assert (out / "data/cells.csv").is_file()
+    assert (out / "data/topic-categories.csv").is_file()
+    assert (out / "data/difficulty-categories.csv").is_file()
     assert json.loads((run_root / "artifact_manifest.json").read_text(encoding="utf-8")) == before_manifest
     rendered = (out / "index.html").read_text(encoding="utf-8")
     assert "pass@2" not in rendered
+    assert "Task Taxonomy And Difficulty" in rendered
+    tasks = {row["task_id"]: row for row in report["summaries"]["tasks"]}
+    assert (tasks["allergies"]["topic_category"], tasks["allergies"]["difficulty"]) == (
+        "Numerical reasoning",
+        "Easy",
+    )
+    assert (
+        tasks["grade-school"]["topic_category"],
+        tasks["grade-school"]["difficulty"],
+    ) == ("Algorithms & data structures", "Medium")
+    assert (
+        tasks["zebra-puzzle"]["topic_category"],
+        tasks["zebra-puzzle"]["difficulty"],
+    ) == ("Logic, grids & games", "Hard")
+    assert {
+        row["topic_category"] for row in report["summaries"]["topic_categories"]
+    } == {
+        "Algorithms & data structures",
+        "Numerical reasoning",
+        "Logic, grids & games",
+    }
+    assert {
+        row["difficulty"] for row in report["summaries"]["difficulty_categories"]
+    } == {"Easy", "Medium", "Hard"}
     manifest = json.loads((out / "visualization_manifest.json").read_text(encoding="utf-8"))
     assert manifest["evidence_mode"] == "final"
     assert all(Path(row["path"]).parts[0] in {"data", "figures"} or row["path"] in {"index.html", "report.md"} for row in manifest["files"])

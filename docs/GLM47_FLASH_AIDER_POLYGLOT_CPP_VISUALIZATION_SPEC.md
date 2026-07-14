@@ -1,6 +1,8 @@
 # GLM-4.7-Flash Aider Polyglot C++ Visualization Specification
 
-Status: implemented by `src/w8_biayn/modal_aider_visualization.py` and covered by `tests/test_modal_aider_visualization.py`.
+Status: schema v2 is implemented by
+`src/w8_biayn/modal_aider_visualization.py` and covered by
+`tests/test_modal_aider_visualization.py`.
 
 This document specifies a deterministic, read-only visualization report for the
 independent GLM-4.7-Flash Aider Polyglot C++ Modal evaluation. It is an
@@ -23,10 +25,12 @@ The report must answer:
 1. What are the four admitted independent-sampling benchmark values?
 2. Which tasks are consistently solved, retry-dependent, unstable, or never
    solved?
-3. How much does the second Aider try recover from first-try failures?
-4. Which failures correlate with context exhaustion, token use, long runtime,
+3. How does performance vary across stable topic groups and a fixed
+   Easy/Medium/Hard task-complexity taxonomy?
+4. How much does the second Aider try recover from first-try failures?
+5. Which failures correlate with context exhaustion, token use, long runtime,
    or repeated interaction?
-5. Is the evidence complete enough for a final model claim, or is it only an
+6. Is the evidence complete enough for a final model claim, or is it only an
    in-progress diagnostic?
 
 It must remain useful with a validated prefix such as samples 1 through 7, but
@@ -46,6 +50,7 @@ The implementation must not:
 - merge an older one-sample run into this eight-trajectory result family;
 - turn infrastructure exceptions into model failures;
 - infer failure details absent from structured persisted fields;
+- derive topic or difficulty labels from one model run's outcomes;
 - claim an official Aider leaderboard score.
 
 ## 3. Terminology And Formulas
@@ -270,6 +275,8 @@ Use one normalized row per task/sample cell:
 ```json
 {
   "task_id": "grade-school",
+  "topic_category": "Algorithms & data structures",
+  "difficulty": "Medium",
   "sample_index": 1,
   "seed": 20260712,
   "attempts_made": 2,
@@ -324,12 +331,13 @@ try unless upstream adds structured per-try fields. Do not graph null
 1. identity, evidence status, and admission banner;
 2. headline metrics or partial diagnostics;
 3. task/sample outcome matrices;
-4. task difficulty and retry benefit;
-5. sample stability and cumulative coverage;
-6. token, duration, interaction, and failure diagnostics;
-7. evidence completeness and optional operational timeline;
-8. sortable cell-level evidence table;
-9. formulas, methodology, and limitations.
+4. empirical task difficulty and retry benefit;
+5. stable topic and Easy/Medium/Hard taxonomy summaries;
+6. sample stability and cumulative coverage;
+7. token, duration, interaction, and failure diagnostics;
+8. evidence completeness and optional operational timeline;
+9. sortable cell-level evidence table;
+10. formulas, methodology, and limitations.
 
 Every figure needs a title, interpretation sentence, denominator, legend,
 units, and a nearby link to its CSV/JSON source table.
@@ -392,6 +400,30 @@ the title must say `among N completed trajectories`. This is the primary
 fine-tuning-target visual: zero cumulative successes indicate direct review;
 large retry gains indicate initial planning/edit weakness rather than complete
 inability.
+
+### V4A. Stable Topic And Difficulty Categories
+
+Assign every admitted task exactly once in both repo-owned mappings:
+
+- `AIDER_CPP_TOPIC_TASKS`: six mutually-exclusive groups with sizes
+  6, 4, 5, 3, 4, and 4;
+- `AIDER_CPP_DIFFICULTY_TASKS`: Easy 8, Medium 9, and Hard 9.
+
+The topic groups are Algorithms & data structures, Text & parsing, Numerical
+reasoning, Time & date, State & concurrency, and Logic, grids & games. The
+canonical lane README lists exact membership. Unknown, duplicate, or
+differently covered tasks are an implementation error; do not silently emit an
+`other` category.
+
+Difficulty is a fixed task-complexity judgment based on algorithmic depth,
+ownership/state/concurrency, and test-surface complexity. It is not inferred
+from model success. Keep V4's success counts as the empirical difficulty signal
+so readers can distinguish the stable label from run-specific behavior.
+
+Render one paired horizontal-bar summary per dimension. Each row shows initial
+and cumulative-try-2 trajectory success over all task/sample cells in that
+category. The tabular equivalent must also include task membership, retry
+recoveries, and the fraction of member tasks covered at each try depth.
 
 ### V5. Retry Transition And Recovery
 
@@ -515,6 +547,8 @@ Include one sortable/filterable row per admitted task/sample cell with:
 
 ```text
 task_id
+topic_category
+difficulty
 sample_index
 seed
 attempts_made
@@ -580,6 +614,8 @@ reports/<run-id>/
     report.normalized.json
     cells.csv
     tasks.csv
+    topic-categories.csv
+    difficulty-categories.csv
     samples.csv
     coverage-by-prefix.csv
     retry-transitions.csv
@@ -590,15 +626,17 @@ reports/<run-id>/
     02-try1-matrix.svg
     03-try2-transition-matrix.svg
     04-task-difficulty.svg
-    05-retry-transitions.svg
-    06-cumulative-coverage.svg
-    07-sample-stability.svg
-    08-outcome-patterns.svg
-    09-diagnostics.svg
-    10-token-efficiency.svg
-    11-runtime-interactions.svg
-    12-evidence-completeness.svg
-    13-operational-timeline.svg          # when input exists
+    05-topic-category-performance.svg
+    06-difficulty-category-performance.svg
+    07-retry-transitions.svg
+    08-cumulative-coverage.svg
+    09-sample-stability.svg
+    10-outcome-patterns.svg
+    11-diagnostics.svg
+    12-token-efficiency.svg
+    13-runtime-interactions.svg
+    14-evidence-completeness.svg
+    15-operational-timeline.svg          # when input exists
 ```
 
 Normalized JSON must include schema/generator versions, source/run identity,
@@ -645,6 +683,7 @@ discover_completed_sample_prefix(run_root) -> list[SampleEvidence]
 normalize_independent_cells(samples) -> list[Cell]
 validate_final_report_against_cells(run_root, cells) -> FinalMetrics
 build_task_summaries(cells, completed_samples) -> list[TaskSummary]
+build_task_category_summaries(tasks, taxonomy) -> list[CategorySummary]
 build_sample_summaries(cells) -> list[SampleSummary]
 build_retry_summary(cells) -> RetrySummary
 build_coverage_prefix(cells) -> list[CoveragePoint]
@@ -679,6 +718,9 @@ preserve existing behavior/artifacts.
 - verify partial rates/denominators for `N=1` and `N=7`;
 - verify retry states sum to `26 * N` and no-retry recovery is N/A;
 - verify coverage and marginal-new-task counts;
+- verify both taxonomies cover the same 26 tasks exactly once;
+- verify topic group sizes are 3-6 and difficulty sizes are 8/9/9;
+- verify category cell rates, task coverage, and retry counts;
 - verify deterministic task ordering and task-pattern exhaustiveness;
 - verify diagnostic overlap and token/duration null/outlier handling;
 - verify final metric order invariance and fixed-prefix diagnostic order.
@@ -686,6 +728,7 @@ preserve existing behavior/artifacts.
 ### 16.3 Rendering And Output
 
 - render every required final figure/table;
+- render topic/difficulty labels in cell/task tables and both category SVGs;
 - suppress V2 in partial mode and show the exact partial warning everywhere;
 - ensure no pass@2 through pass@7 appears;
 - ensure partial output makes no final pass@8 claim outside the mandatory
@@ -723,6 +766,8 @@ Implementation is complete when:
 - an admitted stopped eight-sample run yields exactly the four production
   metric names and values;
 - all figures/tables agree with normalized official rows;
+- all 26 tasks have stable topic and difficulty labels, and grouped rates
+  recompute from admitted cells;
 - every chart has machine-readable and accessible text equivalents;
 - generation is deterministic, secret-free, and atomic;
 - invalid/infrastructure-incomplete evidence fails closed;

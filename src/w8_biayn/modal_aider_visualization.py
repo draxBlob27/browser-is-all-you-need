@@ -41,14 +41,20 @@ from w8_biayn.modal_aider_polyglot_cpp import (
 )
 
 
-VISUALIZATION_SCHEMA_VERSION = 1
-GENERATOR_VERSION = "modal-aider-visualization-v1"
+VISUALIZATION_SCHEMA_VERSION = 2
+GENERATOR_VERSION = "modal-aider-visualization-v2"
+COMPATIBLE_OVERWRITE_GENERATORS = {
+    "modal-aider-visualization-v1",
+    GENERATOR_VERSION,
+}
 PARTIAL_WARNING_TEMPLATE = (
     "PARTIAL DIAGNOSTIC - {completed} OF 8 TRAJECTORIES COMPLETE - NOT PASS@8"
 )
 
 CELL_COLUMNS = [
     "task_id",
+    "topic_category",
+    "difficulty",
     "sample_index",
     "seed",
     "attempts_made",
@@ -106,6 +112,119 @@ DIAGNOSTIC_FIELDS = [
     "indentation_errors",
     "lazy_comments",
 ]
+
+
+# The pinned official Aider C++ subset contains 26 tasks. Keep one stable,
+# mutually-exclusive topic and difficulty label per task so reports remain
+# comparable across runs. Topic groups are medium-grained (3-6 tasks each),
+# while difficulty reflects implementation/test-surface complexity rather than
+# this model's observed outcomes.
+AIDER_CPP_TOPIC_TASKS: dict[str, tuple[str, ...]] = {
+    "Algorithms & data structures": (
+        "binary-search-tree",
+        "circular-buffer",
+        "grade-school",
+        "knapsack",
+        "linked-list",
+        "sublist",
+    ),
+    "Text & parsing": (
+        "crypto-square",
+        "diamond",
+        "kindergarten-garden",
+        "phone-number",
+    ),
+    "Numerical reasoning": (
+        "all-your-base",
+        "allergies",
+        "complex-numbers",
+        "perfect-numbers",
+        "space-age",
+    ),
+    "Time & date": (
+        "clock",
+        "gigasecond",
+        "meetup",
+    ),
+    "State & concurrency": (
+        "bank-account",
+        "dnd-character",
+        "parallel-letter-frequency",
+        "robot-name",
+    ),
+    "Logic, grids & games": (
+        "queen-attack",
+        "spiral-matrix",
+        "yacht",
+        "zebra-puzzle",
+    ),
+}
+
+AIDER_CPP_DIFFICULTY_TASKS: dict[str, tuple[str, ...]] = {
+    "Easy": (
+        "allergies",
+        "clock",
+        "complex-numbers",
+        "diamond",
+        "gigasecond",
+        "perfect-numbers",
+        "queen-attack",
+        "space-age",
+    ),
+    "Medium": (
+        "all-your-base",
+        "crypto-square",
+        "dnd-character",
+        "grade-school",
+        "kindergarten-garden",
+        "meetup",
+        "phone-number",
+        "sublist",
+        "yacht",
+    ),
+    "Hard": (
+        "bank-account",
+        "binary-search-tree",
+        "circular-buffer",
+        "knapsack",
+        "linked-list",
+        "parallel-letter-frequency",
+        "robot-name",
+        "spiral-matrix",
+        "zebra-puzzle",
+    ),
+}
+
+
+def _invert_task_groups(groups: Mapping[str, Sequence[str]], *, label: str) -> dict[str, str]:
+    by_task: dict[str, str] = {}
+    for group, tasks in groups.items():
+        for task_id in tasks:
+            if task_id in by_task:
+                raise RuntimeError(f"duplicate {label} taxonomy entry for {task_id}")
+            by_task[task_id] = group
+    return by_task
+
+
+AIDER_CPP_TOPIC_BY_TASK = _invert_task_groups(AIDER_CPP_TOPIC_TASKS, label="topic")
+AIDER_CPP_DIFFICULTY_BY_TASK = _invert_task_groups(
+    AIDER_CPP_DIFFICULTY_TASKS, label="difficulty"
+)
+if (
+    set(AIDER_CPP_TOPIC_BY_TASK) != set(AIDER_CPP_DIFFICULTY_BY_TASK)
+    or len(AIDER_CPP_TOPIC_BY_TASK) != 26
+):
+    raise RuntimeError("Aider C++ topic and difficulty taxonomies must cover the same 26 tasks")
+
+
+def _task_taxonomy(task_id: str) -> tuple[str, str]:
+    topic = AIDER_CPP_TOPIC_BY_TASK.get(task_id)
+    difficulty = AIDER_CPP_DIFFICULTY_BY_TASK.get(task_id)
+    if topic is None or difficulty is None:
+        raise ModalAiderError(
+            f"Aider C++ task taxonomy is missing {task_id!r}; classify it before rendering"
+        )
+    return topic, difficulty
 
 
 def _read_json(path: Path) -> Any:
@@ -256,6 +375,7 @@ def _cell_from_result_path(
 ) -> dict[str, Any]:
     payload = _two_try_result_row(result_path)
     task_id = result_path.parent.name
+    topic_category, difficulty = _task_taxonomy(task_id)
     outcomes = payload["tests_outcomes"]
     try1_success = bool(outcomes[0])
     try2_success = bool(any(outcomes))
@@ -275,6 +395,8 @@ def _cell_from_result_path(
     history = result_path.with_name(".aider.chat.history.md")
     return {
         "task_id": task_id,
+        "topic_category": topic_category,
+        "difficulty": difficulty,
         "sample_index": sample_index,
         "seed": sample_seed(config, sample_index),
         "attempts_made": len(outcomes),
@@ -509,6 +631,8 @@ def _task_summaries(cells: Sequence[Mapping[str, Any]], completed_samples: int) 
         rows.append(
             {
                 "task_id": task_id,
+                "topic_category": task_cells[0]["topic_category"],
+                "difficulty": task_cells[0]["difficulty"],
                 "completed_samples": completed_samples,
                 "try1_successes": try1,
                 "try2_successes": try2,
@@ -518,6 +642,49 @@ def _task_summaries(cells: Sequence[Mapping[str, Any]], completed_samples: int) 
             }
         )
     return sorted(rows, key=lambda row: (row["try2_successes"], row["try1_successes"], row["task_id"]))
+
+
+def _task_category_summaries(
+    tasks: Sequence[Mapping[str, Any]],
+    *,
+    field: str,
+    categories: Sequence[str],
+) -> list[dict[str, Any]]:
+    rows = []
+    for category in categories:
+        members = [task for task in tasks if task[field] == category]
+        if not members:
+            continue
+        trajectory_count = sum(int(task["completed_samples"]) for task in members)
+        try1_successes = sum(int(task["try1_successes"]) for task in members)
+        try2_successes = sum(int(task["try2_successes"]) for task in members)
+        recovered = sum(int(task["recovered_on_try2"]) for task in members)
+        rows.append(
+            {
+                field: category,
+                "task_count": len(members),
+                "task_ids": sorted(str(task["task_id"]) for task in members),
+                "trajectory_count": trajectory_count,
+                "try1_successes": try1_successes,
+                "try2_successes": try2_successes,
+                "try1_success_rate": (
+                    try1_successes / trajectory_count if trajectory_count else 0.0
+                ),
+                "try2_success_rate": (
+                    try2_successes / trajectory_count if trajectory_count else 0.0
+                ),
+                "recovered_on_try2": recovered,
+                "task_coverage_try1": (
+                    sum(1 for task in members if int(task["try1_successes"]) > 0)
+                    / len(members)
+                ),
+                "task_coverage_try2": (
+                    sum(1 for task in members if int(task["try2_successes"]) > 0)
+                    / len(members)
+                ),
+            }
+        )
+    return rows
 
 
 def _sample_summaries(cells: Sequence[Mapping[str, Any]], samples: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -708,6 +875,16 @@ def _build_normalized_report(
     coverage = _coverage_rows(cells, [row["task_id"] for row in task_rows], sample_indices)
     diagnostics = _diagnostic_rows(cells)
     patterns = _outcome_pattern_rows(task_rows)
+    topic_categories = _task_category_summaries(
+        task_rows,
+        field="topic_category",
+        categories=tuple(AIDER_CPP_TOPIC_TASKS),
+    )
+    difficulty_categories = _task_category_summaries(
+        task_rows,
+        field="difficulty",
+        categories=tuple(AIDER_CPP_DIFFICULTY_TASKS),
+    )
     total_cells = len(cells)
     try1_successes = sum(1 for cell in cells if cell["try1_success"])
     try2_successes = sum(1 for cell in cells if cell["try2_success"])
@@ -780,6 +957,8 @@ def _build_normalized_report(
             "coverage_by_prefix": coverage,
             "diagnostics": diagnostics,
             "outcome_patterns": patterns,
+            "topic_categories": topic_categories,
+            "difficulty_categories": difficulty_categories,
             "evidence_completeness": _completeness_rows(
                 run_root, sample_indices, final=mode == "final"
             ),
@@ -933,6 +1112,72 @@ def _render_task_difficulty(report: Mapping[str, Any]) -> str:
         parts.append(f'<circle cx="{x2:.1f}" cy="{y:.1f}" r="5" fill="#1565C0"/>')
         parts.append(_text(x2 + 10, y + 4, f"{task['try1_successes']}/{denominator} -> {task['try2_successes']}/{denominator}", klass="small"))
     return _svg_root(width, height, "Per-task difficulty and retry gain", "Paired dots show try-1 and cumulative try-2 successes.", "\n".join(parts))
+
+
+def _render_category_performance(
+    report: Mapping[str, Any],
+    *,
+    summary_key: str,
+    field: str,
+    title: str,
+    subtitle: str,
+) -> str:
+    rows = report["summaries"][summary_key]
+    width = 940
+    left, top = 300, 82
+    chart_w = 480
+    row_h = 62
+    height = max(280, top + len(rows) * row_h + 65)
+    parts = [
+        _text(20, 30, title, klass="title"),
+        _text(20, 52, subtitle, klass="small"),
+    ]
+    for tick in range(0, 101, 25):
+        x = left + chart_w * tick / 100
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{top-10}" x2="{x:.1f}" y2="{height-48}" class="grid"/>'
+        )
+        parts.append(_text(x, height - 25, f"{tick}%", anchor="middle", klass="small"))
+    for index, row in enumerate(rows):
+        y = top + index * row_h
+        try1_width = chart_w * float(row["try1_success_rate"])
+        try2_width = chart_w * float(row["try2_success_rate"])
+        parts.append(
+            _text(20, y + 23, f"{row[field]} ({row['task_count']} tasks)", klass="small")
+        )
+        parts.append(_rect(left, y, try1_width, 18, "#2E7D32"))
+        parts.append(_rect(left, y + 23, try2_width, 18, "#1565C0"))
+        parts.append(
+            _text(
+                left + try1_width + 8,
+                y + 14,
+                f"I {_percent(row['try1_success_rate'])}",
+                klass="small",
+            )
+        )
+        parts.append(
+            _text(
+                left + try2_width + 8,
+                y + 37,
+                f"T2 {_percent(row['try2_success_rate'])}",
+                klass="small",
+            )
+        )
+    parts.append(
+        _text(
+            20,
+            height - 8,
+            "I = initial success; T2 = cumulative try-2 success. Denominator is task × trajectory cells.",
+            klass="small",
+        )
+    )
+    return _svg_root(
+        width,
+        height,
+        title,
+        "Paired bars compare initial and cumulative try-2 trajectory success by stable task category.",
+        "\n".join(parts),
+    )
 
 
 def _render_retry_transitions(report: Mapping[str, Any]) -> str:
@@ -1138,14 +1383,34 @@ def _render_figures(report: Mapping[str, Any], figures_dir: Path) -> dict[str, s
             ("02-try1-matrix.svg", _render_matrix(report, try_name="try1")),
             ("03-try2-transition-matrix.svg", _render_matrix(report, try_name="try2")),
             ("04-task-difficulty.svg", _render_task_difficulty(report)),
-            ("05-retry-transitions.svg", _render_retry_transitions(report)),
-            ("06-cumulative-coverage.svg", _render_coverage(report)),
-            ("07-sample-stability.svg", _render_sample_stability(report)),
-            ("08-outcome-patterns.svg", _render_outcome_patterns(report)),
-            ("09-diagnostics.svg", _render_diagnostics(report)),
-            ("10-token-efficiency.svg", _render_token_efficiency(report)),
-            ("11-runtime-interactions.svg", _render_runtime_interactions(report)),
-            ("12-evidence-completeness.svg", _render_completeness(report)),
+            (
+                "05-topic-category-performance.svg",
+                _render_category_performance(
+                    report,
+                    summary_key="topic_categories",
+                    field="topic_category",
+                    title="Performance by topic category",
+                    subtitle="Six stable, mutually-exclusive groups; each contains 3-6 official tasks.",
+                ),
+            ),
+            (
+                "06-difficulty-category-performance.svg",
+                _render_category_performance(
+                    report,
+                    summary_key="difficulty_categories",
+                    field="difficulty",
+                    title="Performance by curated task difficulty",
+                    subtitle="Stable 8/9/9 Easy, Medium, and Hard task-complexity groups; not model-derived.",
+                ),
+            ),
+            ("07-retry-transitions.svg", _render_retry_transitions(report)),
+            ("08-cumulative-coverage.svg", _render_coverage(report)),
+            ("09-sample-stability.svg", _render_sample_stability(report)),
+            ("10-outcome-patterns.svg", _render_outcome_patterns(report)),
+            ("11-diagnostics.svg", _render_diagnostics(report)),
+            ("12-token-efficiency.svg", _render_token_efficiency(report)),
+            ("13-runtime-interactions.svg", _render_runtime_interactions(report)),
+            ("14-evidence-completeness.svg", _render_completeness(report)),
         ]
     )
     paths = {}
@@ -1227,6 +1492,13 @@ window.addEventListener('DOMContentLoaded', () => {{
 </div>
 <h2>Headline Values</h2>
 {_render_table(metric_rows, ["metric", "value"])}
+<h2>Task Taxonomy And Difficulty</h2>
+<p>Topics are six stable, mutually-exclusive groups of 3-6 tasks. Easy/Medium/Hard is a stable repo-owned task-complexity label, not a label inferred from this run's model outcomes.</p>
+{_render_table(report["summaries"]["tasks"], ["task_id", "topic_category", "difficulty", "try1_successes", "try2_successes", "recovered_on_try2"])}
+<h3>Topic Summary</h3>
+{_render_table(report["summaries"]["topic_categories"], ["topic_category", "task_count", "task_ids", "try1_success_rate", "try2_success_rate", "task_coverage_try1", "task_coverage_try2"])}
+<h3>Difficulty Summary</h3>
+{_render_table(report["summaries"]["difficulty_categories"], ["difficulty", "task_count", "task_ids", "try1_success_rate", "try2_success_rate", "task_coverage_try1", "task_coverage_try2"])}
 {figure_html}
 <h2>Cell Evidence</h2>
 <p>Rows link to hashes and structured fields only; chat history and generated content are not embedded.</p>
@@ -1262,6 +1534,24 @@ def _render_markdown(report: Mapping[str, Any], figure_paths: Mapping[str, str])
     metrics = report["final_metrics"] or report["partial_diagnostics"]
     for key, value in metrics.items():
         lines.append(f"- `{key}`: {value:.12g}")
+    lines.extend(
+        [
+            "",
+            "## Task Taxonomy And Difficulty",
+            "",
+            "The six topic groups are stable and mutually exclusive. Easy/Medium/Hard is a "
+            "repo-owned task-complexity label, not a label inferred from this run's outcomes.",
+            "",
+            "| Task | Topic | Difficulty | Try 1 | Cumulative try 2 |",
+            "|---|---|---|---:|---:|",
+        ]
+    )
+    for task in sorted(report["summaries"]["tasks"], key=lambda row: row["task_id"]):
+        lines.append(
+            f"| {task['task_id']} | {task['topic_category']} | {task['difficulty']} | "
+            f"{task['try1_successes']}/{task['completed_samples']} | "
+            f"{task['try2_successes']}/{task['completed_samples']} |"
+        )
     lines.extend(["", "## Figures", ""])
     for name, path in figure_paths.items():
         lines.append(f"![{name}]({path})")
@@ -1287,12 +1577,48 @@ def _write_data_tables(report: Mapping[str, Any], data_dir: Path) -> None:
         report["summaries"]["tasks"],
         [
             "task_id",
+            "topic_category",
+            "difficulty",
             "completed_samples",
             "try1_successes",
             "try2_successes",
             "recovered_on_try2",
             "final_failures",
             "pattern",
+        ],
+    )
+    _write_csv(
+        data_dir / "topic-categories.csv",
+        report["summaries"]["topic_categories"],
+        [
+            "topic_category",
+            "task_count",
+            "task_ids",
+            "trajectory_count",
+            "try1_successes",
+            "try2_successes",
+            "try1_success_rate",
+            "try2_success_rate",
+            "recovered_on_try2",
+            "task_coverage_try1",
+            "task_coverage_try2",
+        ],
+    )
+    _write_csv(
+        data_dir / "difficulty-categories.csv",
+        report["summaries"]["difficulty_categories"],
+        [
+            "difficulty",
+            "task_count",
+            "task_ids",
+            "trajectory_count",
+            "try1_successes",
+            "try2_successes",
+            "try1_success_rate",
+            "try2_success_rate",
+            "recovered_on_try2",
+            "task_coverage_try1",
+            "task_coverage_try2",
         ],
     )
     _write_csv(
@@ -1384,7 +1710,10 @@ def _prepare_output_root(output_root: Path, run_root: Path, *, overwrite: bool) 
         if not manifest_path.is_file():
             raise ModalAiderError("refusing to overwrite output without visualization manifest")
         manifest = _read_json(manifest_path)
-        if not isinstance(manifest, dict) or manifest.get("generator_version") != GENERATOR_VERSION:
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("generator_version") not in COMPATIBLE_OVERWRITE_GENERATORS
+        ):
             raise ModalAiderError("refusing to overwrite output from another generator")
         shutil.rmtree(output)
     tmp = output.with_name(f".{output.name}.tmp")
