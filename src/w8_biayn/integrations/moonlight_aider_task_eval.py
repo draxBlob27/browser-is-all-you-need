@@ -8,7 +8,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib.error import URLError
@@ -226,7 +226,7 @@ def grade_response(
     work_dir = out / "work"
     response = response_path.read_text(encoding="utf-8")
     summary: dict[str, Any] = {
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "task_id": task.task_id,
         "task_dir": str(task.task_dir),
         "response_path": str(response_path),
@@ -369,7 +369,7 @@ def run_eval(
         _write_text(resolved_response_path, content)
 
     prompt_record = {
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "task_id": task.task_id,
         "task_dir": str(task.task_dir),
         "editable_files": list(task.editable_files),

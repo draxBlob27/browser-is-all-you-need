@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib.error import URLError
@@ -148,7 +148,7 @@ def write_probe_artifacts(
     api_key_present: bool,
 ) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(UTC).isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
     prompt_record = {
         "created_at": timestamp,
         "prompt_id": DEFAULT_PROMPT_ID,
