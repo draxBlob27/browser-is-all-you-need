@@ -438,6 +438,29 @@ bash examples/slime/moonlight_cpp_perf/sft.sh
 Do not run `examples/slime/moonlight_cpp_perf/prepare_data.sh` for this smoke;
 it rebuilds PIE data instead of using the custom one-row SFT JSONL.
 
+### Response-Only Aider Task Probe And Grade
+
+To inspect a model on one task without training, serve any OpenAI-compatible
+model endpoint and run the probe-and-grade helper against a task folder:
+
+```bash
+export SLIME_RUN_ID=moonlight-response-only-two-fer
+
+bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh   --task-dir .w8-biayn/data/polyglot-benchmark/cpp/exercises/practice/two-fer   --base-url http://127.0.0.1:30000   --model auto   --max-tokens 2048
+```
+
+For a custom task without `.meta/config.json` `files.solution`, pass editable
+files explicitly:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh   --task-dir /path/to/my-task   --editable-file my_task.h   --editable-file my_task.cpp   --base-url http://127.0.0.1:30000   --model auto
+```
+
+The helper saves `prompt.txt`, `prompt.json`, `response.json`, `response.txt`,
+`grade/summary.json`, CMake configure/build logs, and a clean graded worktree.
+Use `--response path/to/response.txt` to skip model generation and grade an
+already saved response.
+
 
 To save a fresh model response after the SFT export exists, serve
 `${SLIME_RUN_ID}/hf/sft/rollout_0` with SGLang and run:

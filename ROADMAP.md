@@ -515,6 +515,17 @@ plus complete pre-edit `leap.h` and `leap.cpp` contents. It does not run
 `prepare_data.sh`, PIE eval, GRPO, GLM, or LoRA, and it must not be reported as
 uplift or benchmark evidence.
 
+Response-only task inspection, with no training, uses the same prompt shape but
+runs directly against an already served model and then grades the returned files:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh   --task-dir .w8-biayn/data/polyglot-benchmark/cpp/exercises/practice/two-fer   --base-url http://127.0.0.1:30000   --model auto
+```
+
+It saves `response.txt`, applies returned whole-file blocks to a clean task
+copy, runs CMake/tests, and writes `grade/summary.json` plus configure/build
+logs showing where the response passed or failed.
+
 ## Stage 5: Run GRPO From SFT
 
 Question:

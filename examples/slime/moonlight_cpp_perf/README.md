@@ -127,6 +127,23 @@ Or use the lane wrapper, which writes the same files and respects
 bash examples/slime/moonlight_cpp_perf/prepare_single_sample_sft_data.sh
 ```
 
+## Response-Only Aider Task Probe And Grade
+
+This path does not train. It sends one task to an already running
+OpenAI-compatible model server, saves the model response, applies Aider
+`whole` file listings to a clean task copy, and runs that task's CMake tests.
+
+```bash
+export SLIME_RUN_ID=moonlight-response-only-two-fer
+
+bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh   --task-dir .w8-biayn/data/polyglot-benchmark/cpp/exercises/practice/two-fer   --base-url http://127.0.0.1:30000   --model auto   --max-tokens 2048
+```
+
+For a custom task, either provide `.meta/config.json` with `files.solution` or
+pass `--editable-file` for each model-editable file. The artifacts include
+`response.txt` for the raw model answer and `grade/summary.json` plus
+configure/build logs for pass/fail diagnosis.
+
 Inside the SLIME container, run only the SFT stage against that data:
 
 ```bash

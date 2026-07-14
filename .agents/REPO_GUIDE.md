@@ -200,6 +200,14 @@ Then run the existing non-LoRA `examples/slime/moonlight_cpp_perf/sft.sh` with
 the LoRA lane for this smoke.
 
 
+For response-only inspection with no training, use
+`examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh` against an
+already running OpenAI-compatible model server and a task directory. It builds
+the Aider-like prompt from `.docs` plus editable starter files, saves
+`response.txt`, applies returned whole-file blocks to a clean copy, runs CMake,
+and writes `grade/summary.json` plus configure/build logs.
+
+
 Optional Moonlight Polyglot C++ base-eval benchmark. This is not active PIE
 training and not an official Aider leaderboard run; it is a repo-owned
 SLIME rollout-only eval of base Moonlight on C++ Exercism tasks. Keep detailed
