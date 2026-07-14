@@ -403,6 +403,39 @@ bash examples/slime/moonlight_cpp_perf/compare.sh
 The lane writes local state under
 `.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/`.
 
+### Moonlight Single-Sample Aider Whole SFT
+
+For the format-discipline smoke in
+`docs/moonlight_single_sample_sft.md`, build the one-row Aider `whole` dataset
+and run only the existing non-LoRA Moonlight SFT stage. This is not PIE
+performance training, GRPO, or benchmark evidence.
+
+From the host:
+
+```bash
+uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \
+  --out .w8-biayn/data/aider-whole-single
+uv run w8-biayn upstreams clone slime
+uv run w8-biayn slime setup
+```
+
+Inside the SLIME container:
+
+```bash
+export SLIME_RUN_ID=moonlight-aider-whole-single-sft
+export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"
+export SLIME_CPP_AUTO_PREPARE_DATA=0
+export SLIME_SFT_ROLLOUT_BATCH_SIZE=1
+export SLIME_SFT_GLOBAL_BATCH_SIZE=1
+export SLIME_SFT_NUM_EPOCH=1
+export SLIME_SAVE_INTERVAL=1
+
+bash examples/slime/moonlight_cpp_perf/sft.sh
+```
+
+Do not run `examples/slime/moonlight_cpp_perf/prepare_data.sh` for this smoke;
+it rebuilds PIE data instead of using the custom one-row SFT JSONL.
+
 
 ## Moonlight Polyglot C++ Base Eval
 

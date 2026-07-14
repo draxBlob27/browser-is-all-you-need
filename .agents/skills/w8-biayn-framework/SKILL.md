@@ -216,6 +216,20 @@ bash examples/slime/moonlight_cpp_perf/eval_grpo.sh
 bash examples/slime/moonlight_cpp_perf/compare.sh
 ```
 
+Optional Moonlight single-sample Aider `whole` format SFT smoke. This is a
+format-discipline check only, not PIE training evidence. Build the one-row data
+with:
+
+```bash
+uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \
+  --out .w8-biayn/data/aider-whole-single
+```
+
+Then run the existing non-LoRA `examples/slime/moonlight_cpp_perf/sft.sh` with
+`SLIME_CPP_DATA_DIR` pointed at that directory and
+`SLIME_CPP_AUTO_PREPARE_DATA=0`. Do not run `prepare_data.sh`, GRPO, GLM, or
+the LoRA lane for this smoke.
+
 
 Optional Moonlight Polyglot C++ base-eval benchmark. This is not active PIE
 training and not an official Aider leaderboard run; it is a repo-owned

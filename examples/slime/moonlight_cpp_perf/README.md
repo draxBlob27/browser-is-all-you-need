@@ -17,13 +17,15 @@ service.
 1. `README.md`: this runbook.
 2. `moonlight_cpp_perf.sh`: shared stage runner and all defaults.
 3. `prepare_data.sh`: builds SLIME JSONL files from validated PIE task JSON.
-4. `eval_base.sh`: runs base eval and writes `base.records.jsonl` /
+4. `prepare_single_sample_sft_data.sh`: optional one-row Aider `whole` format
+   SFT smoke data writer; it is not part of the PIE uplift sequence.
+5. `eval_base.sh`: runs base eval and writes `base.records.jsonl` /
    `base.summary.json` using SLIME rollout-only mode.
-5. `sft.sh`: runs SLIME SFT and writes Megatron plus HuggingFace checkpoints.
-6. `eval_sft.sh`: evaluates the SFT HuggingFace export on the same eval split.
-7. `grpo.sh`: runs one SLIME GRPO rollout from the SFT checkpoint/export.
-8. `eval_grpo.sh`: evaluates the GRPO HuggingFace export on the same eval split.
-9. `compare.sh`: writes the final base/SFT/GRPO comparison JSON.
+6. `sft.sh`: runs SLIME SFT and writes Megatron plus HuggingFace checkpoints.
+7. `eval_sft.sh`: evaluates the SFT HuggingFace export on the same eval split.
+8. `grpo.sh`: runs one SLIME GRPO rollout from the SFT checkpoint/export.
+9. `eval_grpo.sh`: evaluates the GRPO HuggingFace export on the same eval split.
+10. `compare.sh`: writes the final base/SFT/GRPO comparison JSON.
 
 The Python bridge used by these scripts is
 `src/w8_biayn/integrations/slime_cpp_perf.py`.
@@ -100,6 +102,45 @@ If `WANDB_API_KEY` or an existing W&B login is present, each stage gets a
 stable W&B run id: `${SLIME_RUN_ID}-base-eval`, `${SLIME_RUN_ID}-sft`,
 `${SLIME_RUN_ID}-sft-eval`, `${SLIME_RUN_ID}-grpo`, and
 `${SLIME_RUN_ID}-grpo-eval`.
+
+## Single-Sample Aider Whole SFT Smoke
+
+This optional smoke trains the same non-LoRA Moonlight SFT stage on one
+Aider `whole` edit-format chat sample from
+`docs/single_sample_for_sft.md`. It is a format-discipline experiment only:
+do not use it as PIE uplift evidence, do not run GRPO or the PIE evaluator as
+the proof, and do not use the LoRA or GLM lanes.
+
+From the repo root, write the custom dataset:
+
+```bash
+uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \
+  --out .w8-biayn/data/aider-whole-single
+```
+
+Or use the lane wrapper, which writes the same files and respects
+`SLIME_CPP_DATA_DIR`:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_single_sample_sft_data.sh
+```
+
+Inside the SLIME container, run only the SFT stage against that data:
+
+```bash
+export SLIME_RUN_ID=moonlight-aider-whole-single-sft
+export SLIME_CPP_DATA_DIR="$PWD/.w8-biayn/data/aider-whole-single"
+export SLIME_CPP_AUTO_PREPARE_DATA=0
+export SLIME_SFT_ROLLOUT_BATCH_SIZE=1
+export SLIME_SFT_GLOBAL_BATCH_SIZE=1
+export SLIME_SFT_NUM_EPOCH=1
+export SLIME_SAVE_INTERVAL=1
+
+bash examples/slime/moonlight_cpp_perf/sft.sh
+```
+
+The expected receipts and checkpoints are under
+`.w8-biayn/slime/moonlight-cpp-perf/runs/moonlight-aider-whole-single-sft/`.
 
 ## Smallest Honest 4x A100 Sequence
 
