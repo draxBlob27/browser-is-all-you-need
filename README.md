@@ -438,6 +438,18 @@ Do not run `examples/slime/moonlight_cpp_perf/prepare_data.sh` for this smoke;
 it rebuilds PIE data instead of using the custom one-row SFT JSONL.
 
 
+To save a fresh model response after the SFT export exists, serve
+`${SLIME_RUN_ID}/hf/sft/rollout_0` with SGLang and run:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/probe_single_sample_sft_response.sh \
+  --base-url http://127.0.0.1:30000 --model auto
+```
+
+The response is written under
+`.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/probes/aider-whole-heldout-two-fer/response.txt`.
+
+
 ## Moonlight Polyglot C++ Base Eval
 
 This optional benchmark lane evaluates the base Moonlight checkpoint on the C++

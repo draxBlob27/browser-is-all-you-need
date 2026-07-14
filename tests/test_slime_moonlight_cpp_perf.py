@@ -17,6 +17,8 @@ def test_moonlight_cpp_perf_example_files_are_present_and_executable() -> None:
         "README.md",
         "moonlight_cpp_perf.sh",
         "prepare_data.sh",
+        "prepare_single_sample_sft_data.sh",
+        "probe_single_sample_sft_response.sh",
         "eval_base.sh",
         "sft.sh",
         "eval_sft.sh",

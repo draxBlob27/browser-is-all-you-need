@@ -143,6 +143,29 @@ bash examples/slime/moonlight_cpp_perf/sft.sh
 The expected receipts and checkpoints are under
 `.w8-biayn/slime/moonlight-cpp-perf/runs/moonlight-aider-whole-single-sft/`.
 
+
+### Saving The Trained Model Response
+
+After the single-sample SFT run exports `hf/sft/rollout_0/`, start an
+OpenAI-compatible SGLang server for that export, then run the probe wrapper in a
+second shell:
+
+```bash
+export SLIME_RUN_ID=moonlight-aider-whole-single-sft-b2-r1
+export SFT_EXPORT="$PWD/.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/hf/sft/rollout_0"
+python -m sglang.launch_server --model-path "$SFT_EXPORT" --tp-size "${SLIME_NUM_GPUS:-4}" \
+  --mem-fraction-static 0.45 --served-model-name moonlight-single-sft --host 127.0.0.1 --port 30000
+```
+
+```bash
+export SLIME_RUN_ID=moonlight-aider-whole-single-sft-b2-r1
+bash examples/slime/moonlight_cpp_perf/probe_single_sample_sft_response.sh \
+  --base-url http://127.0.0.1:30000 --model auto
+```
+
+The generated answer is saved as
+`.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/probes/aider-whole-heldout-two-fer/response.txt`.
+
 ## Smallest Honest 4x A100 Sequence
 
 The default run is intentionally small but task-real:

@@ -198,6 +198,51 @@ The useful validation is a format probe against the exported SFT checkpoint:
 Use a held-out prompt for the probe; do not only ask the exact `leap.cpp` /
 `leap.h` training prompt.
 
+
+### Saving A Model Response
+
+The SFT training command does not generate a fresh answer. After SFT finishes
+and `hf/sft/rollout_0/` exists, start an OpenAI-compatible SGLang server for
+that exported checkpoint:
+
+```bash
+export SLIME_RUN_ID=moonlight-aider-whole-single-sft-b2-r1
+export SFT_EXPORT="$PWD/.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/hf/sft/rollout_0"
+
+python -m sglang.launch_server \
+  --model-path "$SFT_EXPORT" \
+  --tp-size "${SLIME_NUM_GPUS:-4}" \
+  --mem-fraction-static 0.45 \
+  --served-model-name moonlight-single-sft \
+  --host 127.0.0.1 \
+  --port 30000
+```
+
+In a second shell inside the same SLIME container, send the held-out Aider
+`whole` prompt and save the response:
+
+```bash
+cd /workspace/browser-is-all-you-need
+export SLIME_RUN_ID=moonlight-aider-whole-single-sft-b2-r1
+
+bash examples/slime/moonlight_cpp_perf/probe_single_sample_sft_response.sh \
+  --base-url http://127.0.0.1:30000 \
+  --model auto
+```
+
+The probe writes:
+
+```text
+.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/probes/aider-whole-heldout-two-fer/prompt.json
+.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/probes/aider-whole-heldout-two-fer/response.json
+.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/probes/aider-whole-heldout-two-fer/response.txt
+.w8-biayn/slime/moonlight-cpp-perf/runs/${SLIME_RUN_ID}/probes/aider-whole-heldout-two-fer/summary.json
+```
+
+Open `response.txt` to inspect the generated answer. `summary.json` records
+basic whole-format diagnostics, including fence count and whether each opening
+fence had a filename immediately before it.
+
 ## Failure Modes To Check
 
 - The SFT stage rebuilt PIE data: `SLIME_CPP_AUTO_PREPARE_DATA` was not `0`, or
