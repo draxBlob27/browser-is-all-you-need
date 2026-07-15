@@ -440,6 +440,15 @@ release approval, and producer/consumer verification gates. A ready result is
 `.w8-biayn/data/aider-sft-source-only-75-v1/sft/train.jsonl` with exactly 75
 rows.
 
+For a deliberately minimal internal handoff matching the established
+Moonlight Aider-task row shape, `data aider-sft export-minimal` reads that ready
+file without changing it and writes a sibling directory containing only
+`train.jsonl`. Each projected row keeps only `label`, `messages` with
+`role`/`content`, the six compact metadata fields, and `task_id`; message text
+is byte-for-byte preserved. This one-file projection is convenient for a
+trusted recipient, but it is not a substitute for the provenance-bearing
+`slime-sft` export.
+
 The revised data-only pilot admits exactly 96 roots, split into 72 train, 12
 validation, and 12 internal-test roots with exactly 16 roots in each of the six
 Aider C++ topic groups. It starts from a frozen 75-root non-benchmark Exercism

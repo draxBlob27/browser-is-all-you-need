@@ -6,16 +6,22 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from .config import GLM_REPOSITORY, GLM_REVISION, MASK_ADAPTER, profile_contract
 from .errors import AiderSftError
 from .receipts import _verify_rows_and_tokens, verify_ready_bundle
+from .schema import SftRow
 from .tokenization import load_locked_tokenizer
 from .util import (
     manifest_entries,
     read_json,
+    read_jsonl,
+    normalize_relative_path,
     sha256_file,
     verify_manifest_entries,
     write_json,
+    write_jsonl,
 )
 
 ALLOWED_EXPORT_FILES = {
@@ -27,6 +33,126 @@ ALLOWED_EXPORT_FILES = {
     "sft/train.jsonl",
     "sft/token-records.jsonl",
 }
+
+MINIMAL_MODEL_FAMILY = "moonlight"
+MINIMAL_PURPOSE = "aider-task-sft"
+MINIMAL_SOURCE_PREFIX = "exercism-cpp"
+
+
+def _metadata_value(value: str, *, field: str) -> str:
+    if not value or value != value.strip() or any(character in value for character in "\r\n\0"):
+        raise AiderSftError("static_schema_error", f"invalid minimal-export {field}")
+    return value
+
+
+def project_minimal_moonlight_row(
+    row: dict[str, Any],
+    *,
+    model_family: str = MINIMAL_MODEL_FAMILY,
+    purpose: str = MINIMAL_PURPOSE,
+    source_prefix: str = MINIMAL_SOURCE_PREFIX,
+) -> dict[str, Any]:
+    """Project one verified producer row to the established Moonlight row shape."""
+
+    try:
+        parsed = SftRow.model_validate(row)
+    except ValidationError as exc:
+        raise AiderSftError("static_schema_error", "invalid producer SFT row") from exc
+    if parsed.metadata.get("format") != "aider-whole" or parsed.metadata.get("subset") != "train":
+        raise AiderSftError(
+            "static_schema_error",
+            f"producer row is not Aider whole-format train data: {parsed.task_id}",
+        )
+    model_family = _metadata_value(model_family, field="model_family")
+    purpose = _metadata_value(purpose, field="purpose")
+    source_prefix = normalize_relative_path(_metadata_value(source_prefix, field="source_prefix"))
+    source = normalize_relative_path(f"{source_prefix}/{parsed.task_id}")
+    return {
+        "label": parsed.label,
+        "messages": [
+            {"content": message.content, "role": message.role} for message in parsed.messages
+        ],
+        "metadata": {
+            "format": "aider-whole",
+            "model_family": model_family,
+            "purpose": purpose,
+            "source": source,
+            "subset": "train",
+            "task_id": parsed.task_id,
+        },
+        "task_id": parsed.task_id,
+    }
+
+
+def export_minimal_moonlight_rows(
+    *,
+    source_root: Path,
+    output_root: Path,
+    model_family: str = MINIMAL_MODEL_FAMILY,
+    purpose: str = MINIMAL_PURPOSE,
+    source_prefix: str = MINIMAL_SOURCE_PREFIX,
+) -> dict[str, Any]:
+    """Write a one-file projection without mutating the immutable producer root."""
+
+    source_root = source_root.resolve()
+    output_root = output_root.resolve()
+    if output_root == source_root or source_root in output_root.parents:
+        raise AiderSftError(
+            "unsafe_path", "minimal export must be a sibling of the immutable ready root"
+        )
+    if output_root.exists() and (not output_root.is_dir() or any(output_root.iterdir())):
+        raise AiderSftError(
+            "consumer_export_manifest_mismatch",
+            f"minimal export root is not empty: {output_root}",
+        )
+
+    receipt = verify_ready_bundle(source_root, require_tokenizer=False)
+    source_train = source_root / "sft/train.jsonl"
+    source_sha256 = sha256_file(source_train)
+    source_rows = read_jsonl(source_train)
+    projected = [
+        project_minimal_moonlight_row(
+            row,
+            model_family=model_family,
+            purpose=purpose,
+            source_prefix=source_prefix,
+        )
+        for row in source_rows
+    ]
+    if len(projected) != receipt["counts"]["train_rows"] or len(
+        {row["task_id"] for row in projected}
+    ) != len(projected):
+        raise AiderSftError(
+            "consumer_export_manifest_mismatch",
+            "minimal export row count or task identities differ",
+        )
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    output_train = output_root / "train.jsonl"
+    write_jsonl(output_train, projected)
+    output_train.chmod(0o444)
+    observed = {
+        path.relative_to(output_root).as_posix()
+        for path in output_root.rglob("*")
+        if path.is_file()
+    }
+    if observed != {"train.jsonl"} or read_jsonl(output_train) != projected:
+        raise AiderSftError(
+            "consumer_export_manifest_mismatch", "minimal export differs after writing"
+        )
+    if sha256_file(source_train) != source_sha256:
+        raise AiderSftError(
+            "consumer_export_manifest_mismatch", "producer train JSONL changed during export"
+        )
+    return {
+        "root": str(output_root),
+        "status": "verified",
+        "dataset_id": receipt["dataset_id"],
+        "rows": len(projected),
+        "files": ["train.jsonl"],
+        "source_train_sha256": source_sha256,
+        "train_sha256": sha256_file(output_train),
+    }
 
 
 def export_slime_bundle(

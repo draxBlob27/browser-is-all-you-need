@@ -271,6 +271,13 @@ sanitizer gates, contamination review, exact final split/release approvals,
 token/mask evidence, and producer/consumer verification. It does not replace
 or satisfy the balanced 96-root pilot.
 
+An optional `export-minimal` projection supports the legacy Moonlight
+Aider-task handoff shape. It verifies the ready producer root, leaves its
+`sft/train.jsonl` unchanged, and emits exactly one sibling `train.jsonl` with
+only `label`, two role/content messages, compact six-field metadata, and
+`task_id`. Treat it as an internal convenience copy, not as the verified
+provenance bundle.
+
 The initial profile targets 96 total admitted roots:
 
 - 72 train roots and therefore 72 SFT rows;

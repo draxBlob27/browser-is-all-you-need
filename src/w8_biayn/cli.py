@@ -18,7 +18,11 @@ from rich.table import Table
 
 from . import benchmarks, upstreams
 from .slime_integration.doctor import run_slime_doctor
-from .slime_integration.setup import DEFAULT_SLIME_IMAGE, build_slime_setup_plan, write_slime_setup_files
+from .slime_integration.setup import (
+    DEFAULT_SLIME_IMAGE,
+    build_slime_setup_plan,
+    write_slime_setup_files,
+)
 from .constants import (
     CPP_DATA_SCHEMA_VERSION,
     DEFAULT_CPP_CONTAINER_IMAGE,
@@ -199,7 +203,6 @@ def _build_skyrl_datasets_legacy(command: str, *args: Any, **kwargs: Any) -> dic
     except ImportError as exc:  # pragma: no cover - exercised only when legacy files are absent
         _legacy_skyrl_unavailable(command, exc)
     return build_skyrl_datasets(*args, **kwargs)
-
 
 
 SKYPILOT_GCP_LAUNCH_PERMISSIONS = (
@@ -415,13 +418,27 @@ def _require_grpo_readiness(rendered_config_path: str | Path) -> None:
 
 @app.command()
 def doctor(
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     cloud: bool = typer.Option(False, help="Run GCP/cloud backend checks."),
-    cpp_perf: bool = typer.Option(False, "--cpp-perf", help="Check C++ performance-harness prerequisites."),
-    preflight: bool = typer.Option(True, "--preflight/--no-preflight", help="Run the C++ runtime preflight."),
-    image: str = typer.Option(DEFAULT_DOCKER_IMAGE, help="Docker image used for the C++ runtime preflight."),
-    cpu: str = typer.Option(DEFAULT_CPU, help="CPU id used for taskset in the C++ runtime preflight."),
-    build_image: bool = typer.Option(True, "--build-image/--no-build-image", help="Build the default runtime sandbox image before preflight."),
+    cpp_perf: bool = typer.Option(
+        False, "--cpp-perf", help="Check C++ performance-harness prerequisites."
+    ),
+    preflight: bool = typer.Option(
+        True, "--preflight/--no-preflight", help="Run the C++ runtime preflight."
+    ),
+    image: str = typer.Option(
+        DEFAULT_DOCKER_IMAGE, help="Docker image used for the C++ runtime preflight."
+    ),
+    cpu: str = typer.Option(
+        DEFAULT_CPU, help="CPU id used for taskset in the C++ runtime preflight."
+    ),
+    build_image: bool = typer.Option(
+        True,
+        "--build-image/--no-build-image",
+        help="Build the default runtime sandbox image before preflight.",
+    ),
 ) -> None:
     """Validate local prerequisites without printing secrets."""
 
@@ -488,7 +505,9 @@ def doctor(
     if cloud:
         project_id = project_id or _project_id(credentials)
         env = _service_account_env(credentials, project_id=project_id)
-        console.print("cloud credentials: service-account JSON env override; gcloud auth/config is not modified.")
+        console.print(
+            "cloud credentials: service-account JSON env override; gcloud auth/config is not modified."
+        )
         run_command(["sky", "check", "gcp"], env=env)
         check_json = subprocess.run(
             ["sky", "check", "gcp", "-o", "json"],
@@ -518,7 +537,9 @@ def doctor(
             )
             raise typer.Exit(1)
         if not sky_gcp_enabled:
-            console.print("[red]GCP is not enabled for the cloud backend. Fix the IAM errors above and rerun doctor.[/red]")
+            console.print(
+                "[red]GCP is not enabled for the cloud backend. Fix the IAM errors above and rerun doctor.[/red]"
+            )
             raise typer.Exit(1)
 
 
@@ -636,13 +657,14 @@ def data_doctor() -> None:
             detail = getattr(module, "__version__", "installed")
             table.add_row(module_name, "ok", str(detail))
         except ImportError:
-            table.add_row(module_name, "missing", f"run ./scripts/bootstrap.sh to install {module_name}")
+            table.add_row(
+                module_name, "missing", f"run ./scripts/bootstrap.sh to install {module_name}"
+            )
     for tool in ("gcloud", "git", "g++", "gcov", "timeout"):
         found = shutil.which(tool)
         table.add_row(tool, "ok" if found else "missing", found or "not on PATH")
     table.add_row("schema", "ok", CPP_DATA_SCHEMA_VERSION)
     console.print(table)
-
 
 
 def _aider_sft_call(operation: Any) -> dict[str, Any]:
@@ -669,16 +691,12 @@ def data_aider_sft_plan(
 
     from .aider_sft.pipeline import plan_dataset
 
-    _aider_sft_call(
-        lambda: plan_dataset(config_path=config, repo_root=Path(".").resolve())
-    )
+    _aider_sft_call(lambda: plan_dataset(config_path=config, repo_root=Path(".").resolve()))
 
 
 @data_aider_sft_app.command("inventory")
 def data_aider_sft_inventory(
-    config: Path = typer.Option(
-        Path("configs/aider_sft/pilot-v1.toml"), "--config"
-    ),
+    config: Path = typer.Option(Path("configs/aider_sft/pilot-v1.toml"), "--config"),
     out: Path = typer.Option(..., "--out", help="Ignored construction root."),
 ) -> None:
     """Discover the exact source inventory and profile deficit cells."""
@@ -744,9 +762,7 @@ def data_aider_sft_inventory_promote(
 
 @data_aider_sft_app.command("build")
 def data_aider_sft_build(
-    config: Path = typer.Option(
-        Path("configs/aider_sft/pilot-v1.toml"), "--config"
-    ),
+    config: Path = typer.Option(Path("configs/aider_sft/pilot-v1.toml"), "--config"),
     out: Path = typer.Option(..., "--out", help="Ignored construction root."),
     resume: bool = typer.Option(False, "--resume", help="Resume a matching incomplete root."),
     acknowledge_paid_llm_calls: bool = typer.Option(
@@ -791,9 +807,7 @@ def data_aider_sft_review_import(
 
     from .aider_sft.pipeline import review_import
 
-    _aider_sft_call(
-        lambda: review_import(root=root.resolve(), decisions_path=decisions.resolve())
-    )
+    _aider_sft_call(lambda: review_import(root=root.resolve(), decisions_path=decisions.resolve()))
 
 
 @data_aider_sft_app.command("finalize")
@@ -856,11 +870,36 @@ def data_aider_sft_verify_export(
     _aider_sft_call(lambda: verify_export(root=root.resolve()))
 
 
+@data_aider_sft_app.command("export-minimal")
+def data_aider_sft_export_minimal(
+    root: Path = typer.Option(..., "--root"),
+    out: Path = typer.Option(..., "--out"),
+    model_family: str = typer.Option("moonlight", "--model-family"),
+    purpose: str = typer.Option("aider-task-sft", "--purpose"),
+    source_prefix: str = typer.Option("exercism-cpp", "--source-prefix"),
+) -> None:
+    """Project a ready dataset to one minimal Moonlight-style train.jsonl."""
+
+    from .aider_sft.pipeline import export_minimal_dataset
+
+    _aider_sft_call(
+        lambda: export_minimal_dataset(
+            root=root.resolve(),
+            output=out.resolve(),
+            model_family=model_family,
+            purpose=purpose,
+            source_prefix=source_prefix,
+        )
+    )
+
+
 @data_pie_app.command("download")
 def data_pie_download(
     out: str = typer.Option(f"{DEFAULT_DATA_ROOT}/pie", "--out", help="Local PIE data root."),
     force: bool = typer.Option(False, help="Re-download files that already exist."),
-    dry_run: bool = typer.Option(False, help="Print source URLs and destinations without downloading."),
+    dry_run: bool = typer.Option(
+        False, help="Print source URLs and destinations without downloading."
+    ),
 ) -> None:
     """Download PIE source archives into the project data cache."""
 
@@ -875,8 +914,12 @@ def data_pie_download(
 
 @data_pie_app.command("prepare-full")
 def data_pie_prepare_full(
-    source_root: str = typer.Option(f"{DEFAULT_DATA_ROOT}/pie", "--source-root", help="PIE download root."),
-    out: str = typer.Option(f"{DEFAULT_DATA_ROOT}/pie-full", "--out", help="Prepared full PIE root."),
+    source_root: str = typer.Option(
+        f"{DEFAULT_DATA_ROOT}/pie", "--source-root", help="PIE download root."
+    ),
+    out: str = typer.Option(
+        f"{DEFAULT_DATA_ROOT}/pie-full", "--out", help="Prepared full PIE root."
+    ),
     force: bool = typer.Option(False, help="Replace an existing prepared tree."),
 ) -> None:
     """Unpack official PIE archives into normalized full-run splits and cases."""
@@ -895,8 +938,12 @@ def data_pie_prepare_full(
 
 @data_pie_app.command("measure-coverage")
 def data_pie_measure_coverage(
-    prepared_root: str = typer.Option(f"{DEFAULT_DATA_ROOT}/pie-full", "--prepared-root", help="Prepared PIE root."),
-    out: str = typer.Option(f"{DEFAULT_DATA_ROOT}/pie-full/coverage.json", "--out", help="Coverage JSON path."),
+    prepared_root: str = typer.Option(
+        f"{DEFAULT_DATA_ROOT}/pie-full", "--prepared-root", help="Prepared PIE root."
+    ),
+    out: str = typer.Option(
+        f"{DEFAULT_DATA_ROOT}/pie-full/coverage.json", "--out", help="Coverage JSON path."
+    ),
     report_out: str = typer.Option(
         f"{DEFAULT_DATA_ROOT}/pie-full/coverage-report.json",
         "--report-out",
@@ -910,8 +957,12 @@ def data_pie_measure_coverage(
     limit_per_split: Optional[int] = typer.Option(None, help="Optional row limit per split."),
     timeout_s: int = typer.Option(5, help="Timeout per oracle test run."),
     jobs: int = typer.Option(1, help="Parallel coverage workers."),
-    checkpoint_every: int = typer.Option(25, help="Write progress after this many completed problems."),
-    resume: bool = typer.Option(True, "--resume/--no-resume", help="Reuse completed problems from an existing report."),
+    checkpoint_every: int = typer.Option(
+        25, help="Write progress after this many completed problems."
+    ),
+    resume: bool = typer.Option(
+        True, "--resume/--no-resume", help="Reuse completed problems from an existing report."
+    ),
 ) -> None:
     """Measure oracle gcov coverage for prepared PIE problems."""
 
@@ -940,7 +991,11 @@ def data_pie_measure_coverage(
         if not isinstance(problems, dict):
             return rebuilt
         for problem_id, payload in problems.items():
-            if not isinstance(payload, dict) or not payload.get("ok") or not isinstance(payload.get("coverage"), dict):
+            if (
+                not isinstance(payload, dict)
+                or not payload.get("ok")
+                or not isinstance(payload.get("coverage"), dict)
+            ):
                 continue
             rebuilt[str(problem_id)] = payload["coverage"]  # type: ignore[assignment]
         report["accepted"] = len(rebuilt)
@@ -956,11 +1011,16 @@ def data_pie_measure_coverage(
 
     def measure_one(problem_id: str):
         pair = unique_pairs[problem_id]
-        tests = [TestCase.model_validate(item) for item in discover_problem_tests(base / "cases" / problem_id)]
+        tests = [
+            TestCase.model_validate(item)
+            for item in discover_problem_tests(base / "cases" / problem_id)
+        ]
         return problem_id, measure_cpp_coverage(pair.oracle_solution, tests, timeout_s=timeout_s)
 
     checkpoint_interval = max(1, checkpoint_every)
-    pending = [problem_id for problem_id in sorted(unique_pairs) if problem_id not in report["problems"]]
+    pending = [
+        problem_id for problem_id in sorted(unique_pairs) if problem_id not in report["problems"]
+    ]
     checkpoint()
     console.print(f"coverage_total: {len(unique_pairs)}")
     console.print(f"coverage_pending: {len(pending)}")
@@ -1008,11 +1068,19 @@ def data_pie_measure_coverage(
 
 @data_pie_app.command("build-tests-manifest")
 def data_pie_build_tests_manifest(
-    inputs_outputs_basepath: str = typer.Option(..., "--inputs-outputs-basepath", help="Directory keyed by problem id."),
-    coverage_json: str = typer.Option(..., "--coverage-json", help="Problem-id keyed coverage JSON."),
+    inputs_outputs_basepath: str = typer.Option(
+        ..., "--inputs-outputs-basepath", help="Directory keyed by problem id."
+    ),
+    coverage_json: str = typer.Option(
+        ..., "--coverage-json", help="Problem-id keyed coverage JSON."
+    ),
     out: str = typer.Option(..., "--out", help="Output tests manifest JSON path."),
-    problem_id: Optional[list[str]] = typer.Option(None, "--problem-id", help="Problem id to include. Repeatable."),
-    problem_ids_json: Optional[str] = typer.Option(None, "--problem-ids-json", help="JSON list of problem ids."),
+    problem_id: Optional[list[str]] = typer.Option(
+        None, "--problem-id", help="Problem id to include. Repeatable."
+    ),
+    problem_ids_json: Optional[str] = typer.Option(
+        None, "--problem-ids-json", help="JSON list of problem ids."
+    ),
     visible_count: int = typer.Option(1, help="Visible tests per problem."),
     hidden_count: int = typer.Option(1, help="Hidden tests per problem."),
 ) -> None:
@@ -1025,7 +1093,9 @@ def data_pie_build_tests_manifest(
             raise typer.BadParameter("--problem-ids-json must contain a JSON list")
         selected.extend(str(item) for item in loaded_ids)
     if not selected:
-        selected = [path.name for path in sorted(Path(inputs_outputs_basepath).iterdir()) if path.is_dir()]
+        selected = [
+            path.name for path in sorted(Path(inputs_outputs_basepath).iterdir()) if path.is_dir()
+        ]
     coverage = json.loads(Path(coverage_json).read_text(encoding="utf-8"))
     manifest = build_tests_manifest_from_io(
         selected,
@@ -1043,20 +1113,28 @@ def data_pie_build_tests_manifest(
 
 @data_pie_app.command("build-full-tasks")
 def data_pie_build_full_tasks(
-    prepared_root: str = typer.Option(f"{DEFAULT_DATA_ROOT}/pie-full", "--prepared-root", help="Prepared PIE root."),
+    prepared_root: str = typer.Option(
+        f"{DEFAULT_DATA_ROOT}/pie-full", "--prepared-root", help="Prepared PIE root."
+    ),
     coverage_json: str = typer.Option(
         f"{DEFAULT_DATA_ROOT}/pie-full/coverage.json",
         "--coverage-json",
         help="Problem-id keyed measured coverage JSON.",
     ),
-    out: str = typer.Option(f"{DEFAULT_DATA_ROOT}/tasks-full", "--out", help="Output task JSON root."),
+    out: str = typer.Option(
+        f"{DEFAULT_DATA_ROOT}/tasks-full", "--out", help="Output task JSON root."
+    ),
     visible_count: int = typer.Option(1, help="Visible tests per problem."),
     hidden_count: int = typer.Option(1, help="Hidden tests per problem."),
     min_train: int = typer.Option(1000, help="Minimum train tasks for a full official run."),
-    min_validation: int = typer.Option(100, help="Minimum validation tasks for a full official run."),
+    min_validation: int = typer.Option(
+        100, help="Minimum validation tasks for a full official run."
+    ),
     min_test: int = typer.Option(100, help="Minimum test tasks for a full official run."),
     limit_per_split: Optional[int] = typer.Option(None, help="Optional row limit per split."),
-    compiler_flags: str = typer.Option("-O3 -std=c++20", help="Compiler flags recorded in each task."),
+    compiler_flags: str = typer.Option(
+        "-O3 -std=c++20", help="Compiler flags recorded in each task."
+    ),
     force: bool = typer.Option(False, help="Replace an existing task tree."),
 ) -> None:
     """Build full official PIE task JSON with count and coverage gates."""
@@ -1118,9 +1196,13 @@ def data_pie_build_full_tasks(
             "report": str(report_path),
         },
     )
-    console.print_json(data={"counts": counts, "report": str(report_path), "manifest": str(manifest_path)})
+    console.print_json(
+        data={"counts": counts, "report": str(report_path), "manifest": str(manifest_path)}
+    )
     if counts.get("train", 0) < min_train:
-        raise typer.BadParameter(f"full-run train gate failed: {counts.get('train', 0)} < {min_train}")
+        raise typer.BadParameter(
+            f"full-run train gate failed: {counts.get('train', 0)} < {min_train}"
+        )
     if counts.get("validation", 0) < min_validation:
         raise typer.BadParameter(
             f"full-run validation gate failed: {counts.get('validation', 0)} < {min_validation}"
@@ -1132,11 +1214,15 @@ def data_pie_build_full_tasks(
 @data_pie_app.command("build-tasks")
 def data_pie_build_tasks(
     pairs: str = typer.Option(..., "--pairs", help="PIE TSV or JSONL rows."),
-    tests_json: str = typer.Option(..., "--tests-json", help="Problem-id keyed tests/coverage manifest."),
+    tests_json: str = typer.Option(
+        ..., "--tests-json", help="Problem-id keyed tests/coverage manifest."
+    ),
     out: str = typer.Option(..., "--out", help="Output directory for task JSON files."),
     split: str = typer.Option("train", help="Task split to write: train, test, or validation."),
     limit: Optional[int] = typer.Option(None, help="Optional maximum PIE rows to inspect."),
-    compiler_flags: str = typer.Option("-O3 -std=c++20", help="Compiler flags recorded in each task."),
+    compiler_flags: str = typer.Option(
+        "-O3 -std=c++20", help="Compiler flags recorded in each task."
+    ),
 ) -> None:
     """Build validated task JSON from PIE rows and a tests manifest."""
 
@@ -1152,8 +1238,12 @@ def data_pie_build_tasks(
 
 @data_skyrl_app.command("build")
 def data_skyrl_build(
-    tasks_dir: str = typer.Option(..., "--tasks-dir", help="Directory containing validated task JSON."),
-    out: str = typer.Option(DEFAULT_SKYRL_DATA_DIR, "--out", help="Output SkyRL dataset bundle directory."),
+    tasks_dir: str = typer.Option(
+        ..., "--tasks-dir", help="Directory containing validated task JSON."
+    ),
+    out: str = typer.Option(
+        DEFAULT_SKYRL_DATA_DIR, "--out", help="Output SkyRL dataset bundle directory."
+    ),
     profile: str = typer.Option("smoke", help="Dataset profile recorded in the manifest."),
     run_id: Optional[str] = typer.Option(None, help="Run id recorded in the manifest."),
     min_train_tasks: int = typer.Option(1, help="Minimum train tasks required."),
@@ -1176,7 +1266,9 @@ def data_skyrl_build(
 
 @data_slime_app.command("build")
 def data_slime_build(
-    tasks_dir: str = typer.Option(..., "--tasks-dir", help="Directory containing validated task JSON."),
+    tasks_dir: str = typer.Option(
+        ..., "--tasks-dir", help="Directory containing validated task JSON."
+    ),
     out: str = typer.Option(
         f"{DEFAULT_DATA_ROOT}/slime-pie",
         "--out",
@@ -1209,10 +1301,14 @@ def data_slime_build(
 
 @data_supercoder_app.command("download")
 def data_supercoder_download(
-    out: str = typer.Option(f"{DEFAULT_DATA_ROOT}/supercoder", "--out", help="Local SuperCoder data root."),
+    out: str = typer.Option(
+        f"{DEFAULT_DATA_ROOT}/supercoder", "--out", help="Local SuperCoder data root."
+    ),
     dataset: str = typer.Option(SUPERCODER_DATASET, help="Hugging Face dataset id."),
     force: bool = typer.Option(False, help="Re-download resolved files."),
-    dry_run: bool = typer.Option(False, help="Print Hugging Face dataset/patterns without downloading."),
+    dry_run: bool = typer.Option(
+        False, help="Print Hugging Face dataset/patterns without downloading."
+    ),
 ) -> None:
     """Download SuperCoder reference parquet splits for study/eval conversion."""
 
@@ -1237,7 +1333,9 @@ def data_supercoder_inspect(
 @data_cache_app.command("upload")
 def data_cache_upload(
     path: str = typer.Option(DEFAULT_SKYRL_DATA_DIR, "--path", help="Local data bundle directory."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     gcs_prefix: Optional[str] = typer.Option(None, "--gcs-prefix", help="Destination GCS prefix."),
     dry_run: bool = typer.Option(False, help="Print gcloud command without uploading."),
 ) -> None:
@@ -1254,7 +1352,15 @@ def data_cache_upload(
     if dry_run:
         run_command(["gcloud", "storage", "buckets", "describe", bucket_uri], env=env, dry_run=True)
         run_command(
-            ["gcloud", "storage", "buckets", "create", bucket_uri, "--project", _project_id(credentials)],
+            [
+                "gcloud",
+                "storage",
+                "buckets",
+                "create",
+                bucket_uri,
+                "--project",
+                _project_id(credentials),
+            ],
             env=env,
             dry_run=True,
         )
@@ -1267,14 +1373,31 @@ def data_cache_upload(
             text=True,
         )
         if describe.returncode != 0:
-            run_command(["gcloud", "storage", "buckets", "create", bucket_uri, "--project", _project_id(credentials)], env=env)
-    run_command(["gcloud", "storage", "rsync", "--recursive", str(local_path), prefix], env=env, dry_run=dry_run)
+            run_command(
+                [
+                    "gcloud",
+                    "storage",
+                    "buckets",
+                    "create",
+                    bucket_uri,
+                    "--project",
+                    _project_id(credentials),
+                ],
+                env=env,
+            )
+    run_command(
+        ["gcloud", "storage", "rsync", "--recursive", str(local_path), prefix],
+        env=env,
+        dry_run=dry_run,
+    )
 
 
 @data_cache_app.command("restore")
 def data_cache_restore(
     path: str = typer.Option(DEFAULT_SKYRL_DATA_DIR, "--path", help="Local restore directory."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     gcs_prefix: Optional[str] = typer.Option(None, "--gcs-prefix", help="Source GCS prefix."),
     dry_run: bool = typer.Option(False, help="Print gcloud command without restoring."),
 ) -> None:
@@ -1285,7 +1408,11 @@ def data_cache_restore(
     local_path.mkdir(parents=True, exist_ok=True)
     env = _cache_command_env(credentials, gcs_prefix)
     if dry_run:
-        run_command(["gcloud", "storage", "rsync", "--recursive", prefix, str(local_path)], env=env, dry_run=True)
+        run_command(
+            ["gcloud", "storage", "rsync", "--recursive", prefix, str(local_path)],
+            env=env,
+            dry_run=True,
+        )
         return
     # A first-ever run (or a new admission-gate key) is a normal cache miss, not
     # an error: probe for objects and exit non-zero quietly so callers rebuild
@@ -1310,11 +1437,15 @@ def data_cache_restore(
 @task_app.command("build")
 def cpp_task_build(
     pie_tsv: str = typer.Option(..., "--pie-tsv", help="PIE trajectory TSV to parse."),
-    tests_json: str = typer.Option(..., "--tests-json", help="Problem-id keyed tests/coverage manifest."),
+    tests_json: str = typer.Option(
+        ..., "--tests-json", help="Problem-id keyed tests/coverage manifest."
+    ),
     out: str = typer.Option(..., "--out", help="Output directory for task JSON files."),
     split: str = typer.Option("train", help="Task split to write: train, test, or validation."),
     limit: Optional[int] = typer.Option(None, help="Optional maximum PIE rows to inspect."),
-    compiler_flags: str = typer.Option("-O3 -std=c++20", help="Compiler flags recorded in each task."),
+    compiler_flags: str = typer.Option(
+        "-O3 -std=c++20", help="Compiler flags recorded in each task."
+    ),
 ) -> None:
     """Build validated PIE-derived C++ task JSON files."""
 
@@ -1332,9 +1463,13 @@ def cpp_task_build(
 def cpp_harness_run(
     task: str = typer.Option(..., "--task", help="Task JSON path."),
     candidate: str = typer.Option(..., "--candidate", help="Candidate C++ file path."),
-    image: str = typer.Option(DEFAULT_DOCKER_IMAGE, help="Docker image containing g++, python3, taskset, and bash."),
+    image: str = typer.Option(
+        DEFAULT_DOCKER_IMAGE, help="Docker image containing g++, python3, taskset, and bash."
+    ),
     cpu: str = typer.Option(DEFAULT_CPU, help="Isolated CPU id used for taskset."),
-    work_dir: Optional[str] = typer.Option(None, help="Optional scratch directory to keep logs/artifacts."),
+    work_dir: Optional[str] = typer.Option(
+        None, help="Optional scratch directory to keep logs/artifacts."
+    ),
     dry_run: bool = typer.Option(False, help="Print sandbox commands without running Docker."),
 ) -> None:
     """Compile, test, and measure a candidate."""
@@ -1350,11 +1485,21 @@ def cpp_harness_run(
 
 @harness_app.command("preflight")
 def cpp_harness_preflight(
-    image: str = typer.Option(DEFAULT_DOCKER_IMAGE, help="Docker image containing g++, python3, taskset, and bash."),
+    image: str = typer.Option(
+        DEFAULT_DOCKER_IMAGE, help="Docker image containing g++, python3, taskset, and bash."
+    ),
     cpu: str = typer.Option(DEFAULT_CPU, help="CPU id used for taskset."),
-    work_dir: Optional[str] = typer.Option(None, help="Optional scratch directory to keep logs/artifacts."),
-    build_image: bool = typer.Option(True, "--build-image/--no-build-image", help="Build the default runtime sandbox image before running."),
-    dry_run: bool = typer.Option(False, help="Print the sandbox preflight command without running Docker."),
+    work_dir: Optional[str] = typer.Option(
+        None, help="Optional scratch directory to keep logs/artifacts."
+    ),
+    build_image: bool = typer.Option(
+        True,
+        "--build-image/--no-build-image",
+        help="Build the default runtime sandbox image before running.",
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Print the sandbox preflight command without running Docker."
+    ),
 ) -> None:
     """Verify that the sandbox can compile, run, and measure CPU time."""
 
@@ -1383,17 +1528,29 @@ def cpp_harness_preflight(
 
 @harness_app.command("swe-image")
 def cpp_harness_swe_image(
-    image: str = typer.Option(DEFAULT_SWE_AGENT_IMAGE, help="Tag for the SWE-agent edit-loop image."),
-    base_image: str = typer.Option(DEFAULT_DOCKER_IMAGE, help="Base C++ sandbox image to extend (must already exist)."),
-    build_base: bool = typer.Option(False, "--build-base/--no-build-base", help="Build the base C++ sandbox image first."),
-    dry_run: bool = typer.Option(False, help="Print the build command and Dockerfile without running Docker."),
+    image: str = typer.Option(
+        DEFAULT_SWE_AGENT_IMAGE, help="Tag for the SWE-agent edit-loop image."
+    ),
+    base_image: str = typer.Option(
+        DEFAULT_DOCKER_IMAGE, help="Base C++ sandbox image to extend (must already exist)."
+    ),
+    build_base: bool = typer.Option(
+        False, "--build-base/--no-build-base", help="Build the base C++ sandbox image first."
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Print the build command and Dockerfile without running Docker."
+    ),
 ) -> None:
     """Build the SWE-agent edit-loop image (the C++ sandbox image plus git)."""
 
     if dry_run:
         if build_base:
             console.print(sandbox_image_build_plan(image=base_image), markup=False, soft_wrap=True)
-        console.print(swe_agent_image_build_plan(image=image, base_image=base_image), markup=False, soft_wrap=True)
+        console.print(
+            swe_agent_image_build_plan(image=image, base_image=base_image),
+            markup=False,
+            soft_wrap=True,
+        )
         return
     if build_base:
         base_build = build_sandbox_image(image=base_image)
@@ -1426,7 +1583,9 @@ def cpp_reward_score(
     model_output: str = typer.Option(..., "--model-output", help="Model output Markdown path."),
     image: str = typer.Option(DEFAULT_DOCKER_IMAGE, help="Docker image for harness execution."),
     cpu: str = typer.Option(DEFAULT_CPU, help="Isolated CPU id used for taskset."),
-    dry_run: bool = typer.Option(False, help="Validate format and print harness commands without scoring."),
+    dry_run: bool = typer.Option(
+        False, help="Validate format and print harness commands without scoring."
+    ),
 ) -> None:
     """Score one model output with the correctness-gated efficiency reward."""
 
@@ -1441,7 +1600,9 @@ def cpp_reward_score(
             code = None
         if code is not None:
             console.print(f"candidate_bytes: {len(code.encode('utf-8'))}")
-            console.print(dry_run_plan(loaded_task, image=image, cpu=cpu), markup=False, soft_wrap=True)
+            console.print(
+                dry_run_plan(loaded_task, image=image, cpu=cpu), markup=False, soft_wrap=True
+            )
         return
 
     def runner(candidate_task: CppTask, code: str):
@@ -1456,19 +1617,31 @@ def cpp_reward_score(
 
 @config_app.command("render")
 def config_render(
-    pipeline: str = typer.Argument(..., help="Legacy SkyRL pipeline to render: cpp-smoke, cpp-sft, cpp-grpo, or cpp-eval."),
+    pipeline: str = typer.Argument(
+        ..., help="Legacy SkyRL pipeline to render: cpp-smoke, cpp-sft, cpp-grpo, or cpp-eval."
+    ),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output YAML path."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     bucket: Optional[str] = typer.Option(None, help="Artifact bucket URI."),
     accelerators: Optional[str] = typer.Option(None, help="Cloud backend accelerator request."),
     num_nodes: int = typer.Option(1, help="Cloud backend node count."),
-    region: str = typer.Option("", "--region", help="Optional GCP region to pin in rendered SkyPilot infra."),
-    zone: str = typer.Option("", "--zone", help="Optional GCP zone to pin in rendered SkyPilot infra."),
+    region: str = typer.Option(
+        "", "--region", help="Optional GCP region to pin in rendered SkyPilot infra."
+    ),
+    zone: str = typer.Option(
+        "", "--zone", help="Optional GCP zone to pin in rendered SkyPilot infra."
+    ),
     disk_size: Optional[int] = typer.Option(None, help="Cloud backend boot disk size in GB."),
     cluster: Optional[str] = typer.Option(None, help="Cloud backend cluster name."),
     model: Optional[str] = typer.Option(None, help="Open model to load/train."),
-    gpu_container_image: str = typer.Option(DEFAULT_CPP_CONTAINER_IMAGE, help="GPU Docker image for the smoke."),
-    dataset_gcs_prefix: Optional[str] = typer.Option(None, help="Versioned SkyRL dataset GCS prefix."),
+    gpu_container_image: str = typer.Option(
+        DEFAULT_CPP_CONTAINER_IMAGE, help="GPU Docker image for the smoke."
+    ),
+    dataset_gcs_prefix: Optional[str] = typer.Option(
+        None, help="Versioned SkyRL dataset GCS prefix."
+    ),
     train_batch_size: int = typer.Option(16, help="Training batch size for cpp-sft/cpp-grpo."),
     micro_train_batch_size_per_gpu: int = typer.Option(
         1,
@@ -1486,7 +1659,9 @@ def config_render(
         "--grpo-use-entropy-loss/--no-grpo-use-entropy-loss",
         help="Apply an entropy bonus during cpp-grpo to reduce deterministic policy collapse.",
     ),
-    grpo_entropy_loss_coef: float = typer.Option(0.001, help="Entropy loss coefficient for cpp-grpo."),
+    grpo_entropy_loss_coef: float = typer.Option(
+        0.001, help="Entropy loss coefficient for cpp-grpo."
+    ),
     grpo_vllm_gpu_memory_utilization: float = typer.Option(
         0.7,
         "--grpo-vllm-gpu-memory-utilization",
@@ -1500,14 +1675,24 @@ def config_render(
         help="Run the initial GRPO eval pass before training updates.",
     ),
     eval_interval: int = typer.Option(50, help="Evaluation interval for cpp-sft/cpp-grpo."),
-    max_env_workers: int = typer.Option(32, help="Maximum SkyRL Gym environment workers for cpp-grpo rewards."),
-    ckpt_interval: int = typer.Option(-1, help="Checkpoint interval; negative disables smoke checkpoints."),
-    hf_save_interval: int = typer.Option(-1, help="HF export interval; negative disables smoke exports."),
+    max_env_workers: int = typer.Option(
+        32, help="Maximum SkyRL Gym environment workers for cpp-grpo rewards."
+    ),
+    ckpt_interval: int = typer.Option(
+        -1, help="Checkpoint interval; negative disables smoke checkpoints."
+    ),
+    hf_save_interval: int = typer.Option(
+        -1, help="HF export interval; negative disables smoke exports."
+    ),
     ckpt_path: str = typer.Option("~/ckpts/", help="Checkpoint root for full training runs."),
     export_path: str = typer.Option("~/exports/", help="HF export root for full training runs."),
     max_ckpts_to_keep: int = typer.Option(-1, help="Maximum checkpoints to retain; -1 keeps all."),
-    resume_from: str = typer.Option("", help="Training checkpoint resume source: empty, latest, or a global_step_N path."),
-    export_checkpoint: str = typer.Option("", help="SFT/GRPO export-only checkpoint source: a global_step_N path."),
+    resume_from: str = typer.Option(
+        "", help="Training checkpoint resume source: empty, latest, or a global_step_N path."
+    ),
+    export_checkpoint: str = typer.Option(
+        "", help="SFT/GRPO export-only checkpoint source: a global_step_N path."
+    ),
     sandbox_image: str = typer.Option(DEFAULT_DOCKER_IMAGE, help="C++ sandbox Docker image."),
     sandbox_cpu: str = typer.Option(DEFAULT_CPU, help="CPU id used by sandbox taskset."),
     tracking_backend: Optional[list[str]] = typer.Option(
@@ -1518,10 +1703,14 @@ def config_render(
             f"{', '.join(SUPPORTED_TRACKING_BACKENDS)}. Full SFT/GRPO default to console+mlflow."
         ),
     ),
-    run_id: Optional[str] = typer.Option(None, help="Run id for labels, cluster name, and artifacts."),
+    run_id: Optional[str] = typer.Option(
+        None, help="Run id for labels, cluster name, and artifacts."
+    ),
     owner: str = typer.Option("sss", help="Owner label for GCP resources."),
     eval_label: str = typer.Option("model", help="Evaluation label for cpp-eval output files."),
-    eval_max_tasks: Optional[int] = typer.Option(None, help="Optional validation task limit for cpp-eval."),
+    eval_max_tasks: Optional[int] = typer.Option(
+        None, help="Optional validation task limit for cpp-eval."
+    ),
     allow_low_multinode_utilization: bool = typer.Option(
         False,
         "--allow-low-multinode-utilization",
@@ -1579,18 +1768,30 @@ def config_render(
 
 @app.command()
 def launch(
-    pipeline: str = typer.Argument(..., help="Legacy SkyRL pipeline to launch: cpp-smoke, cpp-sft, cpp-grpo, or cpp-eval."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    pipeline: str = typer.Argument(
+        ..., help="Legacy SkyRL pipeline to launch: cpp-smoke, cpp-sft, cpp-grpo, or cpp-eval."
+    ),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     bucket: Optional[str] = typer.Option(None, help="Artifact bucket URI."),
     accelerators: Optional[str] = typer.Option(None, help="Cloud backend accelerator request."),
     num_nodes: int = typer.Option(1, help="Cloud backend node count."),
-    region: str = typer.Option("", "--region", help="Optional GCP region to pin in rendered SkyPilot infra."),
-    zone: str = typer.Option("", "--zone", help="Optional GCP zone to pin in rendered SkyPilot infra."),
+    region: str = typer.Option(
+        "", "--region", help="Optional GCP region to pin in rendered SkyPilot infra."
+    ),
+    zone: str = typer.Option(
+        "", "--zone", help="Optional GCP zone to pin in rendered SkyPilot infra."
+    ),
     disk_size: Optional[int] = typer.Option(None, help="Cloud backend boot disk size in GB."),
     cluster: Optional[str] = typer.Option(None, help="Cloud backend cluster name."),
     model: Optional[str] = typer.Option(None, help="Open model to load/train."),
-    gpu_container_image: str = typer.Option(DEFAULT_CPP_CONTAINER_IMAGE, help="GPU Docker image for the smoke."),
-    dataset_gcs_prefix: Optional[str] = typer.Option(None, help="Versioned SkyRL dataset GCS prefix."),
+    gpu_container_image: str = typer.Option(
+        DEFAULT_CPP_CONTAINER_IMAGE, help="GPU Docker image for the smoke."
+    ),
+    dataset_gcs_prefix: Optional[str] = typer.Option(
+        None, help="Versioned SkyRL dataset GCS prefix."
+    ),
     train_batch_size: int = typer.Option(16, help="Training batch size for cpp-sft/cpp-grpo."),
     micro_train_batch_size_per_gpu: int = typer.Option(
         1,
@@ -1608,7 +1809,9 @@ def launch(
         "--grpo-use-entropy-loss/--no-grpo-use-entropy-loss",
         help="Apply an entropy bonus during cpp-grpo to reduce deterministic policy collapse.",
     ),
-    grpo_entropy_loss_coef: float = typer.Option(0.001, help="Entropy loss coefficient for cpp-grpo."),
+    grpo_entropy_loss_coef: float = typer.Option(
+        0.001, help="Entropy loss coefficient for cpp-grpo."
+    ),
     grpo_vllm_gpu_memory_utilization: float = typer.Option(
         0.7,
         "--grpo-vllm-gpu-memory-utilization",
@@ -1622,14 +1825,24 @@ def launch(
         help="Run the initial GRPO eval pass before training updates.",
     ),
     eval_interval: int = typer.Option(50, help="Evaluation interval for cpp-sft/cpp-grpo."),
-    max_env_workers: int = typer.Option(32, help="Maximum SkyRL Gym environment workers for cpp-grpo rewards."),
-    ckpt_interval: int = typer.Option(-1, help="Checkpoint interval; negative disables smoke checkpoints."),
-    hf_save_interval: int = typer.Option(-1, help="HF export interval; negative disables smoke exports."),
+    max_env_workers: int = typer.Option(
+        32, help="Maximum SkyRL Gym environment workers for cpp-grpo rewards."
+    ),
+    ckpt_interval: int = typer.Option(
+        -1, help="Checkpoint interval; negative disables smoke checkpoints."
+    ),
+    hf_save_interval: int = typer.Option(
+        -1, help="HF export interval; negative disables smoke exports."
+    ),
     ckpt_path: str = typer.Option("~/ckpts/", help="Checkpoint root for full training runs."),
     export_path: str = typer.Option("~/exports/", help="HF export root for full training runs."),
     max_ckpts_to_keep: int = typer.Option(-1, help="Maximum checkpoints to retain; -1 keeps all."),
-    resume_from: str = typer.Option("", help="Training checkpoint resume source: empty, latest, or a global_step_N path."),
-    export_checkpoint: str = typer.Option("", help="SFT/GRPO export-only checkpoint source: a global_step_N path."),
+    resume_from: str = typer.Option(
+        "", help="Training checkpoint resume source: empty, latest, or a global_step_N path."
+    ),
+    export_checkpoint: str = typer.Option(
+        "", help="SFT/GRPO export-only checkpoint source: a global_step_N path."
+    ),
     sandbox_image: str = typer.Option(DEFAULT_DOCKER_IMAGE, help="C++ sandbox Docker image."),
     sandbox_cpu: str = typer.Option(DEFAULT_CPU, help="CPU id used by sandbox taskset."),
     tracking_backend: Optional[list[str]] = typer.Option(
@@ -1640,12 +1853,18 @@ def launch(
             f"{', '.join(SUPPORTED_TRACKING_BACKENDS)}. Full SFT/GRPO default to console+mlflow."
         ),
     ),
-    run_id: Optional[str] = typer.Option(None, help="Run id for labels, cluster name, and artifacts."),
+    run_id: Optional[str] = typer.Option(
+        None, help="Run id for labels, cluster name, and artifacts."
+    ),
     owner: str = typer.Option("sss", help="Owner label for GCP resources."),
     eval_label: str = typer.Option("model", help="Evaluation label for cpp-eval output files."),
-    eval_max_tasks: Optional[int] = typer.Option(None, help="Optional validation task limit for cpp-eval."),
+    eval_max_tasks: Optional[int] = typer.Option(
+        None, help="Optional validation task limit for cpp-eval."
+    ),
     yes: bool = typer.Option(True, help="Skip cloud backend confirmation prompts."),
-    down_after: bool = typer.Option(True, help="Pass --down so successful smoke runs tear down the cluster."),
+    down_after: bool = typer.Option(
+        True, help="Pass --down so successful smoke runs tear down the cluster."
+    ),
     detach_run: bool = typer.Option(
         False,
         "--detach-run/--no-detach-run",
@@ -1706,7 +1925,11 @@ def launch(
     _require_grpo_multinode_utilization(options)
     _require_grpo_multinode_resume_disk(options)
     output = _write_sky_yaml(options, f"{DEFAULT_RENDER_DIR}/{pipeline}.sky.yaml")
-    if options.pipeline == "cpp-grpo" and options.num_nodes > 1 and not options.sft_export_checkpoint:
+    if (
+        options.pipeline == "cpp-grpo"
+        and options.num_nodes > 1
+        and not options.sft_export_checkpoint
+    ):
         _require_grpo_readiness(output)
     env = _service_account_env(credentials, project_id=options.project_id)
     sky_args = ["sky", "launch", "-c", options.name]
@@ -1775,7 +1998,9 @@ def eval_cpp(
 @eval_app.command("raw-report")
 def eval_raw_report(
     run_id: str = typer.Option(..., "--run-id", help="Run id to report on."),
-    run_root: Optional[str] = typer.Option(None, "--run-root", help="Local run artifact root. Defaults to .w8-biayn/runs/RUN_ID."),
+    run_root: Optional[str] = typer.Option(
+        None, "--run-root", help="Local run artifact root. Defaults to .w8-biayn/runs/RUN_ID."
+    ),
     records: Optional[list[str]] = typer.Option(
         None,
         "--records",
@@ -1838,9 +2063,13 @@ def _parse_label_paths(items: list[str], *, option_name: str) -> dict[str, str]:
 @gcp_app.command("cleanup")
 def gcp_cleanup(
     run_id: str = typer.Option(..., "--run-id", help="Run id to tear down."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     owner: str = typer.Option("sss", help="Owner label used for the run."),
-    dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Print cleanup commands unless --execute is used."),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--execute", help="Print cleanup commands unless --execute is used."
+    ),
 ) -> None:
     """Tear down run clusters and list GCP instances for one run id."""
 
@@ -1884,7 +2113,9 @@ def ops_net_check() -> None:
     statuses = check_endpoints()
     failed = 0
     for status in statuses:
-        console.print(("[green]ok[/green]    " if status.ok else "[red]FAIL[/red]  ") + status.describe())
+        console.print(
+            ("[green]ok[/green]    " if status.ok else "[red]FAIL[/red]  ") + status.describe()
+        )
         failed += 0 if status.ok else 1
     if failed:
         raise typer.Exit(code=1)
@@ -1892,7 +2123,9 @@ def ops_net_check() -> None:
 
 @ops_app.command("status")
 def ops_status(
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     refresh: bool = typer.Option(False, help="Refresh cloud cluster state before printing status."),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
 ) -> None:
@@ -1908,13 +2141,19 @@ def ops_status(
 def ops_logs(
     cluster: str = typer.Argument(..., help="w8-biayn cluster name."),
     job_id: Optional[str] = typer.Argument(None, help="Optional job id; omit for latest job."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
-    follow: bool = typer.Option(False, "--follow/--no-follow", help="Stream logs instead of printing the current tail."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
+    follow: bool = typer.Option(
+        False, "--follow/--no-follow", help="Stream logs instead of printing the current tail."
+    ),
     tail: int = typer.Option(1000, help="Number of trailing log lines; pass 0 for the full log."),
     status_only: bool = typer.Option(False, "--status", help="Return only the job status code."),
     provision: bool = typer.Option(False, help="Show provisioning logs instead of job logs."),
     autostop: bool = typer.Option(False, help="Show autostop hook logs."),
-    sync_down: bool = typer.Option(False, "--sync-down", help="Download logs under the backend logs directory."),
+    sync_down: bool = typer.Option(
+        False, "--sync-down", help="Download logs under the backend logs directory."
+    ),
     worker: Optional[int] = typer.Option(None, help="Worker id to read logs from."),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
 ) -> None:
@@ -1942,9 +2181,15 @@ def ops_logs(
 
 @ops_app.command("queue")
 def ops_queue(
-    cluster: Optional[str] = typer.Argument(None, help="Optional cluster name; omit to show all queues."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
-    skip_finished: bool = typer.Option(False, "--skip-finished", help="Show only pending or running jobs."),
+    cluster: Optional[str] = typer.Argument(
+        None, help="Optional cluster name; omit to show all queues."
+    ),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
+    skip_finished: bool = typer.Option(
+        False, "--skip-finished", help="Show only pending or running jobs."
+    ),
     all_users: bool = typer.Option(False, "--all-users", help="Show jobs for all users."),
     output: str = typer.Option("table", "--output", help="Output format: table or json."),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
@@ -1965,12 +2210,20 @@ def ops_queue(
 @ops_app.command("cancel")
 def ops_cancel(
     cluster: str = typer.Argument(..., help="w8-biayn cluster name or glob."),
-    job_id: Optional[str] = typer.Argument(None, help="Optional job id; omit for latest running job."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    job_id: Optional[str] = typer.Argument(
+        None, help="Optional job id; omit for latest running job."
+    ),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     all_jobs: bool = typer.Option(False, "--all", help="Cancel all jobs from the current user."),
-    all_users: bool = typer.Option(False, "--all-users", help="Cancel matching jobs for all users."),
+    all_users: bool = typer.Option(
+        False, "--all-users", help="Cancel matching jobs for all users."
+    ),
     yes: bool = typer.Option(True, "--yes/--no-yes", help="Skip backend confirmation prompts."),
-    async_: bool = typer.Option(False, "--async/--no-async", help="Return without waiting for cancellation."),
+    async_: bool = typer.Option(
+        False, "--async/--no-async", help="Return without waiting for cancellation."
+    ),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
 ) -> None:
     """Cancel a queued or running job."""
@@ -1992,7 +2245,9 @@ def ops_cancel(
 @ops_app.command("down")
 def ops_down(
     cluster: str = typer.Argument(..., help="w8-biayn cluster name."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     yes: bool = typer.Option(True, "--yes/--no-yes", help="Skip backend confirmation prompts."),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
 ) -> None:
@@ -2008,8 +2263,12 @@ def ops_down(
 @ops_app.command("down-run")
 def ops_down_run(
     run_id: str = typer.Argument(..., help="Run id (same value used for the W&B group)."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
-    execute: bool = typer.Option(False, "--execute/--dry-run", help="Actually delete (default only prints the plan)."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
+    execute: bool = typer.Option(
+        False, "--execute/--dry-run", help="Actually delete (default only prints the plan)."
+    ),
 ) -> None:
     """Tear down every GCP resource tagged with this run id.
 
@@ -2033,10 +2292,16 @@ def ops_down_run(
     #    which catches boxes a dead/hung launcher never tore down.
     listing = subprocess.run(
         [
-            "gcloud", "compute", "instances", "list",
-            "--project", project_id,
-            "--filter", f"labels.run_id={label} AND labels.project=w8-biayn",
-            "--format", "value(name,zone.basename())",
+            "gcloud",
+            "compute",
+            "instances",
+            "list",
+            "--project",
+            project_id,
+            "--filter",
+            f"labels.run_id={label} AND labels.project=w8-biayn",
+            "--format",
+            "value(name,zone.basename())",
         ],
         env={**os.environ, **(env or {})},
         check=False,
@@ -2049,7 +2314,18 @@ def ops_down_run(
         return
     for name, zone in rows:
         run_command(
-            ["gcloud", "compute", "instances", "delete", name, "--zone", zone, "--project", project_id, "--quiet"],
+            [
+                "gcloud",
+                "compute",
+                "instances",
+                "delete",
+                name,
+                "--zone",
+                zone,
+                "--project",
+                project_id,
+                "--quiet",
+            ],
             env=env,
             dry_run=not execute,
         )
@@ -2059,10 +2335,16 @@ def ops_down_run(
 
 @ops_app.command("gpus")
 def ops_gpus(
-    accelerator: Optional[str] = typer.Argument(None, help="Optional accelerator name such as A100 or B200."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    accelerator: Optional[str] = typer.Argument(
+        None, help="Optional accelerator name such as A100 or B200."
+    ),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     infra: str = typer.Option("gcp", help="Infrastructure selector passed to the backend."),
-    all_regions: bool = typer.Option(False, "--all-regions", help="Show every region for the accelerator."),
+    all_regions: bool = typer.Option(
+        False, "--all-regions", help="Show every region for the accelerator."
+    ),
     all_offerings: bool = typer.Option(False, "--all", help="Show all accelerator offerings."),
     output: str = typer.Option("table", "--output", help="Output format: table or json."),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
@@ -2084,18 +2366,30 @@ def ops_gpus(
 @ops_app.command("run-status")
 def ops_run_status(
     run_id: str = typer.Option(..., "--run-id", help="Run id to inspect."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
-    bucket: Optional[str] = typer.Option(None, help="Artifact bucket URI. Defaults from the credentials project."),
-    dataset_gcs_prefix: Optional[str] = typer.Option(None, help="SkyRL dataset GCS prefix to verify."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
+    bucket: Optional[str] = typer.Option(
+        None, help="Artifact bucket URI. Defaults from the credentials project."
+    ),
+    dataset_gcs_prefix: Optional[str] = typer.Option(
+        None, help="SkyRL dataset GCS prefix to verify."
+    ),
     pipeline: Optional[list[str]] = typer.Option(
         None,
         "--pipeline",
         help="Pipeline to inspect. Repeatable. Defaults to cpp-sft, cpp-grpo, and cpp-eval.",
     ),
     owner: str = typer.Option("sss", help="Owner label used for run-scoped GCP resources."),
-    job_id: Optional[str] = typer.Option(None, "--job-id", help="Optional backend job id for log inspection."),
-    log_tail: int = typer.Option(800, "--log-tail", help="Backend log tail lines to scan for status signals."),
-    expected_world_size: int = typer.Option(8, help="Expected FSDP world size for checkpoint shard validation."),
+    job_id: Optional[str] = typer.Option(
+        None, "--job-id", help="Optional backend job id for log inspection."
+    ),
+    log_tail: int = typer.Option(
+        800, "--log-tail", help="Backend log tail lines to scan for status signals."
+    ),
+    expected_world_size: int = typer.Option(
+        8, help="Expected FSDP world size for checkpoint shard validation."
+    ),
     expected_sft_final_step: Optional[int] = typer.Option(
         None,
         "--expected-sft-final-step",
@@ -2127,7 +2421,9 @@ def ops_run_status(
         "--baseline-status",
         help="Prior run-status JSON path to compare throughput against. Repeatable.",
     ),
-    out: Optional[str] = typer.Option(None, "--out", help="Optional path to also write the JSON snapshot."),
+    out: Optional[str] = typer.Option(
+        None, "--out", help="Optional path to also write the JSON snapshot."
+    ),
     dry_run: bool = typer.Option(False, help="Emit planned checks without calling cloud backends."),
 ) -> None:
     """Emit one JSON status snapshot for a run, suitable for dashboards."""
@@ -2174,9 +2470,15 @@ def ops_run_status(
 @ops_app.command("metrics")
 def ops_metrics(
     run_id: str = typer.Option(..., "--run-id", help="Run id to inspect."),
-    pipeline: str = typer.Option("cpp-grpo", "--pipeline", help="Pipeline to inspect, usually cpp-sft or cpp-grpo."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
-    bucket: Optional[str] = typer.Option(None, help="Artifact bucket URI. Defaults from the credentials project."),
+    pipeline: str = typer.Option(
+        "cpp-grpo", "--pipeline", help="Pipeline to inspect, usually cpp-sft or cpp-grpo."
+    ),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
+    bucket: Optional[str] = typer.Option(
+        None, help="Artifact bucket URI. Defaults from the credentials project."
+    ),
     source: str = typer.Option(
         "auto",
         "--source",
@@ -2187,16 +2489,26 @@ def ops_metrics(
         "--cluster",
         help="Optional SkyPilot cluster name for live MLflow API tunneling. Defaults to w8-biayn-<pipeline>-<run-id>.",
     ),
-    mlflow_port: int = typer.Option(5000, "--mlflow-port", min=1, max=65535, help="Remote MLflow server port."),
-    api_timeout: int = typer.Option(20, "--api-timeout", min=1, help="Seconds to wait for live API/tunnel."),
+    mlflow_port: int = typer.Option(
+        5000, "--mlflow-port", min=1, max=65535, help="Remote MLflow server port."
+    ),
+    api_timeout: int = typer.Option(
+        20, "--api-timeout", min=1, help="Seconds to wait for live API/tunnel."
+    ),
     metric: Optional[list[str]] = typer.Option(
         None,
         "--metric",
         help="Metric key to include. Repeatable. Defaults to the standard GRPO/SFT post-training metric set.",
     ),
-    last: int = typer.Option(100, "--last", min=1, help="Number of points per selected metric to return."),
-    out: Optional[str] = typer.Option(None, "--out", help="Optional path to also write the JSON payload."),
-    dry_run: bool = typer.Option(False, help="Print the planned GCS download without reading cloud state."),
+    last: int = typer.Option(
+        100, "--last", min=1, help="Number of points per selected metric to return."
+    ),
+    out: Optional[str] = typer.Option(
+        None, "--out", help="Optional path to also write the JSON payload."
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Print the planned GCS download without reading cloud state."
+    ),
 ) -> None:
     """Fetch MLflow metrics through live API or synced SQLite and emit headless metric JSON."""
 
@@ -2233,7 +2545,11 @@ def ops_metrics(
                 }
             )
         if source in {"auto", "sqlite"}:
-            checks.append(_gcloud_mlflow_db_check(["gcloud", "storage", "cp", db_uri, str(local_db)], dry_run=True))
+            checks.append(
+                _gcloud_mlflow_db_check(
+                    ["gcloud", "storage", "cp", db_uri, str(local_db)], dry_run=True
+                )
+            )
         metrics_payload = {
             "available": False,
             "reason": "dry_run",
@@ -2288,7 +2604,8 @@ def ops_metrics(
         "mlflow_api": {
             "remote_port": mlflow_port,
             "tunnel": "ssh",
-            "available": metrics_payload.get("backend") == "mlflow_api" and metrics_payload.get("available") is True,
+            "available": metrics_payload.get("backend") == "mlflow_api"
+            and metrics_payload.get("available") is True,
         },
         "artifact_bucket": artifact_bucket,
         "mlflow_db_uri": db_uri,
@@ -2343,7 +2660,9 @@ def _read_mlflow_metrics_from_gcs(
             },
             check,
         )
-    return _read_mlflow_metrics_legacy("ops metrics", local_db, metric_keys=metric_keys, last=last), check
+    return _read_mlflow_metrics_legacy(
+        "ops metrics", local_db, metric_keys=metric_keys, last=last
+    ), check
 
 
 def _gcloud_mlflow_db_check(
@@ -2376,7 +2695,9 @@ def _read_mlflow_metrics_via_tunnel(
     timeout_s: int,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     local_port = _free_local_port()
-    command = _mlflow_tunnel_command(cluster=cluster, local_port=local_port, remote_port=remote_port)
+    command = _mlflow_tunnel_command(
+        cluster=cluster, local_port=local_port, remote_port=remote_port
+    )
     check: dict[str, object] = {
         "name": "ssh_tunnel:mlflow_api",
         "command": command,
@@ -2425,7 +2746,9 @@ def _read_mlflow_metrics_via_tunnel(
                 payload["reason"] = f"ssh_tunnel_failed:{returncode}"
                 payload["tracking_state"] = payload["reason"]
                 return payload, [check]
-            payload = _read_mlflow_api_legacy("ops metrics", base_url, metric_keys=metric_keys, last=last, timeout_s=3.0)
+            payload = _read_mlflow_api_legacy(
+                "ops metrics", base_url, metric_keys=metric_keys, last=last, timeout_s=3.0
+            )
             if payload.get("available") is True:
                 check["ok"] = True
                 return payload, [check]
@@ -2481,7 +2804,9 @@ def ops_grpo_readiness(
         "--status-json",
         help="Optional ops run-status JSON snapshot to validate live multi-node evidence.",
     ),
-    out: Optional[str] = typer.Option(None, "--out", help="Optional path to also write readiness JSON."),
+    out: Optional[str] = typer.Option(
+        None, "--out", help="Optional path to also write readiness JSON."
+    ),
 ) -> None:
     """Validate rendered GRPO config and optional live status before launch or claims."""
 
@@ -2501,7 +2826,9 @@ def ops_grpo_readiness(
 
 @app.command()
 def status(
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     refresh: bool = typer.Option(False, help="Refresh cloud cluster state before printing status."),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
 ) -> None:
@@ -2514,13 +2841,19 @@ def status(
 def logs(
     cluster: str = typer.Argument("w8-biayn-cpp-smoke", help="w8-biayn cluster name."),
     job_id: Optional[str] = typer.Argument(None, help="Optional job id; omit for latest job."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
-    follow: bool = typer.Option(False, "--follow/--no-follow", help="Stream logs instead of printing the current tail."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
+    follow: bool = typer.Option(
+        False, "--follow/--no-follow", help="Stream logs instead of printing the current tail."
+    ),
     tail: int = typer.Option(1000, help="Number of trailing log lines; pass 0 for the full log."),
     status_only: bool = typer.Option(False, "--status", help="Return only the job status code."),
     provision: bool = typer.Option(False, help="Show provisioning logs instead of job logs."),
     autostop: bool = typer.Option(False, help="Show autostop hook logs."),
-    sync_down: bool = typer.Option(False, "--sync-down", help="Download logs under the backend logs directory."),
+    sync_down: bool = typer.Option(
+        False, "--sync-down", help="Download logs under the backend logs directory."
+    ),
     worker: Optional[int] = typer.Option(None, help="Worker id to read logs from."),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
 ) -> None:
@@ -2544,14 +2877,15 @@ def logs(
 @app.command()
 def down(
     cluster: str = typer.Argument("w8-biayn-cpp-smoke", help="w8-biayn cluster name."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
     yes: bool = typer.Option(True, "--yes/--no-yes", help="Skip backend confirmation prompts."),
     dry_run: bool = typer.Option(False, help="Print the backend command without running it."),
 ) -> None:
     """Alias for `w8-biayn ops down`."""
 
     ops_down(cluster, credentials=credentials, yes=yes, dry_run=dry_run)
-
 
 
 def _render_options(
@@ -2600,7 +2934,9 @@ def _render_options(
     project_id = _project_id(credentials)
     is_training = pipeline in ("cpp-sft", "cpp-grpo")
     is_eval = pipeline == "cpp-eval"
-    default_accelerators = DEFAULT_CPP_TRAIN_ACCELERATORS if is_training else DEFAULT_CPP_SMOKE_ACCELERATORS
+    default_accelerators = (
+        DEFAULT_CPP_TRAIN_ACCELERATORS if is_training else DEFAULT_CPP_SMOKE_ACCELERATORS
+    )
     if is_eval:
         default_accelerators = DEFAULT_CPP_EVAL_ACCELERATORS
     if micro_train_batch_size_per_gpu < 1:
@@ -2658,7 +2994,9 @@ def _render_options(
 
 @wandb_app.command("workspace")
 def wandb_workspace_command(
-    project: str = typer.Option("slime-glm47-cpp-perf", help="W&B project to attach the saved view to."),
+    project: str = typer.Option(
+        "slime-glm47-cpp-perf", help="W&B project to attach the saved view to."
+    ),
     entity: str = typer.Option("", help="W&B entity; defaults to the logged-in default entity."),
     dry_run: bool = typer.Option(False, help="Print the workspace layout spec without pushing."),
 ) -> None:
@@ -2684,38 +3022,63 @@ def wandb_workspace_command(
 
 @launch_app.command("glm47-full")
 def launch_glm47_full_command(
-    run_id: str = typer.Option("", help="Stable run id for cluster, W&B group, and artifacts. Auto-generated when empty."),
+    run_id: str = typer.Option(
+        "", help="Stable run id for cluster, W&B group, and artifacts. Auto-generated when empty."
+    ),
     region: list[str] = typer.Option(
         [],
         help="Allowed GCP region to try; repeat to add regions. Defaults to asia-southeast1.",
     ),
-    accelerators: str = typer.Option("H100:8", help="Accelerator request, for example H100:8 or A100-80GB:8."),
-    use_spot: bool = typer.Option(False, "--use-spot", help="Request spot capacity (needed with preemptible-only GPU quota)."),
+    accelerators: str = typer.Option(
+        "H100:8", help="Accelerator request, for example H100:8 or A100-80GB:8."
+    ),
+    use_spot: bool = typer.Option(
+        False, "--use-spot", help="Request spot capacity (needed with preemptible-only GPU quota)."
+    ),
     retry_sleep_seconds: int = typer.Option(300, help="Sleep between provisioning passes."),
     max_attempts: int = typer.Option(0, help="0 retries forever until capacity is acquired."),
     cluster_name: str = typer.Option("", help="Override cluster name."),
-    credentials: str = typer.Option(DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."),
-    slime_image: str = typer.Option("slimerl/slime:latest", help="SLIME Docker image for the GPU container."),
+    credentials: str = typer.Option(
+        DEFAULT_CREDENTIALS_PATH, help="Path to local GCP service-account JSON."
+    ),
+    slime_image: str = typer.Option(
+        "slimerl/slime:latest", help="SLIME Docker image for the GPU container."
+    ),
     lane: str = typer.Option(
         "glm47_cpp_perf",
         help="Lane under examples/slime/ to run: glm47_cpp_perf (single-turn) or glm47_swe_agent_cpp_perf (agentic file-state).",
     ),
-    wandb_api_key: str = typer.Option("", help="W&B API key. Prefer --wandb-api-key-file or env/.env resolution."),
-    wandb_api_key_file: str = typer.Option("", help="File containing the W&B API key. Defaults to WANDB_API_KEY/WANDB_KEY env or .env."),
+    wandb_api_key: str = typer.Option(
+        "", help="W&B API key. Prefer --wandb-api-key-file or env/.env resolution."
+    ),
+    wandb_api_key_file: str = typer.Option(
+        "", help="File containing the W&B API key. Defaults to WANDB_API_KEY/WANDB_KEY env or .env."
+    ),
     wandb_project: str = typer.Option("slime-glm47-cpp-perf", help="W&B project name."),
     wandb_entity: str = typer.Option("", help="Optional W&B entity."),
     wandb_base_url: str = typer.Option("", help="Optional W&B base URL."),
-    hf_token: str = typer.Option("", help="Optional Hugging Face token. Prefer --hf-token-file or HF_TOKEN env."),
+    hf_token: str = typer.Option(
+        "", help="Optional Hugging Face token. Prefer --hf-token-file or HF_TOKEN env."
+    ),
     hf_token_file: str = typer.Option("", help="Optional file containing a Hugging Face token."),
     local_output_root: str = typer.Option(
-        ".w8-biayn/slime/glm47-cpp-perf", help="Local ignored artifact root for cloud logs and downloaded results."
+        ".w8-biayn/slime/glm47-cpp-perf",
+        help="Local ignored artifact root for cloud logs and downloaded results.",
     ),
-    train_limit: int = typer.Option(1_000_000, help="SLIME C++ train row cap; the default includes all admitted tasks."),
-    eval_limit: int = typer.Option(1_000_000, help="SLIME C++ eval row cap; the default includes all admitted tasks."),
+    train_limit: int = typer.Option(
+        1_000_000, help="SLIME C++ train row cap; the default includes all admitted tasks."
+    ),
+    eval_limit: int = typer.Option(
+        1_000_000, help="SLIME C++ eval row cap; the default includes all admitted tasks."
+    ),
     min_train_tasks: int = typer.Option(1000, help="PIE admission gate: minimum train tasks."),
-    min_validation_tasks: int = typer.Option(100, help="PIE admission gate: minimum validation tasks."),
+    min_validation_tasks: int = typer.Option(
+        100, help="PIE admission gate: minimum validation tasks."
+    ),
     min_test_tasks: int = typer.Option(100, help="PIE admission gate: minimum test tasks."),
-    coverage_jobs: int = typer.Option(32, help="Parallel workers for remote PIE coverage measurement."),
+    coverage_jobs: int = typer.Option(
+        32, help="Parallel workers for remote PIE coverage measurement."
+    ),
     grpo_num_rollout: int = typer.Option(8, help="GRPO rollout count."),
     grpo_rollout_batch_size: int = typer.Option(4, help="GRPO rollout batch size."),
     grpo_n_samples_per_prompt: int = typer.Option(
@@ -2726,10 +3089,20 @@ def launch_glm47_full_command(
         0, help="GRPO global batch size; 0 derives rollout_batch_size * n_samples_per_prompt."
     ),
     eval_samples_per_prompt: int = typer.Option(2, help="Eval samples per held-out prompt."),
-    disk_size: int = typer.Option(1024, help="Boot disk GB; the 30B model is staged ~4x so 256GB runs out mid-export."),
-    idle_autostop_minutes: int = typer.Option(20, help="Cluster-side safety net: SkyPilot terminates the cluster after this many idle minutes even if this launcher process dies. 0 disables (launcher-only teardown)."),
-    resume_from_run: str = typer.Option("", help="Resume: restore a prior run id's GCS checkpoints and skip its finished train stages."),
-    dry_run: bool = typer.Option(False, help="Print the planned cluster, config, and scripts without launching."),
+    disk_size: int = typer.Option(
+        1024, help="Boot disk GB; the 30B model is staged ~4x so 256GB runs out mid-export."
+    ),
+    idle_autostop_minutes: int = typer.Option(
+        20,
+        help="Cluster-side safety net: SkyPilot terminates the cluster after this many idle minutes even if this launcher process dies. 0 disables (launcher-only teardown).",
+    ),
+    resume_from_run: str = typer.Option(
+        "",
+        help="Resume: restore a prior run id's GCS checkpoints and skip its finished train stages.",
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Print the planned cluster, config, and scripts without launching."
+    ),
 ) -> None:
     """Provision one GPU node and run the full GLM C++ SLIME lane on it."""
 

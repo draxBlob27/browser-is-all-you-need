@@ -5,36 +5,52 @@ model to `zai-org/GLM-4.7-Flash` and uses the pinned SLIME GLM-4.7 30B-A3B
 Megatron profile. It keeps the same PIE C++ data, local Docker reward harness,
 stage order, evaluation aggregation, and comparison artifacts.
 
-The design for the separate, multi-task primary SFT dataset generation
-pipeline for Aider-style C++ rows is
-`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. It is not implemented yet.
-This lane is the intended SLIME SFT consumer once that bundle is admitted; do
-not infer that the future `w8-biayn data aider-sft ...` commands already exist.
-The V1.3 design produces exactly 72 training rows from a 96-root 72/12/12
-split, starts from 75 frozen Exercism candidates, and requires at least 21
-human-approved LLM-assisted roots. Only a ready bundle's sanitized
-`sft/train.jsonl`, `sft/token-records.jsonl`, redacted lock, and export receipt
-may be handed to this lane; private graders, references, candidates, and
-validation/test answers are not model inputs.
+The separate multi-task primary SFT dataset pipeline for Aider-style C++ rows
+is specified in `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` and
+implemented under `src/w8_biayn/aider_sft/`. Its checked-in pilot profile
+remains draft and no ready 96-root bundle is claimed. Once a producer has
+completed the fingerprint-bound reviews and image-bound admission, this lane
+can consume only the sanitized `slime-sft` export; private graders, references,
+candidates, evaluator indexes, and validation/test answers are forbidden.
 
-The future producer must first run full network-free verification on the
-immutable schema-v2 ready root, then create the sanitized `slime-sft` export.
-This lane must run `w8-biayn data aider-sft verify-export` using only that bundle
-and set `SLIME_CPP_AUTO_PREPARE_DATA=0`. The export contains `sft/train.jsonl`
-plus its per-row token/mask ledger; private graders, references, and evaluator
-indexes remain absent.
+The producer must first run full network-free verification on the immutable
+schema-v2 ready root, export the `slime-sft` audience, and verify the exact
+sanitized bytes:
 
-The export and lane must agree on the exact GLM model/tokenizer revision (or
-locked equivalent local hashes), chat-template hash and kwargs, required
-disabled-thinking policy, repo-owned `w8-aider-sft-mask-v1` rollout adapter,
-explicit `qwen` loss mask, and 4096-token sequence limit. Raw `messages` must
-reach that adapter, which forwards the exact kwargs to tokenizer calls;
-dataset-loader `--apply-chat-template` is forbidden because it destroys the
-message-list boundary before the mask path. Any Hugging Face download must pass
-the frozen revision. The current manifest-only guard, floating model download,
-and stock rollout/mask path that does not forward the locked kwargs are
-insufficient; they are future implementation work, not behavior provided
-today.
+```bash
+uv run w8-biayn data aider-sft verify \
+  --root .w8-biayn/data/aider-sft-pilot-v1
+uv run w8-biayn data aider-sft export \
+  --root .w8-biayn/data/aider-sft-pilot-v1 \
+  --audience slime-sft \
+  --out .w8-biayn/data/aider-sft-pilot-v1-slime
+uv run w8-biayn data aider-sft verify-export \
+  --root .w8-biayn/data/aider-sft-pilot-v1-slime
+```
+
+Run only this lane's SFT stage against that bundle:
+
+```bash
+export SLIME_CPP_DATA_DIR=/absolute/path/to/aider-sft-pilot-v1-slime
+export SLIME_CPP_AUTO_PREPARE_DATA=0
+export SLIME_HF_MODEL_REVISION=7dd20894a642a0aa287e9827cb1a1f7f91386b67
+bash examples/slime/glm47_cpp_perf/sft.sh
+```
+
+The runner detects the export by its
+`aider-sft-slime-export-manifest-v1` manifest and accepts it only for `sft`.
+It requires the exact `zai-org/GLM-4.7-Flash` revision, a 4096-token sequence
+limit, and a local model identity marker written by the revision-pinned
+snapshot downloader. It then runs consumer `verify-export` with the local
+tokenizer, recomputes every token/mask record, and refuses private or drifting
+bytes before SLIME starts.
+
+For this bundle, raw `messages` reach the repo-owned
+`w8_biayn.aider_sft.handoff.generate_sft_rollout` adapter with exact
+`{"enable_thinking": false}` template kwargs and explicit `qwen`
+assistant-only loss. Dataset-loader `--apply-chat-template` is forbidden.
+The primary export is not valid for this lane's PIE eval or GRPO stages; those
+continue to use the ordinary PIE data layout.
 
 It does not use E2B or a hosted sandbox. C++ scoring uses the repo's local
 Docker sandbox through `w8_biayn.cpp_perf.reward.compute_reward`.

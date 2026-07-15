@@ -38,6 +38,7 @@ DOWNLOAD_HF_CHECKPOINT="${SLIME_DOWNLOAD_HF_CHECKPOINT:-1}"
 REF_LOAD_DIR="${SLIME_REF_LOAD_DIR:-${HF_CHECKPOINT}_torch_dist}"
 SFT_SAVE_DIR="${SLIME_SFT_SAVE_DIR:-${RUN_ROOT}/checkpoints/sft}"
 GRPO_SAVE_DIR="${SLIME_GRPO_SAVE_DIR:-${RUN_ROOT}/checkpoints/grpo}"
+HF_MODEL_REVISION="${SLIME_HF_MODEL_REVISION:-7dd20894a642a0aa287e9827cb1a1f7f91386b67}"
 SAVE_HF_EXPORTS="${SLIME_SAVE_HF_EXPORTS:-1}"
 INLINE_SAVE_HF_EXPORTS="${SLIME_INLINE_SAVE_HF_EXPORTS:-0}"
 STANDALONE_HF_EXPORTS="${SLIME_STANDALONE_HF_EXPORTS:-1}"
@@ -48,6 +49,7 @@ GRPO_HF_CHECKPOINT="${SLIME_GRPO_HF_CHECKPOINT:-}"
 CONVERT_IF_MISSING="${SLIME_CONVERT_IF_MISSING:-1}"
 CONVERT_NPROC="${SLIME_CONVERT_NPROC:-8}"
 HF_CHECKPOINT_WAS_DOWNLOADED=0
+PRIMARY_AIDER_SFT=0
 
 NUM_GPUS="${SLIME_NUM_GPUS:-8}"
 TP_SIZE="${SLIME_TENSOR_MODEL_PARALLEL_SIZE:-2}"
@@ -252,6 +254,70 @@ ensure_data() {
   fi
 }
 
+
+is_primary_aider_sft_bundle() {
+  [ -f "${DATA_DIR}/manifest.json" ] || return 1
+  "${PYTHON_BIN}" - "${DATA_DIR}/manifest.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+raise SystemExit(0 if manifest.get("schema_version") == "aider-sft-slime-export-manifest-v1" else 1)
+PY
+}
+
+ensure_primary_aider_sft_handoff() {
+  if [ "${PRIMARY_AIDER_SFT}" != "1" ]; then
+    return
+  fi
+  if [ "${STAGE}" != "sft" ]; then
+    echo "The primary Aider SFT bundle is accepted only by the SFT stage." >&2
+    exit 2
+  fi
+  if [ "${SLIME_CPP_AUTO_PREPARE_DATA:-1}" != "0" ]; then
+    echo "Primary Aider SFT requires SLIME_CPP_AUTO_PREPARE_DATA=0." >&2
+    exit 2
+  fi
+  if [ "${HF_MODEL_ID}" != "zai-org/GLM-4.7-Flash" ] || \
+    [ "${HF_MODEL_REVISION}" != "7dd20894a642a0aa287e9827cb1a1f7f91386b67" ]; then
+    echo "Primary Aider SFT requires the exact locked GLM repository and revision." >&2
+    exit 2
+  fi
+  if [ "${SEQ_LENGTH}" != "4096" ]; then
+    echo "Primary Aider SFT requires the locked 4096-token sequence length." >&2
+    exit 2
+  fi
+  "${PYTHON_BIN}" - "${HF_CHECKPOINT}/.w8-aider-sft-model.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit("missing pinned model identity marker")
+identity = json.loads(path.read_text(encoding="utf-8"))
+expected = {
+    "repository": "zai-org/GLM-4.7-Flash",
+    "revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+    "schema_version": "w8-aider-sft-model-snapshot-v1",
+}
+if identity != expected:
+    raise SystemExit("pinned model identity marker differs")
+PY
+  PYTHONPATH="${REPO_ROOT}/src:${SLIME_ROOT}:${PYTHONPATH:-}" \
+    W8_AIDER_SFT_TOKENIZER_PATH="${HF_CHECKPOINT}" \
+    "${PYTHON_BIN}" - "${DATA_DIR}" <<'PY'
+import sys
+from pathlib import Path
+
+from w8_biayn.aider_sft.export import verify_export_bundle
+
+result = verify_export_bundle(Path(sys.argv[1]), require_tokenizer=True)
+print(f"primary Aider SFT consumer preflight: {result['train_rows']} rows verified")
+PY
+}
+
 hf_checkpoint_is_present() {
   [ -f "${HF_CHECKPOINT}/config.json" ]
 }
@@ -271,7 +337,8 @@ download_hf_checkpoint_if_missing() {
   # hf_transfer does parallel range requests per file; without it each file is
   # a single ~25-80MB/s TCP stream and a 10Gbps NIC sits mostly idle.
   "${PYTHON_BIN}" -m pip install --quiet hf_transfer >/dev/null 2>&1 || true
-  "${PYTHON_BIN}" - "${HF_MODEL_ID}" "${HF_CHECKPOINT}" <<'PY'
+  "${PYTHON_BIN}" - "${HF_MODEL_ID}" "${HF_CHECKPOINT}" "${HF_MODEL_REVISION}" <<'PY'
+import json
 import os
 import sys
 from pathlib import Path
@@ -285,9 +352,23 @@ except ImportError:
 
 from huggingface_hub import snapshot_download
 
-repo_id, local_dir = sys.argv[1], sys.argv[2]
+repo_id, local_dir, revision = sys.argv[1], sys.argv[2], sys.argv[3]
 Path(local_dir).mkdir(parents=True, exist_ok=True)
-snapshot_download(repo_id=repo_id, local_dir=local_dir, max_workers=16)
+snapshot_download(
+    repo_id=repo_id,
+    revision=revision,
+    local_dir=local_dir,
+    max_workers=16,
+)
+identity = {
+    "repository": repo_id,
+    "revision": revision,
+    "schema_version": "w8-aider-sft-model-snapshot-v1",
+}
+(Path(local_dir) / ".w8-aider-sft-model.json").write_text(
+    json.dumps(identity, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
 PY
   w8_milestone model_download_finished
   HF_CHECKPOINT_WAS_DOWNLOADED=1
@@ -746,8 +827,19 @@ stage_args() {
       if [ "${SAVE_HF_EXPORTS}" = "1" ] && [ "${INLINE_SAVE_HF_EXPORTS}" = "1" ]; then
         CKPT_ARGS+=(--save-hf "${SFT_HF_SAVE_TEMPLATE}")
       fi
+      if [ "${PRIMARY_AIDER_SFT}" = "1" ]; then
+        SFT_DATA_ARGS=(
+          --rollout-function-path w8_biayn.aider_sft.handoff.generate_sft_rollout
+          --apply-chat-template-kwargs '{"enable_thinking":false}'
+          --loss-mask-type qwen
+        )
+      else
+        SFT_DATA_ARGS=(
+          --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+        )
+      fi
       TASK_ARGS=(
-        --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+        "${SFT_DATA_ARGS[@]}"
         --prompt-data "${DATA_DIR}/sft/train.jsonl"
         --input-key messages
         --metadata-key metadata
@@ -994,6 +1086,8 @@ sort_by_size=${SORT_BY_SIZE}
 model_args_script=${MODEL_ARGS_SCRIPT}
 hf_checkpoint=${HF_CHECKPOINT}
 hf_model_id=${HF_MODEL_ID}
+hf_model_revision=${HF_MODEL_REVISION}
+primary_aider_sft=${PRIMARY_AIDER_SFT}
 download_hf_checkpoint=${DOWNLOAD_HF_CHECKPOINT}
 hf_checkpoint_was_downloaded=${HF_CHECKPOINT_WAS_DOWNLOADED}
 ref_load=${REF_LOAD_DIR}
@@ -1112,8 +1206,14 @@ submit_slime_job() {
     return 0
   fi
   ensure_data
+  if is_primary_aider_sft_bundle; then
+    PRIMARY_AIDER_SFT=1
+  else
+    PRIMARY_AIDER_SFT=0
+  fi
   ensure_slime_runtime
   ensure_base_checkpoint
+  ensure_primary_aider_sft_handoff
   base_model_args
   wandb_args
   stage_args

@@ -306,6 +306,14 @@ mask/sequence drift, and disables auto-prepare. Readiness requires no
 target-model responses, repair rows, training, benchmarking, or uplift. Treat
 the current one-row helpers below as seed fixtures, not the primary pipeline.
 
+When a trusted internal recipient explicitly wants only the established
+Moonlight Aider-task row shape, use `w8-biayn data aider-sft export-minimal`.
+It verifies the ready source, never changes that immutable root, and writes a
+sibling directory containing exactly one `train.jsonl`. The projection keeps
+only `label`, role/content messages, six compact metadata fields, and
+`task_id`, while preserving message content exactly. It is not the full
+provenance-bearing `slime-sft` consumer bundle.
+
 Optional Moonlight single-sample Aider `whole` format SFT smoke. This is a
 compact Aider-like task-text-plus-starter-files check only, not PIE training
 evidence. Build the one-row data with:

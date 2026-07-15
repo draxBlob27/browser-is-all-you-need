@@ -27,6 +27,11 @@ from w8_biayn.aider_sft.contamination import (
     final_screen_rows,
 )
 from w8_biayn.aider_sft.errors import AiderSftError
+from w8_biayn.aider_sft import export as aider_sft_export
+from w8_biayn.aider_sft.export import (
+    export_minimal_moonlight_rows,
+    project_minimal_moonlight_row,
+)
 from w8_biayn.aider_sft.handoff import validate_slime_args
 from w8_biayn.aider_sft.inventory import (
     CONCEPT_SLUGS,
@@ -416,6 +421,7 @@ def test_cli_exposes_the_complete_operator_loop() -> None:
         "finalize",
         "verify",
         "export",
+        "export-minimal",
         "verify-export",
     ):
         assert command in result.stdout
@@ -532,6 +538,90 @@ def test_token_evidence_forwards_policy_and_is_assistant_only() -> None:
             tokenizer=object(),
             mask_generator_factory=factory,
         )
+
+
+def _minimal_export_source_row(task_id: str = "acronym") -> dict:
+    return {
+        "schema_version": "aider-sft-row-v1",
+        "task_id": task_id,
+        "label": task_id,
+        "messages": [
+            {"role": "user", "content": "prompt", "step_loss_mask": 0},
+            {"role": "assistant", "content": "answer", "step_loss_mask": 1},
+        ],
+        "metadata": {
+            "format": "aider-whole",
+            "subset": "train",
+            "source_kind": "exercism",
+        },
+    }
+
+
+def test_minimal_moonlight_projection_matches_reference_shape() -> None:
+    source = _minimal_export_source_row()
+    projected = project_minimal_moonlight_row(source)
+    assert projected == {
+        "label": "acronym",
+        "messages": [
+            {"content": "prompt", "role": "user"},
+            {"content": "answer", "role": "assistant"},
+        ],
+        "metadata": {
+            "format": "aider-whole",
+            "model_family": "moonlight",
+            "purpose": "aider-task-sft",
+            "source": "exercism-cpp/acronym",
+            "subset": "train",
+            "task_id": "acronym",
+        },
+        "task_id": "acronym",
+    }
+    assert source["messages"][0]["step_loss_mask"] == 0
+
+
+def test_minimal_export_writes_only_derived_train_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "ready"
+    output_root = tmp_path / "share"
+    (source_root / "sft").mkdir(parents=True)
+    source_path = source_root / "sft/train.jsonl"
+    write_jsonl(source_path, [_minimal_export_source_row()])
+    source_sha256 = sha256_bytes(source_path.read_bytes())
+    monkeypatch.setattr(
+        aider_sft_export,
+        "verify_ready_bundle",
+        lambda *_args, **_kwargs: {
+            "dataset_id": "unit-dataset",
+            "counts": {"train_rows": 1},
+        },
+    )
+
+    result = export_minimal_moonlight_rows(
+        source_root=source_root,
+        output_root=output_root,
+    )
+
+    assert result["status"] == "verified"
+    assert result["rows"] == 1
+    assert result["files"] == ["train.jsonl"]
+    assert {
+        path.relative_to(output_root).as_posix()
+        for path in output_root.rglob("*")
+        if path.is_file()
+    } == {"train.jsonl"}
+    assert sha256_bytes(source_path.read_bytes()) == source_sha256
+    row = json.loads((output_root / "train.jsonl").read_text(encoding="utf-8"))
+    assert set(row) == {"label", "messages", "metadata", "task_id"}
+    assert all(set(message) == {"content", "role"} for message in row["messages"])
+    assert set(row["metadata"]) == {
+        "format",
+        "model_family",
+        "purpose",
+        "source",
+        "subset",
+        "task_id",
+    }
 
 
 def test_missing_tokenizer_path_never_falls_back_to_current_directory(

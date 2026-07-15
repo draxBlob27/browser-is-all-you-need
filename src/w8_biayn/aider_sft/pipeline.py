@@ -21,7 +21,11 @@ from .config import (
 )
 from .contamination import final_screen_policy_fingerprint, final_screen_rows, screen_task
 from .errors import AiderSftError
-from .export import export_slime_bundle, verify_export_bundle
+from .export import (
+    export_minimal_moonlight_rows,
+    export_slime_bundle,
+    verify_export_bundle,
+)
 from .grader_support import reconstruct_support_bundle
 from .inventory import (
     build_inventory_proposal,
@@ -1532,6 +1536,23 @@ def export_dataset(
             "V1 permits only the internal slime-sft audience",
         )
     return export_slime_bundle(source_root=root, output_root=output)
+
+
+def export_minimal_dataset(
+    *,
+    root: Path,
+    output: Path,
+    model_family: str,
+    purpose: str,
+    source_prefix: str,
+) -> dict[str, Any]:
+    return export_minimal_moonlight_rows(
+        source_root=root,
+        output_root=output,
+        model_family=model_family,
+        purpose=purpose,
+        source_prefix=source_prefix,
+    )
 
 
 def verify_export(*, root: Path) -> dict[str, Any]:

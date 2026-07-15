@@ -168,6 +168,14 @@ the GLM lane runs `verify-export` on only the sanitized bundle, pins exact
 model/tokenizer/template/adapter identities, rejects token/mask/sequence drift,
 and disables auto-prepare before training.
 
+For an explicitly requested one-file Moonlight-style handoff, use the
+repo-owned `data aider-sft export-minimal` projection. It must verify the ready
+source, write only `train.jsonl` in a sibling output directory, preserve both
+message contents exactly, and retain only the reference-compatible
+`label`/`messages`/six-field `metadata`/`task_id` shape. Never write into or
+change the immutable ready root, and never describe this reduced projection as
+the provenance-bearing `slime-sft` bundle.
+
 All source downloads, archive normalization, coverage measurement, task construction, SkyRL conversion, SLIME conversion, GCS upload, and GCS restore must be represented as `w8-biayn data ...` commands with tests and docs.
 
 Build admitted PIE task JSON:
