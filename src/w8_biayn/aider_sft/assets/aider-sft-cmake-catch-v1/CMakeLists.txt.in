@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.16)
+project(@PROJECT@ LANGUAGES CXX)
+
+add_executable(@TARGET@
+@SOURCES@
+  test/tests-main.cpp
+)
+target_include_directories(@TARGET@ PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+set_target_properties(@TARGET@ PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(@TARGET@ PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()

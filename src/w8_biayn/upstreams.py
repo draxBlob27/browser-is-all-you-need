@@ -50,6 +50,23 @@ def clone_or_update(name: str, repo_root: str | Path = ".", dry_run: bool = Fals
         run_command(["git", "-C", str(destination), "fetch", "--all", "--tags"], dry_run=dry_run)
 
     run_command(["git", "-C", str(destination), "checkout", upstream.pin], dry_run=dry_run)
+    if not dry_run:
+        observed = subprocess.run(
+            ["git", "-C", str(destination), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(destination), "status", "--porcelain", "--untracked-files=all"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if observed != upstream.pin or dirty:
+            raise RuntimeError(
+                f"upstream {name} must be exactly {upstream.pin} with a clean tree"
+            )
     return destination
 
 
@@ -84,6 +101,14 @@ def status(repo_root: str | Path = ".") -> list[dict[str, str]]:
             if proc.returncode == 0:
                 head = proc.stdout.strip()
                 state = "pinned" if head == upstream.pin else "different"
+                dirty = subprocess.run(
+                    ["git", "-C", str(path), "status", "--porcelain", "--untracked-files=all"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if state == "pinned" and (dirty.returncode != 0 or dirty.stdout.strip()):
+                    state = "dirty"
             else:
                 state = "invalid"
         rows.append(

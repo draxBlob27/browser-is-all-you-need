@@ -1,0 +1,119 @@
+contract_version = "aider-sft-pipeline-v1.3"
+renderer_version = "aider-whole-compact-v1"
+taxonomy_version = "aider-cpp-six-groups-v1"
+generated_scaffold = "aider-sft-cmake-catch-v1"
+
+[dataset]
+profile = "aider-sft-pilot-v1"
+dataset_id_prefix = "aider-sft-pilot-v1"
+split_seed = 847221
+distribution_scope = "internal_research"
+# The implementation deliberately ships this operator-owned profile as draft.
+# plan reports every missing identity; no paid call can run until it is frozen.
+freeze_status = "draft"
+
+[upstreams.exercism_cpp]
+repository = "https://github.com/exercism/cpp.git"
+revision = "d2babb2bd750c884abf86ce52dde274ae7de9749"
+
+[upstreams.aider]
+repository = "https://github.com/Aider-AI/aider.git"
+revision = "5dc9490bb35f9729ef2c95d00a19ccd30c26339c"
+
+[upstreams.aider_polyglot]
+repository = "https://github.com/Aider-AI/polyglot-benchmark.git"
+revision = "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f"
+
+[upstreams]
+slime_revision = "a897e1f40357fdf3b148f1eb4ce26e1aeccfcd2c"
+
+[toolchain]
+docker_image = ""
+docker_image_id = ""
+cxx_path = ""
+cxx_version = ""
+cxx_binary_sha256 = ""
+cmake_generator = "Unix Makefiles"
+language_standard = "c++17"
+grader_protocol = 2
+
+[sandbox]
+network = "none"
+read_only_rootfs = true
+run_as_non_root = true
+no_new_privileges = true
+cap_drop = ["ALL"]
+mount_policy = "single-rw-scratch-no-host-secrets-v1"
+seccomp_profile_sha256 = ""
+cpus = 2
+memory_mib = 2048
+pids = 256
+file_size_mib = 64
+
+[tokenizer]
+repository = "zai-org/GLM-4.7-Flash"
+revision = "7dd20894a642a0aa287e9827cb1a1f7f91386b67"
+chat_template_sha256 = ""
+load_kwargs = { fix_mistral_regex = true }
+apply_chat_template_kwargs = { enable_thinking = false }
+policy = "final_answer_only_thinking_disabled"
+sequence_length = 4096
+loss_mask_type = "qwen"
+mask_adapter = "w8-aider-sft-mask-v1"
+local_path = ""
+
+[limits]
+editable_files = 8
+context_files = 16
+task_local_files = 128
+visible_file_bytes = 262144
+grader_file_bytes = 262144
+visible_total_bytes = 524288
+task_total_bytes = 4194304
+shared_file_bytes = 1048576
+shared_total_bytes = 4194304
+command_tail_bytes = 65536
+
+[llm]
+provider = ""
+model = ""
+model_revision = ""
+endpoint = ""
+credential_env = ""
+decoding = { temperature = 0.2, top_p = 0.95 }
+usage_terms_snapshot_sha256 = ""
+usage_terms_date = ""
+input_cost_per_million = 0.0
+output_cost_per_million = 0.0
+
+[llm.budgets]
+# 21 nominal admissions times the mandatory 3x reserve.
+total_candidates = 63
+reserve_multiplier = 3.0
+calls_per_candidate = 4
+max_revisions = 3
+concurrency = 4
+transport_retries = 3
+total_calls = 0
+input_tokens = 0
+output_tokens = 0
+wall_time_seconds = 0
+spend_amount = 0.0
+spend_currency = ""
+
+[review]
+authoring_identities = []
+
+[review.authorized_reviewers]
+source_inventory = []
+llm_usage_terms = []
+llm_task_semantics = []
+contamination_flag = []
+final_split = []
+dataset_release = []
+
+[contamination]
+normalizer_version = "aider-sft-role-normalizer-v1"
+token_shingle_size = 5
+jaccard_review_threshold = 0.72
+instruction_review_threshold = 0.82

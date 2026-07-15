@@ -90,24 +90,49 @@ Do not rely on globally installed tools unless bootstrap installs them or
 Dataset conversion is a deliverable. No one-off PIE or SuperCoder munging is
 allowed.
 
-The authoritative design for the primary SFT dataset generation pipeline is
-`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. It is currently design-only:
-do not claim its future CLI or 96-task pilot is implemented. The pilot contract
+The authoritative contract for the primary SFT dataset generation pipeline is
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. Its implementation lives in
+`src/w8_biayn/aider_sft/` and is exposed through the repo-owned
+`w8-biayn data aider-sft ...` CLI. The pilot profile remains draft. The
+source-only profile records a frozen operator environment and promoted source
+inventory, but `plan` must revalidate them and all admission/review/release
+gates still fail closed. Claim a source-only release as ready only after both
+`finalize` and producer `verify` report `ready`; generated release bytes remain
+ignored by Git. Do not claim a ready 96-task pilot merely because the profile
+or CLI exists. The pilot
 targets 96 total admitted Aider-style C++ roots (72 train, 12 validation, 12
-internal test), starts from an exact 75-task non-benchmark Exercism inventory
-(60 practice plus 15 concept roots), and admits at least 21 human-approved
-LLM-assisted roots, with LLM backfill for rejected or category-deferred source
-candidates. Complete source admission/classification before any paid authoring
-call, compute exact missing cells, and require candidate capacity of at least
-three times required LLM admissions; do not preserve the obsolete fixed-cap
-assumption. It keeps tests/references hidden from rows, excludes all 26
-official Aider C++ roots and related copies, and defines readiness without
+internal test), starts from an exact 75-task
+non-benchmark Exercism inventory (60 practice plus 15 concept roots), and
+admits at least 21 human-approved LLM-assisted roots, with LLM backfill for
+rejected or category-deferred source candidates. Complete source admission and
+classification before paid authoring, compute exact missing cells, and require
+three times remaining candidate capacity. It keeps tests/references hidden from
+rows, excludes all 26 official Aider C++ roots and related copies, and defines
+readiness without
 model responses, repair rows, training, benchmarking, or uplift. V1 is
 semi-autonomous: mechanical work may run automatically, but source inventory,
 LLM usage terms, every LLM task, contamination near-matches, the final split,
 and the exact final release package need scope-specific fingerprint-bound human
 approval. Read and update that document before
 implementing or changing this pipeline.
+
+The separate `aider-sft-source-only-75-v1` profile is the supported no-LLM
+75/0/0 lane. It assigns the exact 75 approved non-benchmark Exercism roots to
+train, forbids `[llm]` configuration and paid-call acknowledgement, and has no
+backfill path. A rejected, deferred, or mechanically failed source makes that
+release incomplete. This does not weaken admission, contamination, token/mask,
+final split/release review, or producer/consumer verification gates, and it
+does not replace or satisfy the 96-root pilot.
+
+Prepare tokenizer-only and seccomp assets through the repo-owned
+`prepare-tokenizer` and `prepare-seccomp` subcommands. Bind the tokenizer's
+exact `fix_mistral_regex=true` load kwarg, Transformers version, and Jinja
+version. `plan` must measure the locked compiler path, full version, and binary hash inside the
+exact grader image; host compiler identity is not admissible evidence.
+Require the exact clean pinned SLIME checkout during `plan` and finalization.
+Load its mask utility from `SLIME_ROOT` or `.cache/upstreams/slime` without
+requiring SLIME on `PYTHONPATH`, and initialize it as a run-level preflight
+before any task-scoped final screen.
 
 Primary Aider SFT implementation must preserve the pinned source tasks' C++17
 dialect, use a repo-owned C++17 CMake/Catch scaffold for LLM tasks, and reject
@@ -116,11 +141,21 @@ and run Catch without CTest/default-`ALL` ambiguity, and rerun the reference in
 a fresh locked sanitizer build. Pass the explicit `Unix Makefiles` generator
 and locked compiler to normal/sanitizer configure, enforce the fingerprinted
 sandbox, and require separate positive sanitizer discovery with matching test
-counts. Store repeated Catch support once by digest;
+counts. Convert the Docker `fsize` limit from MiB to bytes; accept Catch v1
+discovery status only when it is zero or exactly the parsed positive test
+count. Reuse source terminal records only under the current admission
+fingerprint so `--resume` reruns stale mechanical failures and historical
+late rejections caused by run-level preflight errors, and report an empty pool
+as structured `source_only_shortfall`. Store repeated Catch support once by digest;
 exclude only allowlisted support/scaffold roles from semantic contamination.
 Keep candidate admission separate from reviewed dataset split/release. A late
-render/token/contamination failure invalidates the frozen split and returns to
-quota-preserving backfill before exact `dataset_release` approval. Keep mutable
+task-scoped render/token/contamination failure invalidates the frozen split and
+returns to quota-preserving backfill before exact `dataset_release` approval.
+Run-level profile/consumer preflight failures must leave admitted candidates
+and the frozen split intact. Match benchmark IDs only as whole slugs, not as
+hyphen-delimited substrings of valid source IDs. Bind renderer and final-screen
+policy fingerprints into every late rejection so `--resume` retries preserved
+evidence after a policy correction. Keep mutable
 state/locks in the sibling `.state/` directory, make the ready root immutable,
 use scope-specific decision fingerprints, and bind the token-record ledger and
 release subject in schema-v2 readiness.
@@ -231,13 +266,15 @@ bash examples/slime/moonlight_cpp_perf/compare.sh
 ```
 
 Primary Aider-style SFT dataset generation is specified in
-`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. The multi-task pipeline is
-not implemented yet. Its existing one-task converter and graders are seed
-surfaces only; future work must use the repo-owned `w8-biayn data aider-sft ...`
-CLI contract, canonical tasks, image-bound oracle admission, contamination and
-family checks, root-level split rollback/release review, raw-message GLM
-adapter/token evidence, LLM-authoring provenance, and producer `verify` plus
-consumer `verify-export` receipts described there.
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. The multi-task implementation
+is in `src/w8_biayn/aider_sft/` and the repo-owned
+`w8-biayn data aider-sft ...` CLI. It includes canonical tasks, image-bound
+oracle admission, contamination/family checks, root-level split rollback and
+release review, raw-message GLM adapter/token evidence, LLM-authoring
+provenance, producer `verify`, sanitized `export`, and consumer
+`verify-export`. The pilot profile remains draft and no ready 96-root dataset
+is claimed. Existing one-task converters and graders remain seed surfaces, not
+primary-pipeline evidence.
 
 Optional Moonlight single-sample Aider `whole` format SFT smoke. This is a
 compact Aider-like task-text-plus-starter-files check only, not PIE training
@@ -588,6 +625,10 @@ explicit provider/status commands for actual resource accounting.
 ```text
 docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md
                                              primary Aider-style SFT dataset implementation contract
+configs/aider_sft/pilot-v1.toml              strict draft primary-SFT profile
+manifests/aider_sft/                         benchmark/support manifests; source manifest after review
+src/w8_biayn/aider_sft/                      primary Aider-style SFT implementation
+tests/test_aider_sft_pipeline.py             no-spend primary-SFT regression coverage
 scripts/bootstrap.sh                         fresh-machine bootstrap
 scripts/prepare_dapo_math_dataset.py         optional SLIME text-smoke data prep
 scripts/wandb_milestone.py                   standalone pipeline-milestone logger (elapsed curve + timeline table)
