@@ -49,6 +49,29 @@ fingerprints, and checkpoint manifests.
 The Miles base image supplies Miles, Megatron-Core, SGLang, Ray, and the
 GLM-4.7 model definition.
 
+## Replication BOM
+
+The validated configuration uses eight H100 80 GB GPUs. Peak measured training
+memory was 75,957 MiB per GPU, so 80 GB per GPU is the supported requirement;
+a smaller GPU count or lower-VRAM device has not been validated for this
+configuration.
+
+| Component | Exact artifact or requirement | Measured size |
+| --- | --- | ---: |
+| Base model | [`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash) | 62.5 GB |
+| GPUs | 8x NVIDIA H100 80 GB with NVLink | 75,957 MiB peak per GPU |
+| Host memory | 256 GiB minimum recommended; the measured node had 1 TiB | About 130 GiB run delta |
+| Training image | `radixark/miles:latest-cu12@sha256:efc8027fc47aaa9687dc4f1046093ed4e2f9789e52a932fcefb7031402aeff37` plus this repository's `Dockerfile` | 53.3 GB base image |
+| Training and evaluation data | [`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/5bb3330550cbf96d09f71e47453703d2a36a34c7) | 54.5 MB |
+| SFT adapter | [`TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100/tree/f1ac8df367080cc040f7cf769db219ee58f20f63) | 772 MB |
+| Converted TP4/PP1/EP8 base checkpoint | Created by `scripts/convert_checkpoint.sh` | Reserve 65 GB |
+| LoRA checkpoint and run evidence | Adapter, native shards, logs, samples, and metrics | Reserve 2 GB per saved run |
+
+Provision at least 250 GB of free local storage for a clean installation. This
+covers the base model, converted checkpoint, unpacked training image, adapter,
+run artifacts, and temporary image-download/build space. Use 500 GB or more
+when retaining multiple checkpoints or evaluation generations.
+
 ## Assets
 
 Download the exact prepared dataset and validated SFT adapter:

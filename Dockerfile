@@ -1,4 +1,4 @@
-ARG MILES_BASE_IMAGE=radixark/miles:latest-cu12
+ARG MILES_BASE_IMAGE=radixark/miles:latest-cu12@sha256:efc8027fc47aaa9687dc4f1046093ed4e2f9789e52a932fcefb7031402aeff37
 FROM ${MILES_BASE_IMAGE}
 
 # Keep the Python package, precompiled cubins, and CUDA 12.9 JIT cache on the
