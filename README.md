@@ -26,7 +26,7 @@ scorer.
 
 | Stage | Model or adapter | Evaluation data | Pass rate | Valid format | Correct and faster | Mean successful speedup |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
-| Base | [`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash) | [`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/09bc0276a0ff8ab84a8db81880ca7f739057e654) | 20.89% | 40.03% | 10.56% | 1.31x |
+| Base | [`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash/tree/7dd20894a642a0aa287e9827cb1a1f7f91386b67) | [`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/09bc0276a0ff8ab84a8db81880ca7f739057e654) | 20.89% | 40.03% | 10.56% | 1.31x |
 | SFT | [`TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100/tree/f1ac8df367080cc040f7cf769db219ee58f20f63) | [`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/09bc0276a0ff8ab84a8db81880ca7f739057e654) | **90.79%** | **97.70%** | **28.36%** | **1.43x** |
 
 The selected SFT profile completed four measured optimizer steps with finite
@@ -57,11 +57,11 @@ eight H100 80 GB GPUs, full NVLink connectivity, 1 TiB of host memory, and
 
 | Component | Exact experiment configuration | Measured size |
 | --- | --- | ---: |
-| Base model | [`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash) | 62.5 GB |
+| Base model | [`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash/tree/7dd20894a642a0aa287e9827cb1a1f7f91386b67), revision `7dd20894a642a0aa287e9827cb1a1f7f91386b67` | 62.5 GB |
 | GPUs | 8x NVIDIA H100 80 GB with NVLink | 75,957 MiB peak per GPU |
 | Host memory | 1 TiB installed on the experiment node | About 130 GiB run delta |
 | Local storage | 10 TB installed on the experiment node | 250 GB practical clean-run footprint |
-| Training image | `radixark/miles:latest-cu12@sha256:efc8027fc47aaa9687dc4f1046093ed4e2f9789e52a932fcefb7031402aeff37` plus this repository's `Dockerfile` | 53.3 GB base image |
+| Training image | `radixark/miles:latest-cu12@sha256:efc8027fc47aaa9687dc4f1046093ed4e2f9789e52a932fcefb7031402aeff37` plus this repository's `Dockerfile`; Modal builds it directly through `examples/modal/modal_app.py` | 53.3 GB base image |
 | Training and evaluation data | [`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/09bc0276a0ff8ab84a8db81880ca7f739057e654) | 60 MB download; about 107 MB extracted |
 | SFT adapter | [`TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100/tree/f1ac8df367080cc040f7cf769db219ee58f20f63) | 772 MB |
 | Converted TP4/PP1/EP8 base checkpoint | Created by `scripts/convert_checkpoint.sh` | Reserve 65 GB |
@@ -74,9 +74,10 @@ when retaining multiple checkpoints or evaluation generations.
 
 ## Assets
 
-Download the exact prepared dataset and validated SFT adapter:
+Download the exact base model, prepared dataset, and validated SFT adapter:
 
 ```bash
+python3 scripts/download_assets.py model --output-root /root/models
 python3 scripts/download_assets.py data
 python3 scripts/download_assets.py sft
 ```
@@ -91,6 +92,49 @@ each Hugging Face repository. It writes:
 
 These revisions are pinned in `scripts/download_assets.py`; environment
 variables can override them when intentionally testing a newer release.
+
+## Modal 8x H100
+
+The canonical Modal launcher is `examples/modal/modal_app.py`. It reproduces
+the recorded machine and image configuration without requiring a separately
+published project image:
+
+| Modal setting | Value |
+| --- | --- |
+| GPU | `H100!:8` |
+| CPU | 48 cores |
+| Host memory | 256 GiB requested, 1 TiB limit |
+| Timeout | 24 hours per stage |
+| Base image | `radixark/miles:latest-cu12@sha256:efc8027fc47aaa9687dc4f1046093ed4e2f9789e52a932fcefb7031402aeff37` |
+| Runtime additions | Repository `Dockerfile`, GCC/G++ 13, `rsync`, `gawk`, `util-linux`, and `git` |
+| Persistent storage | `glm47-models`, `glm47-assets`, and `glm47-runs` Modal Volumes |
+| Tracking secret | Modal secret `wandb-glm47` containing `WANDB_API_KEY` |
+
+Install the Modal client, authenticate to a workspace, and create the W&B
+secret once:
+
+```bash
+python3 -m pip install "modal==1.2.6"
+modal secret create wandb-glm47 WANDB_API_KEY="$WANDB_API_KEY"
+```
+
+Prepare the pinned model and assets, convert the checkpoint, and run either
+training stage:
+
+```bash
+modal run examples/modal/modal_app.py::prepare
+modal run examples/modal/modal_app.py::convert
+modal run examples/modal/modal_app.py::sft
+modal run examples/modal/modal_app.py::grpo
+```
+
+GRPO defaults to the published SFT adapter. To use a newly produced SFT
+checkpoint, pass its path on the `glm47-runs` volume:
+
+```bash
+modal run examples/modal/modal_app.py::grpo \
+  --adapter-path /workspace/runs/<sft-run>/checkpoints/sft_lora_r16/<adapter>
+```
 
 ## Runtime
 
@@ -223,6 +267,7 @@ to either command to publish the same metrics and sample tables to W&B.
 Dockerfile                         H100 runtime
 examples/sft.sh                    canonical SFT configuration
 examples/grpo.sh                   canonical GRPO configuration
+examples/modal/modal_app.py        Modal 8x H100 reproduction
 scripts/convert_checkpoint.sh      TP4/PP1/EP8 conversion
 scripts/download_assets.py         verified Hugging Face asset download
 scripts/evaluate.py                held-out generation and scoring

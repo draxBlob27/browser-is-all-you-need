@@ -15,12 +15,21 @@ from huggingface_hub import snapshot_download
 
 
 ASSETS = {
+    "model": {
+        "repo_id": "zai-org/GLM-4.7-Flash",
+        "repo_type": "model",
+        "revision_env": "GLM47_MODEL_REVISION",
+        "default_revision": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+        "destination": "GLM-4.7-Flash",
+        "verify_checksums": False,
+    },
     "data": {
         "repo_id": "TokenBender/glm47-pie-cpp-posttraining-data",
         "repo_type": "dataset",
         "revision_env": "GLM47_DATA_REVISION",
         "default_revision": "09bc0276a0ff8ab84a8db81880ca7f739057e654",
         "destination": "data",
+        "verify_checksums": True,
     },
     "sft": {
         "repo_id": "TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100",
@@ -28,6 +37,7 @@ ASSETS = {
         "revision_env": "GLM47_SFT_REVISION",
         "default_revision": "f1ac8df367080cc040f7cf769db219ee58f20f63",
         "destination": "adapters/sft",
+        "verify_checksums": True,
     },
     "grpo": {
         "repo_id": "TokenBender/glm47-flash-pie-cpp-lora-r16-grpo-h100",
@@ -35,8 +45,11 @@ ASSETS = {
         "revision_env": "GLM47_GRPO_REVISION",
         "default_revision": "1fbac6f6fd59829a64776937102351c6318a7fd4",
         "destination": "adapters/grpo",
+        "verify_checksums": True,
     },
 }
+
+DEFAULT_ASSETS = ("data", "sft", "grpo")
 
 
 def _verify_checksums(root: Path) -> None:
@@ -94,7 +107,7 @@ def _download(name: str, output_root: Path, verify: bool) -> Path:
         revision=revision,
         local_dir=destination,
     )
-    if verify:
+    if verify and asset["verify_checksums"]:
         _verify_checksums(destination)
     if name == "data":
         _extract_task_archive(destination)
@@ -113,7 +126,7 @@ def main() -> int:
     parser.add_argument("--no-verify", action="store_true")
     args = parser.parse_args()
 
-    names = list(ASSETS) if args.asset == "all" else [args.asset]
+    names = list(DEFAULT_ASSETS) if args.asset == "all" else [args.asset]
     for name in names:
         _download(name, args.output_root, verify=not args.no_verify)
     return 0

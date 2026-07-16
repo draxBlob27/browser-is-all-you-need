@@ -16,6 +16,7 @@ SFT_RUNNER = Path("scripts/train_sft.sh")
 GRPO_RUNNER = Path("scripts/train_grpo.sh")
 GLM47_H100_SFT_RUNNER = Path("examples/sft.sh")
 GLM47_H100_GRPO_RUNNER = Path("examples/grpo.sh")
+GLM47_H100_MODAL_RUNNER = Path("examples/modal/modal_app.py")
 GLM47_H100_CONVERTER = Path("scripts/convert_checkpoint.sh")
 GLM47_H100_RUNTIME = Path("Dockerfile")
 MILES_SCRIPTS = (
@@ -444,6 +445,28 @@ def test_h100_runtime_aligns_all_flashinfer_packages() -> None:
     assert "SGLANG_KERNEL_VERSION=0.4.4" in text
     assert "TORCH_MEMORY_SAVER_VERSION=0.0.9.post1" in text
     assert "https://docs.sglang.ai/whl/cu${FLASHINFER_CUDA_INDEX}/" in text
+
+
+def test_modal_reproduction_pins_model_image_and_machine_shape() -> None:
+    text = GLM47_H100_MODAL_RUNNER.read_text(encoding="utf-8")
+    assert 'MODEL_REVISION = "7dd20894a642a0aa287e9827cb1a1f7f91386b67"' in text
+    assert "sha256:efc8027fc47aaa9687dc4f1046093ed4e2f9789e52a932fcefb7031402aeff37" in text
+    assert 'modal.Image.from_dockerfile(' in text
+    assert '"gpu": "H100!:8"' in text
+    assert '"cpu": 48.0' in text
+    assert '"memory": (262_144, 1_048_576)' in text
+    assert '"timeout": 86_400' in text
+    assert '"GLM47_CPP_SANDBOX_BACKEND": "local"' in text
+    assert 'modal.Secret.from_name("wandb-glm47")' in text
+
+
+def test_asset_downloader_pins_the_base_model_revision() -> None:
+    module = runpy.run_path("scripts/download_assets.py")
+    model = module["ASSETS"]["model"]
+    assert model["repo_id"] == "zai-org/GLM-4.7-Flash"
+    assert model["default_revision"] == "7dd20894a642a0aa287e9827cb1a1f7f91386b67"
+    assert model["destination"] == "GLM-4.7-Flash"
+    assert model["verify_checksums"] is False
 
 
 def test_h100_runtime_preflight_accepts_aligned_versions() -> None:
