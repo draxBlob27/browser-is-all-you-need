@@ -896,6 +896,42 @@ def test_colocate_weight_sync_reloads_and_destroys_process_groups_inside_tms() -
     ]
 
 
+def test_colocate_sleep_allows_rank_metadata_to_be_uninitialized() -> None:
+    from glm47_posttraining.integrations import miles_glm47_bridge
+
+    events: list[str] = []
+
+    class FakeActor:
+        pass
+
+    fake_module = types.SimpleNamespace(
+        MegatronTrainRayActor=FakeActor,
+        clear_memory=lambda **kwargs: events.append("clear"),
+        destroy_process_groups=lambda: events.append("destroy"),
+        print_memory=lambda label: events.append(label),
+        timer=lambda fn: fn,
+        torch_memory_saver=types.SimpleNamespace(
+            pause=lambda **kwargs: events.append("pause")
+        ),
+        is_lora_enabled=lambda args: False,
+        log_cpu_memory=lambda *args: events.append("log-cpu"),
+    )
+    miles_glm47_bridge._apply_colocate_lora_update_tms_scope(fake_module)
+
+    actor = FakeActor()
+    actor.args = types.SimpleNamespace(offload_train=True)
+
+    actor.sleep()
+
+    assert events == [
+        "clear",
+        "before offload model",
+        "destroy",
+        "pause",
+        "after offload model",
+    ]
+
+
 def test_colocate_weight_sync_destroys_process_groups_before_tms_on_failure() -> None:
     from glm47_posttraining.integrations import miles_glm47_bridge
 

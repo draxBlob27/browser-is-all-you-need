@@ -478,7 +478,7 @@ def _apply_colocate_lora_update_tms_scope(module) -> None:
 
         module.print_memory("after offload model")
 
-        if self._is_main_rank and hasattr(self, "_last_rollout_id"):
+        if getattr(self, "_is_main_rank", False) and hasattr(self, "_last_rollout_id"):
             module.log_cpu_memory(
                 self._last_rollout_id, self.args, "after_offload_train"
             )
