@@ -82,10 +82,12 @@ python3 scripts/download_assets.py data
 python3 scripts/download_assets.py sft
 ```
 
-The downloader verifies every file against the SHA-256 manifest published with
-each Hugging Face repository. It writes:
+The base model is frozen to its Hugging Face commit. Dataset and adapter files
+are additionally verified against the SHA-256 manifests published with their
+repositories. The commands write:
 
 ```text
+/root/models/GLM-4.7-Flash
 .glm47-posttraining/assets/data
 .glm47-posttraining/assets/adapters/sft
 ```
