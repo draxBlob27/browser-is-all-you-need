@@ -51,16 +51,16 @@ GLM-4.7 model definition.
 
 ## Replication BOM
 
-The validated configuration uses eight H100 80 GB GPUs. Peak measured training
-memory was 75,957 MiB per GPU, so 80 GB per GPU is the supported requirement;
-a smaller GPU count or lower-VRAM device has not been validated for this
-configuration.
+The published training and evaluation results were produced on one node with
+eight H100 80 GB GPUs, full NVLink connectivity, 1 TiB of host memory, and
+10 TB of local storage.
 
-| Component | Exact artifact or requirement | Measured size |
+| Component | Exact experiment configuration | Measured size |
 | --- | --- | ---: |
 | Base model | [`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash) | 62.5 GB |
 | GPUs | 8x NVIDIA H100 80 GB with NVLink | 75,957 MiB peak per GPU |
-| Host memory | 256 GiB minimum recommended; the measured node had 1 TiB | About 130 GiB run delta |
+| Host memory | 1 TiB installed on the experiment node | About 130 GiB run delta |
+| Local storage | 10 TB installed on the experiment node | 250 GB practical clean-run footprint |
 | Training image | `radixark/miles:latest-cu12@sha256:efc8027fc47aaa9687dc4f1046093ed4e2f9789e52a932fcefb7031402aeff37` plus this repository's `Dockerfile` | 53.3 GB base image |
 | Training and evaluation data | [`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/5bb3330550cbf96d09f71e47453703d2a36a34c7) | 54.5 MB |
 | SFT adapter | [`TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100/tree/f1ac8df367080cc040f7cf769db219ee58f20f63) | 772 MB |
