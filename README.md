@@ -24,6 +24,10 @@ configuration in this repository.
 
 | Method | Result |
 | --- | --- |
+| SFT full evaluation | 90.79% pass rate across 1,259 held-out tasks |
+| SFT valid format rate | 97.70% |
+| SFT correct and faster rate | 28.36% |
+| SFT mean speedup when correct and faster | 1.43x |
 | SFT | Four measured optimizer steps completed with finite loss |
 | SFT steady actor time | 14.88 seconds per step |
 | SFT peak memory | 72,397 MiB per GPU |
@@ -39,12 +43,42 @@ fingerprints, and checkpoint manifests.
 
 - One 8x H100 80 GB NVLink node
 - Docker with NVIDIA Container Toolkit
-- GLM-4.7-Flash at `/root/models/GLM-4.7-Flash`
-- PIE task JSON files with `train`, `validation`, and `test` splits
+- Access to the GLM-4.7-Flash base model
 - A W&B API key for online experiment tracking
 
 The Miles base image supplies Miles, Megatron-Core, SGLang, Ray, and the
 GLM-4.7 model definition.
+
+## Assets
+
+Download the exact prepared dataset and the validated SFT and GRPO adapters:
+
+```bash
+python3 scripts/download_assets.py all
+```
+
+The downloader verifies every file against the SHA-256 manifest published with
+each Hugging Face repository. It writes:
+
+```text
+.glm47-posttraining/assets/data
+.glm47-posttraining/assets/adapters/sft
+.glm47-posttraining/assets/adapters/grpo
+```
+
+Base model:
+[`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash)
+
+Dataset:
+[`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/5bb3330550cbf96d09f71e47453703d2a36a34c7)
+
+Adapters:
+[`SFT`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100/tree/f1ac8df367080cc040f7cf769db219ee58f20f63)
+and
+[`GRPO`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-grpo-h100/tree/1fbac6f6fd59829a64776937102351c6318a7fd4)
+
+These revisions are pinned in `scripts/download_assets.py`; environment
+variables can override them when intentionally testing a newer release.
 
 ## Runtime
 
@@ -63,7 +97,7 @@ docker run --rm -it \
   --network host \
   -v "$PWD:/workspace/glm47-h100-posttraining" \
   -v /root/models:/root/models \
-  -v /path/to/pie-tasks:/workspace/tasks:ro \
+  -v "$PWD/.glm47-posttraining/assets:/workspace/assets:ro" \
   glm47-h100-posttraining \
   bash
 ```
@@ -73,7 +107,7 @@ Inside the container:
 ```bash
 cd /workspace/glm47-h100-posttraining
 python3 -m pip install -e .
-export MILES_CPP_TASKS_DIR=/workspace/tasks
+export MILES_CPP_DATA_DIR=/workspace/assets/data
 export WANDB_API_KEY=...
 ```
 
@@ -111,7 +145,7 @@ LoRA checkpoints, and W&B artifact manifest.
 Start GRPO from an SFT adapter:
 
 ```bash
-export MILES_LORA_ADAPTER_PATH=/path/to/sft/checkpoints/sft_lora_r16/iter_XXXXXXX/adapter
+export MILES_LORA_ADAPTER_PATH=/workspace/assets/adapters/sft
 bash examples/grpo.sh
 ```
 
@@ -160,6 +194,7 @@ Dockerfile                         H100 runtime
 examples/sft.sh                    canonical SFT configuration
 examples/grpo.sh                   canonical GRPO configuration
 scripts/convert_checkpoint.sh      TP4/PP1/EP8 conversion
+scripts/download_assets.py         verified Hugging Face asset download
 scripts/evaluate.py                held-out generation and scoring
 scripts/prepare_grpo_adapter.py    serving adapter preparation
 scripts/publish_results.py         W&B results publishing
