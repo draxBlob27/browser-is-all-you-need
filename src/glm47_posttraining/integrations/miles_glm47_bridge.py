@@ -652,10 +652,23 @@ def _apply_rollout_data_dp_sharding(module) -> None:
     if getattr(module, "_glm47_rollout_dp_shard_patched", False):
         return
 
-    def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
-        del args
-        assert len(rollout_data_ref) == dp_size
-        rollout_data = module.ray.get(rollout_data_ref[dp_rank].inner)
+    def process_rollout_data(
+        args,
+        rollout_data_ref,
+        dp_rank,
+        dp_size,
+        witness_info=None,
+    ):
+        if getattr(args, "delay_split_train_data_by_dp", False):
+            raw = module.ray.get(rollout_data_ref.inner)
+            if witness_info is not None:
+                raw = {**raw, "seq_witness_ids": witness_info.witness_ids}
+            raw = module.split_train_data_by_dp_raw(args, raw, dp_size=dp_size)
+            rollout_data = raw[dp_rank]
+        else:
+            assert len(rollout_data_ref) == dp_size
+            assert witness_info is None
+            rollout_data = module.ray.get(rollout_data_ref[dp_rank].inner)
 
         partition = rollout_data.pop("partition")
         total_lengths = rollout_data["total_lengths"]

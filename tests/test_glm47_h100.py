@@ -1106,12 +1106,20 @@ def test_rollout_data_dp_sharding_keeps_raw_rewards_aligned() -> None:
     fake_module = types.SimpleNamespace(
         ray=types.SimpleNamespace(get=lambda inner: dict(inner)),
         Timer=lambda: timer_state,
+        split_train_data_by_dp_raw=lambda *args, **kwargs: None,
         process_rollout_data=lambda *args: None,
     )
     miles_glm47_bridge._apply_rollout_data_dp_sharding(fake_module)
 
     refs = [types.SimpleNamespace(inner=payload), types.SimpleNamespace(inner={})]
-    result = fake_module.process_rollout_data(None, refs, 0, 2)
+    args = types.SimpleNamespace(delay_split_train_data_by_dp=False)
+    result = fake_module.process_rollout_data(
+        args,
+        refs,
+        0,
+        2,
+        witness_info=None,
+    )
 
     assert result["tokens"] == ["rank-local-row-3", "rank-local-row-0"]
     assert result["response_lengths"] == [13, 10]
@@ -1119,6 +1127,62 @@ def test_rollout_data_dp_sharding_keeps_raw_rewards_aligned() -> None:
     assert result["raw_reward"] == [0.0, 0.25, -0.5, 1.0]
     assert result["_glm47_local_raw_reward"] == [1.0, 0.0]
     assert timer_state.seq_lens == [10, 11, 12, 13]
+
+
+def test_rollout_data_dp_sharding_preserves_delayed_witness_split() -> None:
+    from glm47_posttraining.integrations import miles_glm47_bridge
+
+    timer_state = types.SimpleNamespace(seq_lens=None)
+    captured: dict[str, object] = {}
+    payload = {
+        "tokens": ["global-row-0", "global-row-1"],
+        "total_lengths": [10, 11],
+        "raw_reward": [0.25, 1.0],
+    }
+
+    def split_train_data_by_dp_raw(args, raw, *, dp_size):
+        captured.update(args=args, raw=raw, dp_size=dp_size)
+        return [
+            {
+                **raw,
+                "partition": [1],
+                "tokens": ["global-row-1"],
+            },
+            {
+                **raw,
+                "partition": [0],
+                "tokens": ["global-row-0"],
+            },
+        ]
+
+    fake_module = types.SimpleNamespace(
+        ray=types.SimpleNamespace(get=lambda inner: dict(inner)),
+        Timer=lambda: timer_state,
+        split_train_data_by_dp_raw=split_train_data_by_dp_raw,
+        process_rollout_data=lambda *args, **kwargs: None,
+    )
+    miles_glm47_bridge._apply_rollout_data_dp_sharding(fake_module)
+
+    args = types.SimpleNamespace(delay_split_train_data_by_dp=True)
+    ref = types.SimpleNamespace(inner=payload)
+    witness_info = types.SimpleNamespace(witness_ids=[101, 102])
+    result = fake_module.process_rollout_data(
+        args,
+        ref,
+        0,
+        2,
+        witness_info=witness_info,
+    )
+
+    assert captured == {
+        "args": args,
+        "raw": {**payload, "seq_witness_ids": [101, 102]},
+        "dp_size": 2,
+    }
+    assert result["tokens"] == ["global-row-1"]
+    assert result["total_lengths"] == [11]
+    assert result["_glm47_local_raw_reward"] == [1.0]
+    assert timer_state.seq_lens == [10, 11]
 
 
 def test_correct_sample_logging_uses_global_rewards_only_for_passrate() -> None:
