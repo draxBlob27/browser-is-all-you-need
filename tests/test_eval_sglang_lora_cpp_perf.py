@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-SCRIPT_PATH = Path("scripts/eval_sglang_lora_cpp_perf.py")
+SCRIPT_PATH = Path("scripts/evaluate.py")
 
 
 def _load_eval_module():
@@ -113,7 +113,7 @@ def test_shared_outer_lora_serving_flags_parse_and_default_off(monkeypatch) -> N
     monkeypatch.setattr(
         "sys.argv",
         [
-            "eval_sglang_lora_cpp_perf.py",
+            "evaluate.py",
             "--data-dir",
             "data",
             "--model",
@@ -129,7 +129,7 @@ def test_shared_outer_lora_serving_flags_parse_and_default_off(monkeypatch) -> N
     monkeypatch.setattr(
         "sys.argv",
         [
-            "eval_sglang_lora_cpp_perf.py",
+            "evaluate.py",
             "--data-dir",
             "data",
             "--model",
@@ -150,7 +150,7 @@ def test_preserved_generations_can_be_replayed_without_model(monkeypatch) -> Non
     monkeypatch.setattr(
         "sys.argv",
         [
-            "eval_sglang_lora_cpp_perf.py",
+            "evaluate.py",
             "--data-dir",
             "data",
             "--generated",
@@ -205,7 +205,7 @@ def test_wandb_lineage_and_timing_flags_parse(monkeypatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
-            "eval_sglang_lora_cpp_perf.py",
+            "evaluate.py",
             "--data-dir",
             "data",
             "--model",
@@ -217,7 +217,7 @@ def test_wandb_lineage_and_timing_flags_parse(monkeypatch) -> None:
             "--wandb-job-type",
             "heldout-eval",
             "--wandb-timing-status",
-            "blocked_issue_13",
+            "verified",
         ],
     )
 
@@ -225,4 +225,4 @@ def test_wandb_lineage_and_timing_flags_parse(monkeypatch) -> None:
 
     assert args.wandb_experiment_id == "experiment-1"
     assert args.wandb_job_type == "heldout-eval"
-    assert args.wandb_timing_status == "blocked_issue_13"
+    assert args.wandb_timing_status == "verified"

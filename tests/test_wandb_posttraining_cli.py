@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT_PATH = Path("scripts/wandb_posttraining.py")
+SCRIPT_PATH = Path("scripts/publish_results.py")
 
 
 def _load_module():

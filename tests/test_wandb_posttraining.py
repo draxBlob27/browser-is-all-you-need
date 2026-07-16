@@ -6,7 +6,7 @@ import types
 from pathlib import Path
 from typing import Any
 
-from w8_biayn.integrations.wandb_posttraining import (
+from glm47_posttraining.integrations.wandb_posttraining import (
     COMPARISON_TABLE_COLUMNS,
     EVAL_TABLE_COLUMNS,
     FAILURE_TABLE_COLUMNS,
@@ -154,14 +154,14 @@ def test_eval_and_failure_tables_have_stable_public_schemas() -> None:
         _records(),
         _generations(),
         experiment_id="experiment-1",
-        timing_status="blocked_issue_13",
+        timing_status="verified",
     )
     assert len(eval_rows) == 2
     assert all(len(row) == len(EVAL_TABLE_COLUMNS) for row in eval_rows)
     first = dict(zip(EVAL_TABLE_COLUMNS, eval_rows[0], strict=True))
     assert first["response_preview"] == "int main() { return 0; }"
     assert first["runtime_speedup"] == 2.0
-    assert first["timing_status"] == "blocked_issue_13"
+    assert first["timing_status"] == "verified"
 
     failure_rows = build_failure_bucket_rows(_records(), experiment_id="experiment-1")
     assert all(len(row) == len(FAILURE_TABLE_COLUMNS) for row in failure_rows)
@@ -227,7 +227,7 @@ def test_eval_logger_emits_tables_summary_and_manifest_artifact(tmp_path: Path) 
         group="experiment-1",
         job_type="eval",
         mode="offline",
-        timing_status="blocked_issue_13",
+        timing_status="verified",
         summary=_summary("base", 0.5),
         records=_records(),
         generations=_generations(),
@@ -246,7 +246,7 @@ def test_eval_logger_emits_tables_summary_and_manifest_artifact(tmp_path: Path) 
     assert init["config"]["max_tokens"] == 1536
     assert run.logs[0]["tables/eval_samples"].columns == list(EVAL_TABLE_COLUMNS)
     assert run.logs[0]["tables/failure_buckets"].columns == list(FAILURE_TABLE_COLUMNS)
-    assert run.summary["observability/timing_status"] == "blocked_issue_13"
+    assert run.summary["observability/timing_status"] == "verified"
     assert run.summary["stage/status"] == "success"
     assert run.artifacts[0].type == "eval"
     artifact_names = {name for _, name in run.artifacts[0].files}
@@ -323,7 +323,7 @@ def test_stage_finalizer_resumes_miles_run_and_curates_receipt(tmp_path: Path) -
         stage="sft",
         status="success",
         mode="offline",
-        timing_status="blocked_issue_13",
+        timing_status="verified",
         receipt=receipt,
         artifact_paths=[vram],
         manifest_dir=tmp_path,
@@ -421,7 +421,7 @@ def test_stage_finalizer_publishes_native_miles_evidence_tables(
 
     monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(load=fake_load))
 
-    sync_dir = tmp_path / "sync_forensics"
+    sync_dir = tmp_path / "weight_sync"
     sync_dir.mkdir()
     for sync, digest, total in ((1, "before", 10.0), (2, "after", 9.5)):
         for rank in range(2):
@@ -455,7 +455,7 @@ def test_stage_finalizer_publishes_native_miles_evidence_tables(
         manifest_dir=tmp_path,
         run_log=run_log,
         rollout_dump_dir=dump_dir,
-        sync_forensics_dir=sync_dir,
+        sync_metrics_dir=sync_dir,
         checkpoint_dir=checkpoint,
     )
 
@@ -465,7 +465,7 @@ def test_stage_finalizer_publishes_native_miles_evidence_tables(
     assert table_log["tables/rollout_samples"].columns == list(MILES_SAMPLE_TABLE_COLUMNS)
     assert table_log["tables/eval_samples"].columns == list(MILES_SAMPLE_TABLE_COLUMNS)
     assert table_log["tables/reward_outcomes"].columns == list(MILES_REWARD_OUTCOME_TABLE_COLUMNS)
-    assert table_log["tables/sync_forensics"].columns == list(MILES_SYNC_TABLE_COLUMNS)
+    assert table_log["tables/weight_sync"].columns == list(MILES_SYNC_TABLE_COLUMNS)
     assert table_log["tables/checkpoint_manifest"].columns == list(MILES_CHECKPOINT_TABLE_COLUMNS)
     assert run.summary["passrate/pass@1"] == 0.25
     assert run.summary["eval/pie_cpp"] == -0.41
@@ -496,7 +496,7 @@ def test_comparison_logger_publishes_uplift_gate_and_table(tmp_path: Path) -> No
         experiment_id="experiment-1",
         run_id="experiment-1-comparison",
         mode="offline",
-        timing_status="blocked_issue_13",
+        timing_status="verified",
         summaries=summaries,
         summary_paths=paths,
         output_dir=tmp_path,

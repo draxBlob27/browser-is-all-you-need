@@ -1,11 +1,10 @@
 .env
-.gcp-service-account.json
 
 .cache/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.w8-biayn/
+.glm47-posttraining/
 .local/
 
 __pycache__/
