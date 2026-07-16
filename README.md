@@ -20,20 +20,20 @@ The repository provides one configuration:
 ## Results
 
 Measurements were collected on a dedicated 8x H100 80 GB node with the
-configuration in this repository.
+configuration in this repository. Base and SFT use the same 1,259 held-out
+tasks, greedy decoding, a 1,536-token response cap, and the same C++ sandbox
+scorer.
 
-| Method | Result |
-| --- | --- |
-| SFT full evaluation | 90.79% pass rate across 1,259 held-out tasks |
-| SFT valid format rate | 97.70% |
-| SFT correct and faster rate | 28.36% |
-| SFT mean speedup when correct and faster | 1.43x |
-| SFT | Four measured optimizer steps completed with finite loss |
-| SFT steady actor time | 14.88 seconds per step |
-| SFT peak memory | 72,397 MiB per GPU |
-| GRPO | Complete rollout, reward, policy update, adapter sync, checkpoint, and evaluation cycle |
-| Actor throughput | 6,735.5 tokens/second across 8 GPUs |
-| Estimated active-MoE MFU | 2.0691% |
+| Stage | Model or adapter | Evaluation data | Pass rate | Valid format | Correct and faster | Mean successful speedup |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Base | [`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash) | [`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/5bb3330550cbf96d09f71e47453703d2a36a34c7) | 20.89% | 40.03% | 10.56% | 1.31x |
+| SFT | [`TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100/tree/f1ac8df367080cc040f7cf769db219ee58f20f63) | [`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/5bb3330550cbf96d09f71e47453703d2a36a34c7) | **90.79%** | **97.70%** | **28.36%** | **1.43x** |
+
+The selected SFT profile completed four measured optimizer steps with finite
+loss, a 14.88-second steady actor time, and 72,397 MiB peak memory per GPU.
+The verified GRPO runtime completed rollout, reward scoring, policy update,
+adapter synchronization, checkpointing, and evaluation at 6,735.5 actor
+tokens/second across eight GPUs. Estimated active-MoE MFU was 2.0691%.
 
 The W&B integration records training curves, rollout samples, evaluation
 samples, reward outcomes, metric catalogs, per-rank adapter synchronization
@@ -51,10 +51,11 @@ GLM-4.7 model definition.
 
 ## Assets
 
-Download the exact prepared dataset and the validated SFT and GRPO adapters:
+Download the exact prepared dataset and validated SFT adapter:
 
 ```bash
-python3 scripts/download_assets.py all
+python3 scripts/download_assets.py data
+python3 scripts/download_assets.py sft
 ```
 
 The downloader verifies every file against the SHA-256 manifest published with
@@ -63,19 +64,7 @@ each Hugging Face repository. It writes:
 ```text
 .glm47-posttraining/assets/data
 .glm47-posttraining/assets/adapters/sft
-.glm47-posttraining/assets/adapters/grpo
 ```
-
-Base model:
-[`zai-org/GLM-4.7-Flash`](https://huggingface.co/zai-org/GLM-4.7-Flash)
-
-Dataset:
-[`TokenBender/glm47-pie-cpp-posttraining-data`](https://huggingface.co/datasets/TokenBender/glm47-pie-cpp-posttraining-data/tree/5bb3330550cbf96d09f71e47453703d2a36a34c7)
-
-Adapters:
-[`SFT`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-sft-h100/tree/f1ac8df367080cc040f7cf769db219ee58f20f63)
-and
-[`GRPO`](https://huggingface.co/TokenBender/glm47-flash-pie-cpp-lora-r16-grpo-h100/tree/1fbac6f6fd59829a64776937102351c6318a7fd4)
 
 These revisions are pinned in `scripts/download_assets.py`; environment
 variables can override them when intentionally testing a newer release.
@@ -158,34 +147,52 @@ evaluation every 20 rollouts, and checkpointing every 10 rollouts.
 
 ## Evaluate
 
-Prepare a serving copy of any trainer adapter:
-
-```bash
-python3 scripts/prepare_grpo_adapter.py \
-  /path/to/trainer/adapter \
-  /path/to/serving/adapter
-```
-
-Run held-out evaluation:
+Run the base-model evaluation on the complete held-out set:
 
 ```bash
 PYTHONPATH=src python3 scripts/evaluate.py \
-  --data-dir /path/to/run/data \
+  --data-dir .glm47-posttraining/assets/data \
   --model /root/models/GLM-4.7-Flash \
-  --adapter /path/to/serving/adapter \
-  --output-dir /path/to/eval \
-  --label grpo \
+  --output-dir .glm47-posttraining/eval/base \
+  --label base \
   --tp-size 4 \
   --batch-size 32 \
+  --temperature 0 \
+  --top-p 1 \
+  --max-tokens 1536 \
   --attention-backend flashinfer \
+  --apply-chat-template \
+  --chat-template-kwargs '{"enable_thinking": false}' \
+  --score-workers 32
+```
+
+Run the same evaluation with the SFT adapter:
+
+```bash
+PYTHONPATH=src python3 scripts/evaluate.py \
+  --data-dir .glm47-posttraining/assets/data \
+  --model /root/models/GLM-4.7-Flash \
+  --adapter .glm47-posttraining/assets/adapters/sft \
+  --output-dir .glm47-posttraining/eval/sft \
+  --label sft \
+  --tp-size 4 \
+  --batch-size 32 \
+  --temperature 0 \
+  --top-p 1 \
+  --max-tokens 1536 \
+  --attention-backend flashinfer \
+  --apply-chat-template \
+  --chat-template-kwargs '{"enable_thinking": false}' \
+  --lora-target-modules q_a_proj,kv_a_proj_with_mqa,o_proj,gate_proj,up_proj,down_proj \
   --experts-shared-outer-loras \
   --lora-use-virtual-experts \
-  --wandb-project glm47-pie-cpp-posttraining \
-  --wandb-timing-status verified
+  --score-workers 32
 ```
 
 Evaluation writes generated samples, scored records, an aggregate summary,
-quality metrics, and the corresponding W&B tables.
+quality metrics, and a run receipt under the selected output directory. Add
+`--wandb-project glm47-pie-cpp-posttraining --wandb-timing-status verified`
+to either command to publish the same metrics and sample tables to W&B.
 
 ## Repository
 
