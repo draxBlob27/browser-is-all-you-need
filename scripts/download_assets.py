@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
+import shutil
+import tarfile
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
@@ -16,7 +19,7 @@ ASSETS = {
         "repo_id": "TokenBender/glm47-pie-cpp-posttraining-data",
         "repo_type": "dataset",
         "revision_env": "GLM47_DATA_REVISION",
-        "default_revision": "5bb3330550cbf96d09f71e47453703d2a36a34c7",
+        "default_revision": "09bc0276a0ff8ab84a8db81880ca7f739057e654",
         "destination": "data",
     },
     "sft": {
@@ -53,6 +56,34 @@ def _verify_checksums(root: Path) -> None:
             raise RuntimeError(f"Checksum mismatch for {path}: {actual} != {expected}")
 
 
+def _extract_task_archive(root: Path) -> Path:
+    archive = root / "tasks.tar.gz"
+    destination = root / "tasks"
+    if not archive.is_file():
+        raise FileNotFoundError(f"Missing task archive: {archive}")
+
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+    destination_root = destination.resolve()
+
+    with tarfile.open(archive, "r:gz") as handle:
+        for member in handle.getmembers():
+            if member.issym() or member.islnk():
+                raise RuntimeError(f"Task archive contains a link: {member.name}")
+            target = (destination / member.name).resolve()
+            if target != destination_root and destination_root not in target.parents:
+                raise RuntimeError(f"Task archive escapes destination: {member.name}")
+        handle.extractall(destination)
+
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    expected = int(manifest["counts"]["copied_tasks"])
+    actual = sum(1 for path in destination.rglob("*.json") if path.is_file())
+    if actual != expected:
+        raise RuntimeError(f"Extracted task count mismatch: {actual} != {expected}")
+    return destination
+
+
 def _download(name: str, output_root: Path, verify: bool) -> Path:
     asset = ASSETS[name]
     destination = output_root / asset["destination"]
@@ -65,6 +96,8 @@ def _download(name: str, output_root: Path, verify: bool) -> Path:
     )
     if verify:
         _verify_checksums(destination)
+    if name == "data":
+        _extract_task_archive(destination)
     print(f"{name}: {destination}")
     return destination
 

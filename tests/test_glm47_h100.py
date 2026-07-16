@@ -4,6 +4,7 @@ import os
 import runpy
 import subprocess
 import sys
+import tarfile
 import types
 from contextlib import contextmanager
 from pathlib import Path
@@ -484,6 +485,28 @@ def test_h100_runtime_preflight_rejects_mismatched_versions() -> None:
     mixed = {**current, "flashinfer-jit-cache": "0.6.13+cu129"}
     with pytest.raises(RuntimeError, match="versions are not aligned"):
         validate(mixed.__getitem__)
+
+
+def test_data_asset_extracts_verified_task_bundle(tmp_path) -> None:
+    module = runpy.run_path("scripts/download_assets.py")
+    extract_task_archive = module["_extract_task_archive"]
+
+    root = tmp_path / "data"
+    source = tmp_path / "source"
+    (source / "train").mkdir(parents=True)
+    (source / "validation").mkdir()
+    (source / "train" / "one.json").write_text("{}")
+    (source / "validation" / "two.json").write_text("{}")
+    root.mkdir()
+    (root / "manifest.json").write_text('{"counts": {"copied_tasks": 2}}')
+    with tarfile.open(root / "tasks.tar.gz", "w:gz") as handle:
+        handle.add(source / "train", arcname="train")
+        handle.add(source / "validation", arcname="validation")
+
+    destination = extract_task_archive(root)
+
+    assert (destination / "train" / "one.json").is_file()
+    assert (destination / "validation" / "two.json").is_file()
 
 
 def test_strip_mtp_adapter_filters_served_layers_and_copies_native_state(tmp_path) -> None:
