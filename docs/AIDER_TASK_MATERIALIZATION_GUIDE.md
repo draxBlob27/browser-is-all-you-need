@@ -359,6 +359,40 @@ permanent holdout.
 
 ## Promotion Boundary
 
+## Grid Ownership Mapping Curriculum
+
+The 20 newly authored, decontaminated ownership-map roots in
+`aider-synthetic/aider-synthetic-text-grid-reshaping/GLM47_FLASH_AIDER_POLYGLOT_CPP_GRID_OWNERSHIP_MAPPING_CURRICULUM.md`
+are materialized reproducibly with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_grid_ownership_mapping_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-text-grid-reshaping/grid-ownership-mapping/`
+and verifies every C++17 reference in clean normal and separate ASan/UBSan
+builds. The roots use typed legends, explicit zero-based coordinate diagnostics,
+and domain-specific ownership APIs; they are local diagnostics only, not
+admitted SFT data. The official Polyglot `kindergarten-garden` task remains a
+permanent holdout.
+
+## Sparse Matrix Encoding Curriculum
+
+The 20 newly authored, domain-specific sparse-grid roots in
+`aider-synthetic/aider-synthetic-text-grid-reshaping/GLM47_FLASH_AIDER_POLYGLOT_CPP_SPARSE_MATRIX_ENCODING_CURRICULUM.md`
+are materialized reproducibly with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_sparse_matrix_encoding_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-text-grid-reshaping/sparse-matrix-encoding/`
+and verifies every C++17 reference in clean normal and separate ASan/UBSan
+builds. Each root defines a domain-named API, validation report, explicit
+default-value and duplicate policy, canonical coordinate order, dense
+reconstruction, and a requested-row query. These are local diagnostics only,
+not admitted SFT data; no official benchmark material is reused.
+
 ## Offset-Aware Range Overlap Curriculum
 
 The ten newly authored fixed-offset policy roots in
@@ -518,6 +552,23 @@ provenance, benchmark-contamination, compiler-image, normal/sanitizer oracle,
 family/split, renderer/token/mask, release, producer verification, and
 consumer verification gates. Never label a local task directory or one-row
 smoke dataset as a ready dataset release.
+
+## Matrix Rotation By 90 Degrees Curriculum
+
+The 20 newly authored domain-grid roots in
+`aider-synthetic/aider-synthetic-text-grid-reshaping/GLM47_FLASH_AIDER_POLYGLOT_CPP_MATRIX_ROTATION_90_CURRICULUM.md`
+are materialized reproducibly with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_matrix_rotation_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-text-grid-reshaping/matrix-rotation-90/`
+and verifies every reference in clean normal C++17 and separate ASan/UBSan
+builds. Each root specifies a top-left origin, clockwise quarter turns,
+in-place mutation, no-partial-mutation invalid-input behavior, and a
+domain-specific recomputed observation. The roots are local diagnostics only,
+not admitted SFT data or substitutes for any official Aider holdout.
 ## Countdown Timers Arithmetic Curriculum
 
 The ten newly authored elapsed-duration state-machine roots in `aider-synthetic/aider-synthetic-clock-tasks/GLM47_FLASH_AIDER_POLYGLOT_CPP_COUNTDOWN_TIMERS_ARITHMETIC_CURRICULUM.md` are materialized with:
@@ -537,3 +588,52 @@ bash examples/slime/moonlight_cpp_perf/prepare_elapsed_time_accumulation_aider_t
 ```
 
 This writes `.w8-biayn/data/aider-tasks/aider-dates-and-clocks/elapsed-time-accumulation/` and verifies every reference in clean normal C++17 and separate ASan/UBSan builds. These are local diagnostics only, not admitted SFT data; `clock`, `gigasecond`, and `meetup` remain permanent holdouts.
+
+## Maze To Graph Curriculum
+
+The 20 newly authored graph-construction roots in
+`aider-synthetic/aider-synthetic-text-grid-reshaping/GLM47_FLASH_AIDER_POLYGLOT_CPP_MAZE_TO_GRAPH_CURRICULUM.md`
+are materialized reproducibly with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_maze_to_graph_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-text-grid-reshaping/maze-to-graph/`
+and verifies every reference in clean normal and separate ASan/UBSan C++17
+builds. Each root has a domain-specific graph-audit API, alphabet, coordinate
+policy, deterministic edge/component ordering, and diagnostic rather than a
+generic pathfinding result. They are local diagnostics only, not admitted SFT
+data or benchmark substitutes.
+
+## ASCII Art Scaling Curriculum
+
+The 20 newly authored domain-specific text-grid roots in
+`aider-synthetic/aider-synthetic-text-grid-reshaping/GLM47_FLASH_AIDER_POLYGLOT_CPP_ASCII_ART_SCALING_CURRICULUM.md`
+are materialized with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_ascii_art_scaling_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-text-grid-reshaping/ascii-art-scaling/`
+and verifies every reference in clean normal C++17 and separate ASan/UBSan
+builds when CMake is available. The roots are local diagnostics only, not
+admitted SFT data; official Aider holdouts remain excluded.
+
+## Pattern Printing Curriculum
+
+The 20 newly authored domain-rendering roots in
+`aider-synthetic/aider-synthetic-text-grid-reshaping/GLM47_FLASH_AIDER_POLYGLOT_CPP_PATTERN_PRINTING_CURRICULUM.md`
+are materialized reproducibly with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_pattern_printing_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-text-grid-reshaping/pattern-printing/`
+and verifies each reference in clean normal C++17 and separate ASan/UBSan
+builds. The APIs return a domain-named rendering record with fixed-width,
+token-aware rows, a final-newline image, and a marked-cell aggregate. These
+are local diagnostics only, not admitted SFT data; the official Polyglot
+`diamond` task remains a permanent holdout.
