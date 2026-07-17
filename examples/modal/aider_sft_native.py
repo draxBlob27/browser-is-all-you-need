@@ -6,6 +6,8 @@ path, which currently fails while Modal unpacks the OCI image.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import time
@@ -28,6 +30,7 @@ LOCAL_REPO = _SOURCE_FILE.parents[2] if len(_SOURCE_FILE.parents) > 2 else Path.
 REMOTE_REPO = "/workspace/glm47-h100-posttraining"
 MODELS_DIR = "/root/models"
 ASSETS_DIR = "/workspace/assets"
+AIDER_DATA_DIR = f"{ASSETS_DIR}/aider-polyglot-cpp"
 RUNS_DIR = "/workspace/runs"
 
 app = modal.App(APP_NAME)
@@ -88,13 +91,21 @@ def run(command: str, *, env: dict[str, str] | None = None) -> None:
     )
 
 
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as input_file:
+        for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def stage_env(run_id: str) -> dict[str, str]:
     return {
         "MILES_RUN_ID": run_id,
         "MILES_RUN_ROOT": f"{RUNS_DIR}/{run_id}",
         "MILES_HF_CHECKPOINT": f"{MODELS_DIR}/GLM-4.7-Flash",
         "MILES_REF_LOAD_DIR": f"{MODELS_DIR}/GLM-4.7-Flash_torch_dist_tp4_pp1_ep8",
-        "MILES_CPP_DATA_DIR": f"{ASSETS_DIR}/prepared",
+        "MILES_CPP_DATA_DIR": AIDER_DATA_DIR,
         "GLM47_MODEL_REVISION": MODEL_REVISION,
         "GLM47_TRAINING_IMAGE": MILES_IMAGE,
         "GLM47_EXPERIMENT_ID": run_id,
@@ -121,23 +132,30 @@ def smoke_runtime() -> dict[str, object]:
 
     run("python3 -m pip install --no-deps -e .")
     run("python3 scripts/check_runtime.py")
-    train_path = Path(ASSETS_DIR, "prepared", "sft", "train.jsonl")
+    data_dir = Path(AIDER_DATA_DIR)
+    manifest = json.loads(data_dir.joinpath("manifest.json").read_text(encoding="utf-8"))
+    train_path = data_dir / manifest["files"]["sft_train"]
     if not train_path.is_file():
         raise FileNotFoundError(train_path)
     if Path(MODELS_DIR, "GLM-4.7-Flash", "MODEL_REVISION").read_text(encoding="utf-8").strip() != MODEL_REVISION:
         raise RuntimeError("official model revision marker is missing or mismatched")
+    train_rows = sum(1 for _ in train_path.open(encoding="utf-8"))
+    expected_sha256 = manifest.get("provenance", {}).get("train_sha256")
+    actual_sha256 = sha256(train_path)
+    if expected_sha256 != actual_sha256:
+        raise RuntimeError(f"Aider SFT training checksum mismatch: {actual_sha256} != {expected_sha256}")
+    if train_rows != manifest["counts"]["train"]:
+        raise RuntimeError(f"Aider SFT row count mismatch: {train_rows} != {manifest['counts']['train']}")
     report = {
         "status": "passed",
-        "train_rows": sum(1 for _ in train_path.open(encoding="utf-8")),
+        "data_dir": str(data_dir),
+        "train_rows": train_rows,
+        "train_sha256": actual_sha256,
         "packages": {
             package: metadata.version(package)
             for package in ("flashinfer-python", "flashinfer-cubin", "flashinfer-jit-cache", "sglang-kernel", "torch-memory-saver")
         },
     }
-    Path(ASSETS_DIR, "prepared", "aider_v1_native_runtime_smoke_report.json").write_text(
-        __import__("json").dumps(report, indent=2) + "\n", encoding="utf-8"
-    )
-    assets.commit()
     return report
 
 
