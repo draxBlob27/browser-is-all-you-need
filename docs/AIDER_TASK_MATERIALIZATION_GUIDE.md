@@ -195,6 +195,21 @@ and verifies each reference in clean normal C++17 and separate ASan/UBSan
 builds. The roots are local diagnostics only; `clock`, `gigasecond`, and
 `meetup` remain permanent official Polyglot holdouts.
 
+## Overflow-Safe Date Math Curriculum
+
+The ten newly authored domain-policy Gregorian roots in
+`aider-synthetic/aider-synthetic-clock-tasks/GLM47_FLASH_AIDER_POLYGLOT_CPP_OVERFLOW_SAFE_DATE_MATH_CURRICULUM.md`
+are materialized reproducibly with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_overflow_safe_date_math_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-dates-and-clocks/overflow-safe-date-math/`
+and verifies every reference in clean normal C++17 and separate ASan/UBSan
+builds. These roots are local diagnostics only; `clock`, `gigasecond`, and
+`meetup` remain permanent official Polyglot holdouts.
+
 ## Binary Search Tree Curriculum
 
 The 20 newly authored roots in
@@ -344,6 +359,21 @@ permanent holdout.
 
 ## Promotion Boundary
 
+## Offset-Aware Range Overlap Curriculum
+
+The ten newly authored fixed-offset policy roots in
+`aider-synthetic/aider-synthetic-clock-tasks/GLM47_FLASH_AIDER_POLYGLOT_CPP_OFFSET_AWARE_RANGE_OVERLAP_CURRICULUM.md`
+are materialized reproducibly with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_offset_aware_range_overlap_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-dates-and-clocks/offset-aware-range-overlap/`
+and verifies references in clean C++17 normal and separate ASan/UBSan builds.
+These are local diagnostics only; `clock`, `gigasecond`, and `meetup` remain
+permanent official Polyglot holdouts.
+
 ## Clock Arithmetic Curriculum
 
 The ten newly authored cyclic-time roots in
@@ -375,6 +405,21 @@ builds. The roots use subscription, harvest, clinic, inventory, contract,
 vacation, maintenance, licence, release, and lease policies; they are local
 diagnostic artifacts only, not admitted SFT data. `clock`, `gigasecond`, and
 `meetup` remain permanent official Polyglot holdouts.
+
+## Leap-Year Rule Curriculum
+
+The five newly authored February-policy roots in
+`aider-synthetic/aider-synthetic-clock-tasks/GLM47_FLASH_AIDER_POLYGLOT_CPP_LEAP_YEAR_RULE_CURRICULUM.md`
+are materialized reproducibly with:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_leap_year_rule_aider_tasks.sh --verify
+```
+
+This writes `.w8-biayn/data/aider-tasks/aider-dates-and-clocks/leap-year-rule/`
+and verifies every reference in clean normal C++17 and separate ASan/UBSan
+builds. The roots are local diagnostics only, not admitted SFT data; `clock`,
+`gigasecond`, and `meetup` remain permanent official Polyglot holdouts.
 
 ## XOR Linked List Curriculum
 
