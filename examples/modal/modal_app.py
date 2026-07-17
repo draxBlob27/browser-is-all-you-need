@@ -29,7 +29,7 @@ models = modal.Volume.from_name("glm47-models", create_if_missing=True)
 assets = modal.Volume.from_name("glm47-assets", create_if_missing=True)
 runs = modal.Volume.from_name("glm47-runs", create_if_missing=True)
 
-source_ignore = [".git", ".glm47-posttraining", ".pytest_cache", ".ruff_cache", "wandb"]
+source_ignore = [".git", ".glm47-posttraining", ".pytest_cache", ".ruff_cache", "wandb", ".w8-biayn"]
 
 prepare_image = (
     modal.Image.debian_slim(python_version="3.12")
