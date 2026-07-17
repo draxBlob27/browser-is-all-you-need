@@ -482,10 +482,10 @@ commands, or dependencies.
 
 Pipeline readiness means deterministic rows, passing normal/sanitizer oracles,
 role-aware contamination and family isolation, per-row token/mask evidence,
-scope-specific human review, exact `dataset_release` approval, reconciled
-manifests, and a schema-v2 receipt binding every lock, manifest, decision,
-ledger, support bundle, tokenizer policy, training JSONL, and token-record
-ledger.
+reconciled manifests, and a schema-v2 receipt binding every lock, ledger,
+support bundle, tokenizer policy, training JSONL, and token-record ledger.
+Human review is an optional fingerprint-bound audit, not a readiness or
+finalization gate.
 Candidate admission and dataset split/release have separate states. Final-row
 screening matches denylisted IDs as whole slugs, so a valid compound source ID
 such as `simple-linked-list` does not become a false `linked-list` hit. An
@@ -494,10 +494,10 @@ quota-preserving backfill before release review. Late rejection journals bind
 the renderer and final-screen policy fingerprints, allowing `--resume` to
 retry preserved evidence after either policy is corrected. Mutable run state
 and locks live in a sibling `.state/` directory; the ready root is immutable.
-V1 is deliberately
-semi-autonomous: source inventory, LLM usage terms, every LLM-assisted
-admission, each contamination near-match, the final split, and the exact final
-release package need fingerprint-bound human approval.
+V1 is autonomous once mechanical gates pass. Source inventory, LLM usage
+terms, LLM-assisted admission, contamination near-matches, the final split,
+and the final release package may be exported for fingerprint-bound human
+audit, but approval is not required.
 
 Rows use final-answer-only Aider `whole` supervision and reach SLIME as raw
 message lists. The format/reminder prose stays compact so every frozen
@@ -599,7 +599,7 @@ bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
 export SLIME_RUN_ID=moonlight-response-only-leap
 
 bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh \
-  --task-dir .w8-biayn/data/aider-tasks/leap \
+  --task-dir .w8-biayn/data/aider-tasks/aider-dsa/leap \
   --base-url http://127.0.0.1:30000 \
   --model auto \
   --max-tokens 2048

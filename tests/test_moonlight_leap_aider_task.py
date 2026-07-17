@@ -107,4 +107,4 @@ def test_prepare_leap_task_wrapper_is_documented() -> None:
     ):
         text = path.read_text(encoding="utf-8")
         assert "prepare_leap_aider_task.sh" in text
-        assert ".w8-biayn/data/aider-tasks/leap" in text
+        assert ".w8-biayn/data/aider-tasks/aider-dsa/leap" in text

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
-DEFAULT_OUT = Path(".w8-biayn/data/aider-tasks/leap")
+DEFAULT_OUT = Path(".w8-biayn/data/aider-tasks/aider-dsa/leap")
 
 FILES: Mapping[str, str] = {
     ".docs/introduction.md": """# Introduction

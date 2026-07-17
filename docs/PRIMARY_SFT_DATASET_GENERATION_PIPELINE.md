@@ -146,7 +146,7 @@ observed model outcomes.
 - **Task family**: a seed and every translation, rewrite, or related task with
   the same behavioral contract.
 - **Release-eligible root**: a canonical root that passed all mechanical,
-  semantic, licensing, and review gates.
+  semantic, and licensing gates; optional audit records do not affect status.
 - **Selected root**: a release-eligible root assigned to a frozen split.
 - **Standby root**: a release-eligible root not selected but available for a
   policy-compliant replacement.
@@ -306,7 +306,7 @@ collection or ownership semantics to their intended STL equivalents.
 
 A translated root must not combine C++ starter files with instructions that
 still require Rust, Python, Go, or Java syntax or behavior. A mechanical
-language-residue scan and human semantic review are blocking gates.
+language-residue scan is blocking; human semantic audit is optional.
 
 ### Structural Variants
 
@@ -502,8 +502,8 @@ starter, and reference content remain semantic evidence.
 
 The pipeline maintains a global family index across the current pool and
 released dataset versions. Exact duplicates are rejected automatically.
-Near-matches and ambiguous family relationships require fingerprint-bound
-human review. No family may cross train, validation, internal test, or the
+Near-matches and ambiguous family relationships are recorded for optional
+fingerprint-bound human audit. No family may cross train, validation, internal test, or the
 official holdout.
 
 ## Code-Only Response Contract
@@ -671,20 +671,22 @@ Selection priorities are:
 7. deterministic tie-breaking by stable task ID.
 
 If a selected root fails a late task-scoped gate, the solver may replace only
-that root or its indivisible family with the first compatible reviewed standby.
-Unchanged root-level approvals remain valid. The changed split fingerprint,
-token ledger, manifest, and release subject require new split/release approval.
-No approval may be carried across changed evidence merely because most roots
-are unchanged.
+that root or its indivisible family with the first compatible standby.
+The changed split fingerprint, token ledger, manifest, and release subject
+must be regenerated. Optional audit records are tied to their exact evidence
+and cannot be carried across changed evidence merely because most roots are
+unchanged.
 
 Run-level failures such as a missing tokenizer or unavailable Docker daemon do
 not reject roots or mutate the frozen split. They leave the run incomplete
 until the environment is restored.
 
-## Human Review
+## Optional Human Audit
 
-Mechanical work may run automatically, but these scopes require an authorized,
-fingerprint-bound human decision:
+Mechanical evidence is the release gate. Human review is an optional,
+fingerprint-bound audit surface; it may record observations for these scopes,
+but does not block build, finalization, producer verification, export, or
+consumer verification:
 
 - harvested seed inventory and license classification;
 - provider usage terms and paid-call policy;
@@ -701,8 +703,9 @@ contamination result, split, renderer, or token ledger make the affected
 decision stale.
 
 Review exports contain the evidence needed for that scope but never provider
-credentials or hidden benchmark assets. Review imports validate authorization,
-schema, scope, and subject fingerprints before changing state.
+credentials or hidden benchmark assets. When used, review imports validate
+authorization, schema, scope, and subject fingerprints without changing the
+mechanical admission or readiness result.
 
 ## CLI Contract
 

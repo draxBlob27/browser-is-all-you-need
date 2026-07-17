@@ -110,10 +110,10 @@ three times remaining candidate capacity. It keeps tests/references hidden from
 rows, excludes all 26 official Aider C++ roots and related copies, and defines
 readiness without
 model responses, repair rows, training, benchmarking, or uplift. V1 is
-semi-autonomous: mechanical work may run automatically, but source inventory,
-LLM usage terms, every LLM task, contamination near-matches, the final split,
-and the exact final release package need scope-specific fingerprint-bound human
-approval. Read and update that document before
+autonomous once mechanical gates pass: source inventory, LLM usage terms, LLM
+tasks, contamination near-matches, the final split, and the final release
+package may receive scope-specific fingerprint-bound human audit, but approval
+is not required. Read and update that document before
 implementing or changing this pipeline.
 
 The separate `aider-sft-source-only-75-v1` profile is the supported no-LLM
@@ -121,7 +121,8 @@ The separate `aider-sft-source-only-75-v1` profile is the supported no-LLM
 train, forbids `[llm]` configuration and paid-call acknowledgement, and has no
 backfill path. A rejected, deferred, or mechanically failed source makes that
 release incomplete. This does not weaken admission, contamination, token/mask,
-final split/release review, or producer/consumer verification gates, and it
+or producer/consumer verification gates; split/release review is optional
+audit, and it
 does not replace or satisfy the 96-root pilot.
 
 Prepare tokenizer-only and seccomp assets through the repo-owned
@@ -148,9 +149,9 @@ fingerprint so `--resume` reruns stale mechanical failures and historical
 late rejections caused by run-level preflight errors, and report an empty pool
 as structured `source_only_shortfall`. Store repeated Catch support once by digest;
 exclude only allowlisted support/scaffold roles from semantic contamination.
-Keep candidate admission separate from reviewed dataset split/release. A late
+Keep candidate admission separate from audited dataset split/release. A late
 task-scoped render/token/contamination failure invalidates the frozen split and
-returns to quota-preserving backfill before exact `dataset_release` approval.
+returns to quota-preserving backfill before exact `dataset_release` finalization.
 Run-level profile/consumer preflight failures must leave admitted candidates
 and the frozen split intact. Match benchmark IDs only as whole slugs, not as
 hyphen-delimited substrings of valid source IDs. Bind renderer and final-screen

@@ -124,7 +124,9 @@ def _stage_prompt(stage: str, inputs: dict[str, Any]) -> list[dict[str, str]]:
         instruction = (
             "Design a novel programming task from the supplied generic category and API-shape "
             "constraints. The prohibited IDs are names only; do not imitate them. Return the "
-            "aider-sft-blueprint-v1 fields."
+            "aider-sft-blueprint-v1 fields exactly. Do not add or omit fields. "
+            "The required JSON Schema follows:\n"
+            + json.dumps(Blueprint.model_json_schema(), sort_keys=True, ensure_ascii=False)
         )
     elif stage == "task_author":
         instruction = (

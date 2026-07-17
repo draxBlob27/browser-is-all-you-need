@@ -173,7 +173,7 @@ Then probe and grade it:
 export SLIME_RUN_ID=moonlight-response-only-leap
 
 bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh \
-  --task-dir .w8-biayn/data/aider-tasks/leap \
+  --task-dir .w8-biayn/data/aider-tasks/aider-dsa/leap \
   --base-url http://127.0.0.1:30000 \
   --model auto \
   --max-tokens 2048

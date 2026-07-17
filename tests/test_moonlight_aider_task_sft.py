@@ -26,7 +26,7 @@ def test_aider_task_sft_builder_writes_leap_training_row(tmp_path: Path) -> None
         out=out,
         task_id="leap",
         label="leap",
-        source="aider-tasks/leap",
+        source="aider-tasks/aider-dsa/leap",
     )
 
     assert paths.root == out
@@ -51,7 +51,7 @@ def test_aider_task_sft_builder_writes_leap_training_row(tmp_path: Path) -> None
         "format": "aider-whole",
         "model_family": "moonlight",
         "purpose": "aider-task-sft",
-        "source": "aider-tasks/leap",
+        "source": "aider-tasks/aider-dsa/leap",
         "subset": "train",
         "task_id": "leap",
     }
@@ -107,7 +107,7 @@ def test_prepare_leap_aider_sft_wrapper_is_documented() -> None:
     assert os.access(WRAPPER, os.X_OK)
     wrapper_text = WRAPPER.read_text(encoding="utf-8")
     assert "moonlight_aider_task_sft" in wrapper_text
-    assert ".w8-biayn/data/aider-tasks/leap" in wrapper_text
+    assert ".w8-biayn/data/aider-tasks/aider-dsa/leap" in wrapper_text
     assert ".w8-biayn/data/aider-leap-sft" in wrapper_text
 
     for path in (

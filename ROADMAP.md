@@ -22,7 +22,7 @@ preserved, then measure speed.
 - SGLang: the rollout/inference backend used by the SLIME lanes.
 - Moonlight: the active Moonlight-16B-A3B model lane.
 - GLM: the active GLM-4.7-Flash model lane.
-- Primary SFT dataset pipeline: the implemented, review-gated multi-task
+- Primary SFT dataset pipeline: the implemented, mechanically-gated multi-task
   Aider-style C++ curation path in `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`.
 - Polyglot: optional Aider Polyglot C++ base-eval benchmark, separate from the PIE training proof.
 - Multi-SWE: optional C++ issue-resolution base-eval benchmark, separate from the PIE training proof.
@@ -652,7 +652,7 @@ files. For the local Leap task:
 ```bash
 bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_task.sh --force
 bash examples/slime/moonlight_cpp_perf/probe_and_grade_aider_task.sh \
-  --task-dir .w8-biayn/data/aider-tasks/leap \
+  --task-dir .w8-biayn/data/aider-tasks/aider-dsa/leap \
   --base-url http://127.0.0.1:30000 \
   --model auto
 ```

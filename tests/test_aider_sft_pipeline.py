@@ -39,7 +39,7 @@ from w8_biayn.aider_sft.inventory import (
     PRACTICE_SLUGS,
     build_inventory_proposal,
 )
-from w8_biayn.aider_sft.llm_curator import _call_stage, _check_budget, capacity_report
+from w8_biayn.aider_sft.llm_curator import _call_stage, _check_budget, _stage_prompt, capacity_report
 from w8_biayn.aider_sft.oracle import (
     _docker_prefix,
     _oracle_input_tree_sha256,
@@ -104,6 +104,15 @@ from w8_biayn.constants import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_planner_prompt_embeds_the_exact_blueprint_schema() -> None:
+    prompt = _stage_prompt("planner", {"primary_category": "Text & parsing"})
+    content = prompt[1]["content"]
+    assert "aider-sft-blueprint-v1" in content
+    assert "proposed_slug" in content
+    assert "editable_files" in content
+    assert "solution_templates" not in content
 
 
 def test_reason_codes_have_stable_outcomes() -> None:
