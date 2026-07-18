@@ -263,6 +263,45 @@ quality metrics, and a run receipt under the selected output directory. Add
 `--wandb-project glm47-pie-cpp-posttraining --wandb-timing-status verified`
 to either command to publish the same metrics and sample tables to W&B.
 
+### Aider Polyglot C++
+
+The Aider SFT adapter was evaluated on all 26 C++ problems with whole edit
+format and two attempts. Both runs used Aider commit
+`5dc9490bb35f9729ef2c95d00a19ccd30c26339c` and benchmark commit
+`7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f`.
+
+| Metric | Base | SFT | Change |
+|---|---:|---:|---:|
+| Pass@1 | 0.0% (0/26) | **3.8% (1/26)** | +3.8 pp |
+| Pass@2 | 15.4% (4/26) | **19.2% (5/26)** | +3.8 pp |
+| Well-formed responses | 100.0% | 100.0% | Preserved |
+| Total tokens | 2,212,419 | **1,732,287** | -21.7% |
+
+The expanded Aider SFT set uses the existing Miles input contract. Place the
+data later under one root with these exact paths:
+
+```text
+<aider-data-root>/manifest.json
+<aider-data-root>/sft/train.jsonl
+```
+
+`sft/train.jsonl` contains 401 unique rows with `task_id`, `label`, `messages`,
+and `metadata`; its task IDs are disjoint from the 26 evaluation tasks. Launch
+the existing SFT path without rebuilding data from PIE task files:
+
+```bash
+MILES_CPP_DATA_DIR=<aider-data-root> \
+MILES_CPP_AUTO_PREPARE_DATA=0 \
+MILES_WANDB_PROJECT=glm47-aider-v1-sft \
+bash examples/sft.sh
+```
+
+Training metrics and sample tables are available in the
+[W&B run](https://wandb.ai/ahm-rimer/glm47-aider-v1-sft/runs/glm47-aider-v1-sft-20260717T130336Z).
+For SGLang evaluation, prepare the existing training checkpoint with
+`scripts/prepare_grpo_adapter.py`; this preserves the source adapter and omits
+the auxiliary next-token-prediction layer from the serving copy.
+
 ## Repository
 
 ```text
