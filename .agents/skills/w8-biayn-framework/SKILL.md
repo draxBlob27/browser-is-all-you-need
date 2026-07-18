@@ -1,6 +1,6 @@
 ---
 name: w8-biayn-framework
-description: "Maintain, extend, test, document, and operate the w8-biayn C++ performance-RL and primary Aider-style SFT dataset pipelines: SLIME Moonlight/GLM training, PIE task setup, SFT JSONL curation, Megatron/SGLang launch wrappers, Docker C++ rewards, receipts, and held-out evaluation. Use for work in this repo, especially SLIME, Moonlight, GLM, PIE, Aider SFT data, C++ reward/eval, repo guidance, or legacy boundaries."
+description: "Maintain, extend, test, document, and operate w8-biayn C++ performance-RL and local Aider task-family remediation workflows. Use for SLIME, Moonlight, GLM, PIE, clean-room Aider task curricula, generated task remediation, C++ reward/eval, repo guidance, or legacy boundaries."
 ---
 
 # w8-biayn Framework
@@ -15,8 +15,9 @@ Read these before changing behavior:
 1. `AGENTS.md`
 2. `README.md`
 3. `ROADMAP.md`
-4. `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` for Aider-style SFT
-   dataset work
+4. `docs/AIDER_SFT_SCOPE.md` for local Aider task-family work; read
+   `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` only for an explicitly
+   authorized dataset release
 5. Relevant code under `src/w8_biayn/`
 
 If `/tmp/ENGINEERING_SPEC_v2_cpp_only.md` exists, it may provide historical
@@ -58,16 +59,24 @@ SLIME container through `.w8-biayn/slime/run-container.sh` and use the
 repo-owned lane wrappers. SkyRL/rLLM paths are legacy reference only and must
 not be restored as the active path without an explicit rollback request.
 
+## Local Aider Task-Family Workflow
+
+For clean-room Aider task creation, curriculum implementation, task audit, or
+remediation, use `.agents/skills/aider-task-family-remediation/SKILL.md`. It
+owns the path from benchmark weakness topic through regenerated local task
+roots and `local_family_verified`, including the distinction between host CMake
+iteration and image-bound normal/ASan/UBSan evidence. It also requires generic
+workflow-prompt selection from `docs/aider-tasks-spec/prompts/`, rather than a
+balanced-tree-only prompt path. It does not create SFT rows or release artifacts.
+
 ## Active Repository Map
 
-- Primary Aider-style SFT dataset specification:
+- Historical Aider dataset-release specification:
   `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
-- Primary Aider-style SFT implementation: `src/w8_biayn/aider_sft/`
-- Primary Aider-style SFT draft profiles:
-  `configs/aider_sft/pilot-v1.toml` and
-  `configs/aider_sft/source-only-75-v1.toml`
-- Primary Aider-style SFT manifests: `manifests/aider_sft/`
-- Primary Aider-style SFT tests: `tests/test_aider_sft_pipeline.py`
+- Historical Aider dataset-release implementation: `src/w8_biayn/aider_sft/`
+- Historical Aider profiles and manifests: `configs/aider_sft/` and
+  `manifests/aider_sft/`
+- Historical Aider pipeline tests: `tests/test_aider_sft_pipeline.py`
 - Bootstrap: `scripts/bootstrap.sh`
 - CLI: `src/w8_biayn/cli.py`
 - Dataset setup and manifests: `src/w8_biayn/cpp_perf/data.py`
@@ -224,8 +233,9 @@ bash examples/slime/moonlight_cpp_perf/eval_grpo.sh
 bash examples/slime/moonlight_cpp_perf/compare.sh
 ```
 
-The primary SFT dataset generation pipeline is specified in
-`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. It is implemented in
+The historical dataset-release pipeline is specified in
+`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`; it is separate from local
+task-family remediation. It is implemented in
 `src/w8_biayn/aider_sft/` and exposed through the repo-owned
 `w8-biayn data aider-sft ...` CLI, including plan/inventory, reviewed build and
 finalize, producer verification, sanitized export, and consumer verification.
@@ -752,8 +762,9 @@ launch flow, benchmark protocol, or supported active pipelines change, update:
 2. `ROADMAP.md`
 3. `.agents/REPO_GUIDE.md`
 4. this skill
-5. `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` when its SFT pipeline
-   contract is affected
+5. `docs/AIDER_SFT_SCOPE.md` and `.agents/skills/aider-task-family-remediation/SKILL.md`
+   when local task-family workflow changes; update the historical pipeline
+   document only when an explicitly authorized release contract is affected
 6. tests when command behavior changes
 
 ## Validation

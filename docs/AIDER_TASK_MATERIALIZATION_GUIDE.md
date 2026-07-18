@@ -5,10 +5,11 @@ design note, or task proposal into a local Aider-format C++ task. It is not
 specific to linked lists or to a particular model lane.
 
 The result is a runnable local artifact under `.w8-biayn/data/aider-tasks/`.
-It is useful for response-only probing and compact one-task SFT smoke data. It
-is **not** an admitted primary Aider SFT root or a release claim. Promotion to
-the primary dataset remains governed by
-`PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`.
+It is useful for response-only probing and local task verification. It is not
+an SFT row, release claim, training authorization, or benchmark result. The
+current authoring boundary is
+[`AIDER_SFT_SCOPE.md`](AIDER_SFT_SCOPE.md): work on the generated task roots
+and their `docs/aider-synthetic/` source documents only.
 
 ## Before Creating A Task
 
@@ -227,30 +228,70 @@ build. The roots remain local diagnostics; the official Polyglot
 
 ## Balanced Search Tree Curriculum
 
-The 20 newly authored AVL and red-black roots in
-`aider-synthetic/aider-synthetic-dsa/GLM47_FLASH_AIDER_POLYGLOT_CPP_BALANCED_SEARCH_TREE_CURRICULUM.md` are
-materialized reproducibly by default with:
+The legacy materialization remains preserved at:
 
-```bash
-bash examples/slime/moonlight_cpp_perf/prepare_balanced_tree_aider_tasks.sh
+```text
+.w8-biayn/data/aider-tasks/aider-dsa/balanced-search-tree/
 ```
 
-This writes `.w8-biayn/data/aider-tasks/aider-dsa/balanced-search-tree/` and does not
-require CMake. The current environment has no CMake, so materialization is the
-supported action now; it does not claim that the reference oracle has been
-verified.
+Do not regenerate that tree while remediating the balanced-search-tree
+specification. The 20 AVL and red-black roots described by
+`aider-synthetic/aider-synthetic-dsa/GLM47_FLASH_AIDER_POLYGLOT_CPP_BALANCED_SEARCH_TREE_CURRICULUM.md`
+are to be materialized as a parallel re-verification family at:
 
-When CMake is installed later, run the separate verifier:
-
-```bash
-bash examples/slime/moonlight_cpp_perf/verify_balanced_tree_aider_tasks.sh
+```text
+/data/sanil/browser-is-all-you-need/.w8-biayn/data/aider-tasks-reverify/aider-dsa/balanced-search-tree/
 ```
 
-It reruns materialization idempotently, then uses the generator's `--verify`
-mode to build every reference in clean normal C++17 and ASan/UBSan CMake
-builds. The roots are local diagnostics only; the official Polyglot
-`binary-search-tree` benchmark remains a permanent holdout.
+The re-verification root has the same `aider-dsa/balanced-search-tree/<task-id>`
+layout and task slugs as the legacy family, but is a distinct generated tree.
+This lets the generator replace, add, or remove files beneath the re-verification
+root without mutating the original materialization. It is still local candidate
+material, not a dataset release.
 
+On the first materialization, use the output override and do not pass
+`--force`:
+
+```bash
+REVERIFY_ROOT="$PWD/.w8-biayn/data/aider-tasks-reverify/aider-dsa/balanced-search-tree"
+SLIME_BALANCED_TREE_TASKS_DIR="$REVERIFY_ROOT" \
+  bash examples/slime/moonlight_cpp_perf/prepare_balanced_tree_aider_tasks.sh --verify
+```
+
+The generator owns the re-verification tree; never copy or hand-edit legacy
+task directories into it. The canonical expected family shape is:
+
+```text
+.w8-biayn/data/aider-tasks-reverify/
+└── aider-dsa/
+    └── balanced-search-tree/
+        ├── avl-api-rate-limits/
+        ├── ... 18 other declared task slugs ...
+        └── rb-travel-fare-table/
+```
+
+After materialization, confirm that the two family roots have the same task
+slug inventory before comparing their contents:
+
+```bash
+LEGACY_ROOT="$PWD/.w8-biayn/data/aider-tasks/aider-dsa/balanced-search-tree"
+REVERIFY_ROOT="$PWD/.w8-biayn/data/aider-tasks-reverify/aider-dsa/balanced-search-tree"
+diff -u \
+  <(find "$LEGACY_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort) \
+  <(find "$REVERIFY_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+```
+
+An empty diff proves only directory-slug alignment. It does not prove that the
+new APIs, references, tests, metadata, or oracle evidence satisfy the
+deterministic balanced-tree specification. If rerunning a changed generator,
+`--force` may be used only with `SLIME_BALANCED_TREE_TASKS_DIR` set to the
+re-verification root; it must never target the legacy root.
+
+The command's `--verify` mode regenerates the re-verification root and runs the
+generator's normal and sanitizer verifier. A missing locked-runtime prerequisite
+is recorded as `not_completed`; do not substitute a host-only result for the
+required local-family evidence. The official Polyglot `binary-search-tree`
+benchmark remains a permanent holdout.
 ## Circular Buffer Curriculum
 
 The 20 newly authored fixed-capacity FIFO roots in
