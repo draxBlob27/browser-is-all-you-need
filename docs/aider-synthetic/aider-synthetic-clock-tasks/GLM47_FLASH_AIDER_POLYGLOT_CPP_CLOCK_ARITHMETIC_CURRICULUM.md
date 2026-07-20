@@ -1,8 +1,18 @@
 # Clock Arithmetic Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: v2 local-family remediation contract. This document follows
+`docs/aider-tasks-spec/prompts/remediate-family-reverify.md` with
+`FAMILY_NAME=clock-arithmetic`, `FAMILY_TYPE=aider-text-grid-reshaping`, and
+the user-authorized hard-rule count of 8–12. It does not claim SFT admission,
+an online dataset, training authorization, or benchmark uplift.
+
+The requested legacy path under `aider-text-grid-reshaping` is absent. The
+actual ten-root legacy family remains immutable under
+`.w8-biayn/data/aider-tasks/aider-dates-and-clocks/clock-arithmetic/`. The v2
+owner writes only
+`.w8-biayn/data/aider-tasks-reverify/aider-text-grid-reshaping/clock-arithmetic/`.
+The detailed audit and deterministic remedies are in
+`docs/aider-tasks-spec/aider-text-grid-reshaping/clock-arithmetic.md`.
 
 This curriculum develops robust arithmetic over cyclic time: conversion to a
 linear minute count, normalization at a cycle boundary, signed offsets,
@@ -14,7 +24,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -25,12 +35,13 @@ or model outputs. In particular, do not author a renamed `Clock` class whose
 main behavior is construction from hour/minute plus addition, subtraction, and
 string formatting.
 
-The proposals below are **not yet proven decontaminated**. They are designed
-to be outside the holdout family because each exposes a domain-specific,
-multi-input result instead of a general-purpose time-of-day object. Before
-admission, the normal whole-slug denylist and semantic contamination checks
-must reject any near-match and require a replacement. Each surviving root must
-materially differ from `clock` in at least three dimensions:
+The v2 roots are designed to be outside the holdout family because each
+exposes a domain-specific, multi-input result instead of a general-purpose
+time-of-day object. Local verification requires the complete bound 26-root
+semantic screen; any near-match is rejected and cannot be waived. Each counted
+root must materially differ from every other counted root separately in all
+seven hard-rule dimensions, and must differ from `clock` in at least three of
+these broader dimensions:
 
 1. public API and output shape;
 2. state or collection model;
@@ -52,7 +63,11 @@ with independent task text, starter API, reference, examples, and tests, then
 pass provenance, license, oracle, sanitizer, contamination, split, rendering,
 and release gates.
 
-## Proposed Decontaminated Tasks
+## Counted V2 Tasks
+
+The binding family-size range is 8–12. The owner emits exactly ten counted
+roots, so count compliance is satisfied only when all ten pass the complete
+45-pair seven-dimensional screen and every downstream gate.
 
 | ID | Task | Visible contract | Deliberate separation from `clock` |
 |---|---|---|---|
@@ -67,11 +82,11 @@ and release gates.
 | `time-school-bell-repair` | School bell repair | Apply ordered delays, cancellations, and inserted breaks to a bell schedule; return the repaired ordered sequence and conflict diagnostics. | Mutates a collection of scheduled events under ordering and collision rules. |
 | `time-oven-program` | Oven program sequencer | Advance a multi-stage cooking program through elapsed-minute updates, pausing at stage boundaries and reporting remaining stage/program time. | Models elapsed duration and staged state, explicitly distinct from time of day. |
 
-## Root-Specific Design Notes
+## Root-Specific Design Contracts
 
-The contracts below are constraints for future authors, not hidden tests or
-reference answers. Names, types, examples, and exact algorithms must be
-authored afresh during materialization.
+The contracts below are public design constraints. They do not reveal hidden
+tests or reference answers. The v2 owner emits the exact public API and
+complete deterministic rules in each root's visible instructions.
 
 ### `time-parking-grace-audit`
 
@@ -138,20 +153,30 @@ no-op or error result. Do not model this as an absolute wall-clock time.
 
 ## Materialization Requirements
 
+The repository owner is
+`src/w8_biayn/integrations/moonlight_clock_arithmetic_aider_tasks.py`; the
+focused regression is
+`tests/test_moonlight_clock_arithmetic_aider_tasks.py`. Change those sources
+and regenerate. Never edit either generated family by hand.
+
 Every candidate needs a distinct C++17 public API. Avoid generic methods such
 as `add_minutes`, `subtract_minutes`, `at(hour, minute)`, or `to_string` as the
 primary assignment interface. The starter should expose the task's domain
 records, policy inputs, result/diagnostic type, and explicit invalid-input
 policy.
 
-For each proposed root, author:
+For each counted root, the owner must emit:
 
 1. a provenance record and original task specification;
 2. a starter header/source pair with the domain-specific C++17 API;
 3. an independent reference implementation;
-4. visible examples plus hidden Catch tests;
-5. normal build and a fresh locked sanitizer build; and
-6. the required benchmark and semantic-contamination evidence.
+4. visible behavior plus independent private deterministic tests;
+5. one strict-compiling topic-specific false substitute that executed tests
+   reject;
+6. clean normal and fresh ASan/UBSan image-bound builds with positive equal
+   discovery; and
+7. the complete family, adversarial-control, and benchmark-contamination
+   evidence.
 
 Hidden tests must cover, where applicable:
 
@@ -166,11 +191,38 @@ Hidden tests must cover, where applicable:
 - explicit proof that the task contract has not become a close semantic copy of
   any benchmark holdout, especially `clock`, `gigasecond`, or `meetup`.
 
+The production hard-rule evaluator derives these seven dimensions from actual
+emitted artifacts: public API, owned state/algorithm, mutation/selection,
+invalid/boundary behavior, reference control flow, deterministic oracle, and
+topic-specific negative fixture. It compares all 45 unordered pairs
+conjunctively. Coherent domain/identifier-renamed, constants/policy-only, and
+opposite-end-selection controls must change files, compile, pass their own
+consistent tests, and then be rejected as duplicates in all seven dimensions.
+
+Final runtime evidence uses the pinned repository C++ sanity image with Docker
+network `none`. The receipt must bind the exact deterministic archive,
+independently computed mounted task/control hashes, owner and reference hashes,
+image and toolchain identity, commands, two normal and two fresh sanitizer
+discoveries per root/control, and executed rejection of every topic-specific
+false substitute. This evidence is `docker_sanity`, not a family-designated
+`locked_oracle`.
+
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
-Before any task is added to a dataset, it must pass source licensing,
-provenance, compiler-image, oracle, sanitizer, contamination, split-family,
-rendering, token/mask, and release verification gates. A candidate judged to
-be a close semantic copy of the official `clock` benchmark must be rejected
-and backfilled; it cannot be relabelled into this curriculum.
+This document does not authorize SFT rows, training, or benchmark claims under
+the current local task-authoring scope. Dataset handoff is `not_requested`.
+A candidate judged to be a close semantic copy of an official benchmark must
+be rejected; it cannot be relabelled into this curriculum. Any future dataset
+use requires a separate explicitly approved admission contract.
+
+Final local status: `local_family_verified`. The exact ten-root family passes
+prompt/role/reference mapping, all 45 seven-dimensional pairs, all three
+coherent compiled controls, all 260 holdout comparisons, every strict-compiling
+topic negative in both modes, exact owner/mounted hashes, and two equal positive
+normal/fresh sanitizer discoveries per root and control. The final family tree
+hash is
+`sha256:6e28ff3fa9e626f6711c6af2824b1739fdb613e42bbbc15582818f10744c414e`;
+the Docker-sanity receipt hash is
+`sha256:fb60ffe6b357aaa3ad2ed1723349f7dc4ebfe07bc61b8ffbf28219ffcffdff3a`.
+Evidence uses the pinned network-disabled C++ sanity image and is explicitly
+`docker_sanity`, not `locked_oracle`. Dataset handoff remains `not_requested`.

@@ -1,7 +1,9 @@
 # Offset-Aware Range Overlap Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
+Status: remediated local-family curriculum. The historical ten-root template
+is immutable audit input. The corrected v3 owner emits ten roots beneath the requested
+parallel `aider-text-grid-reshaping` re-verification tree, within the
+user-authorized hard-rule bound of 8–12. This is not SFT data or an online
 dataset.
 
 This curriculum teaches comparison of local ranges after conversion through
@@ -14,7 +16,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -158,10 +160,28 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A candidate found to be
 a close semantic copy of an official benchmark must be rejected and backfilled;
 it cannot be relabelled into this curriculum.
 
+## V3 Remediation Inventory
+
+The proposal IDs above describe the immutable legacy input. The counted v3
+inventory is `offset-build-freeze`, `offset-border-slot-enumerator`,
+`offset-deployment-quorum-sweep`, `offset-relay-capacity-matching`,
+`offset-rest-gap-compliance`, `offset-auction-liquidity-intersection`,
+`offset-support-coverage-chain`,
+`offset-observation-coverage-subtraction`,
+`offset-station-contact-weighted-schedule`, and
+`offset-clinic-capacity-assignment`. Their mechanisms, dispositions, public
+contracts, negatives, 45-pair seven-dimension rule, coherent controls, and
+Docker acceptance are normative in
+`docs/aider-tasks-spec/aider-text-grid-reshaping/offset-aware-range-overlap.md`.
+The v2 identifier-preserving 0.98-overlap screen and its receipt are preserved
+as invalidated evidence: they admitted two augmenting-path matching roots. V3
+replaces the support root with a minimum interval-cover frontier sweep and
+normalizes every user-defined/domain identifier, literal, and endpoint
+direction before making each of the 45 by 7 conjunctive decisions.

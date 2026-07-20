@@ -4,6 +4,23 @@ Status: curriculum-design note. This document proposes original task concepts;
 it does not claim that they are admitted SFT roots or available as an online
 dataset.
 
+Remediation revision 2 follows
+`docs/aider-tasks-spec/prompts/remediate-family-reverify.md`. The supplied
+`FAMILY_TYPE=aider-text-grid-reshaping` did not resolve to a legacy root; the
+repository owner places this family under `aider-dates-and-clocks`. Preserve
+the ten-root legacy tree and materialize only the parallel re-verification
+tree. The user-authorized hard-rule count is 8–12 roots; all ten roots remain
+counted only while every one passes all seven logic-and-implementation
+dimensions and the mandatory Docker evidence gates. See
+`docs/aider-tasks-spec/aider-dates-and-clocks/countdown-timers.md`.
+
+Final local status: all ten roots are `local_family_verified` under the
+owner-controlled pinned-image `docker_sanity` receipt. All 45 family pairs pass
+all seven hard-rule dimensions; ten compiled topic negatives are rejected; the
+three coherent clone controls pass normal and sanitizer behavior tests before
+semantic rejection; and all 260 bound official-holdout comparisons pass. This
+is not a family-designated locked oracle or a dataset-release claim.
+
 This curriculum develops arithmetic over non-negative elapsed durations:
 checked decrement, saturation at zero, pause/resume accounting, multiple
 deadline ordering, duration decomposition, and exactly-once expiry effects. It
@@ -14,7 +31,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -133,6 +150,16 @@ event that would overspend the session without partially consuming its time.
 
 ## Materialization Requirements
 
+The v2 owner must compare all 45 unordered pairs across public API, owned
+state/algorithm, mutation/selection rules, invalid/boundary behavior,
+reference control flow, deterministic oracle, and topic-specific negative
+fixture. It must compile and execute one false substitute per root and coherent
+domain-renamed, constants/policy-only, and opposite-end-selection clone
+controls. Those controls must pass their behavior tests and still be rejected
+by the production semantic evaluator. Final normal and fresh ASan/UBSan
+evidence runs in the pinned network-disabled C++ sanity image and is
+`docker_sanity`, not a family-designated locked oracle.
+
 Every candidate needs a task-specific C++17 public API. Do not make generic
 `start`, `tick`, `remaining`, and `format` the primary assignment interface.
 The starter must expose the domain records, policy inputs, outcome/diagnostic
@@ -162,7 +189,7 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A task found to be a

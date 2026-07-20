@@ -1,8 +1,25 @@
 # Cross-Midnight Intervals Arithmetic Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
+Status: remediation owner for eight local v2 replacement roots. This document
+does not claim that they are admitted SFT roots or available as an online
 dataset.
+
+The v1 tree remains immutable at
+`.w8-biayn/data/aider-tasks/aider-dates-and-clocks/cross-midnight-intervals/`.
+The user-selected remediation input names
+`FAMILY_TYPE=aider-text-grid-reshaping`, although no corresponding legacy tree
+exists under that type. The audit therefore binds the historical owner-owned
+date/clock tree as its preserved input and writes fresh v2 artifacts only to
+`.w8-biayn/data/aider-tasks-reverify/aider-text-grid-reshaping/cross-midnight-intervals/`.
+That mismatch is recorded in every remedy record; it is not hidden by moving
+or modifying legacy files.
+
+The user-authorized hard count is 8–12. The owner emits exactly eight counted
+roots and requires all 28 unordered pairs to differ separately in public API,
+owned state/algorithm, mutation/selection rules, invalid/boundary behavior,
+reference control flow, deterministic oracle, and topic-negative fixture.
+Domain/identifier renames, constants/policy-only changes, and opposite-end
+selection changes are coherent compiled controls, not counted roots.
 
 This curriculum develops arithmetic for bounded daily intervals that can cross
 a day boundary: half-open endpoint policy, duration, containment, overlap,
@@ -13,7 +30,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -58,6 +75,46 @@ sanitizer, contamination, split, rendering, and release gates.
 | `midnight-hospital-handoff` | Hospital handoff audit | Measure overlap and gap between consecutive overnight care shifts and flag unsafe handoff gaps. | Uses ordered shift collections plus safety thresholds. |
 | `midnight-noise-budget` | Neighborhood noise budget | Accumulate noisy-operation minutes inside protected overnight periods and report the first policy breach. | Intersects many operation intervals with policy bands and a budget. |
 | `midnight-delivery-curfew` | Delivery curfew planner | Filter candidate delivery routes by curfew intersection and return the earliest legal dispatch alternative. | Searches a route collection under legality and tie-break rules. |
+
+## Deterministic V2 Dispositions
+
+The legacy generator materialized all ten proposals through one generic
+`Span` class template, one result shape, the same overlap/sort loop, and the
+same tests after class/method noun substitution. Consequently every legacy root
+has `primary_core_objective: not_achieved`; eight receive independent
+replacements and two semantically overlapping candidates are rejected. None is
+retained through a rename-only repair.
+
+| Legacy audit root | V2 replacement | Required mechanism |
+| --- | --- | --- |
+| `midnight-parking-rate` | `overnight-parking-ledger` | boundary-event tariff sweep |
+| `midnight-security-patrol` | `patrol-gap-union` | clipped interval-union complement |
+| `midnight-dock-allocation` | `dock-booking-calendar` | mutable per-resource ordered calendar |
+| `midnight-sleep-tracker` | `sleep-interruption-ledger` | **reject:** overlaps retained union/complement mechanism |
+| `midnight-radio-silence` | `quiet-window-violations` | stable point-membership selection |
+| `midnight-bakery-oven` | `oven-capacity-scheduler` | two-heap interval partitioning |
+| `midnight-transit-pass` | `transit-entitlement-audit` | **reject:** overlaps retained interval-feasibility mechanism |
+| `midnight-hospital-handoff` | `handoff-continuity-audit` | adjacent continuity-state accumulation |
+| `midnight-noise-budget` | `noise-budget-breach` | incremental protected-minute bitmap |
+| `midnight-delivery-curfew` | `curfew-dispatch-selector` | ordered candidate feasibility search |
+
+The normative per-root APIs, behaviors, invariants, negative fixtures, role
+maps, oracle commands, and acceptance gates are frozen before implementation
+under the reverify root's `.state/remedy/` directory. The checked-in audit is
+`docs/aider-tasks-spec/aider-text-grid-reshaping/cross-midnight-intervals.md`.
+
+The corrected local evidence records exactly eight materialized roots, 28
+passing seven-dimension pair decisions, two absent rejected roots, 208 passing
+comparisons against all 26 official C++ holdouts, eight passing normal/fresh
+sanitizer references, eight rejected compiled topic negatives, and three
+compiled/tested/rejected coherent controls. The former ten-root receipt was
+invalidated because unequal normalized digests did not establish material
+diversity; a subsequent receipt with empty control hashes was also invalidated.
+The final network-disabled Docker receipt binds the eight root hashes, three
+distinct nonempty control hashes, and an aggregate owner hash covering the
+materializer, case inventory, and production hard-rule evaluator. Its evidence
+class is `docker_sanity`, `locked_oracle` is false, the family returns to
+`local_family_verified`, and dataset handoff remains `not_requested`.
 
 ## Root-Specific Design Notes
 
@@ -155,10 +212,9 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A candidate found to be
 a close semantic copy of an official benchmark must be rejected and backfilled;
 it cannot be relabelled into this curriculum.
-

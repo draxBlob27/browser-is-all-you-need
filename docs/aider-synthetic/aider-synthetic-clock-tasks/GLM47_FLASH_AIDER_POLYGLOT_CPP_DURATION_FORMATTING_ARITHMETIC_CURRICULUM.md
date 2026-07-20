@@ -1,8 +1,10 @@
 # Duration Formatting Arithmetic Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: remediated local-family curriculum. The immutable ten-root v1 family
+remains audit input under `aider-dates-and-clocks`; the owner emits ten v2
+replacements only under the user-supplied
+`aider-tasks-reverify/aider-text-grid-reshaping/duration-formatting` path. This
+does not claim dataset admission, training authorization, or benchmark uplift.
 
 This curriculum teaches conversion of non-negative elapsed quantities into
 canonical components, unit selection, rounding policy, pluralization, and
@@ -13,7 +15,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -47,6 +49,12 @@ split, rendering, and release gates.
 
 ## Proposed Decontaminated Tasks
 
+The table below is the historical v1 proposal inventory. Re-verification found
+that its generator emitted one generic evaluator/reference/test template for
+all ten prompts, so every v1 root has disposition `replace`. The counted v2
+inventory is defined below and in
+`docs/aider-tasks-spec/aider-text-grid-reshaping/duration-formatting.md`.
+
 | ID | Task | Visible contract | Deliberate separation from `clock` |
 |---|---|---|---|
 | `duration-parking-receipt` | Parking receipt formatter | Turn a chargeable-minute result and tariff into a receipt with billed blocks, free allowance, and canonical customer-facing duration text. | Formats a billing calculation with tariff diagnostics, not a time-of-day object. |
@@ -64,6 +72,25 @@ split, rendering, and release gates.
 
 These constraints guide later authors; they are not hidden tests or reference
 answers. Independently author all names, types, examples, and algorithms.
+
+## Counted v2 replacement inventory
+
+The user-authorized hard-rule range is 8–12; the owner emits exactly ten roots
+and must prove all 45 unordered pairs materially different in each of the seven
+mandatory dimensions separately.
+
+| Replacement | Core logic | Topic-specific rejected substitute |
+| --- | --- | --- |
+| `parking-block-receipt` | checked ceiling blocks then checked charge | floor division |
+| `pipeline-stage-digest` | ordered validation, total, strict maximum, stable failures | latest-wins tie |
+| `chapter-timeline-labels` | complete partition validation then integer labels | accepting gaps |
+| `split-budget-sla` | independent excesses and four-state status lattice | combined-total SLA |
+| `ranked-lap-recap` | checked extrema and stable fastest-first index rank | descending rank |
+| `reserve-discharge-forecast` | aggregate ceiling rate then floor duration | truncated rate |
+| `maintenance-event-ledger` | strict begin/pause/resume/finish state machine | charging paused time as active |
+| `categorized-focus-digest` | configured lookup buckets plus unassigned total | dropping unknowns |
+| `turnback-air-plan` | per-diver ceiling, reserve ceiling, turn-back minimum | aggregate truncation |
+| `tiered-retention-notice` | validated greatest-qualified tier and state precedence | first-qualified tier |
 
 ### `duration-parking-receipt`
 
@@ -156,10 +183,9 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A close semantic copy
 of an official benchmark must be rejected and backfilled; it cannot be
 relabelled into this curriculum.
-

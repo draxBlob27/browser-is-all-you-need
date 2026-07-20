@@ -1,8 +1,8 @@
 # General Calendar Arithmetic Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: ten-root local-family remediation contract. The user-authorized hard
+range is 8–12 roots; this family emits ten locally verified candidates. It is
+not an SFT release, training authorization, or online dataset.
 
 This curriculum develops general Gregorian calendar arithmetic: validated civil
 dates, leap-aware month lengths, add/subtract day and month operations,
@@ -14,7 +14,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -156,10 +156,29 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A candidate found to be
 a close semantic copy of an official benchmark must be rejected and backfilled;
 it cannot be relabelled into this curriculum.
 
+## V2 remediation inventory and hard rule
+
+The v1 legacy family is immutable at
+`.w8-biayn/data/aider-tasks/aider-dates-and-clocks/general-calendar-arithmetic/`.
+V2 is owner-generated only beneath the sibling `aider-tasks-reverify` root.
+All ten legacy IDs use `repair-in-place`, but their references and private
+oracles now require ten separate mechanisms: anchored earliest-renewal
+reduction, ordinal-duration reconstruction, blackout-span merging, recall-first
+event precedence, transactional amendment replay, year-partitioned balance
+charging, anchored recurrence search, inclusive policy tiers, dependency-DAG
+propagation, and an ordinal interval-difference sweep.
+
+The owner must fail closed unless the count is 8–12, all 45 unordered pairs
+differ in each of the seven hard-rule dimensions, all three coherent clone
+controls are rejected in every dimension, all ten topic negatives compile and
+fail executed tests, all 260 official-holdout comparisons pass, and exact-tree
+normal/fresh-ASan/UBSan Docker evidence has equal positive counts. The
+normative audit and commands are in
+`docs/aider-tasks-spec/aider-dates-and-clocks/general-calendar-arithmetic.md`.

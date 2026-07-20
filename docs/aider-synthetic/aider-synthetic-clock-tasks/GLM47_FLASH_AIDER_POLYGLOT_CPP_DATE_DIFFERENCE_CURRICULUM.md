@@ -1,8 +1,8 @@
 # Date Difference Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: local-family remediation contract. Eight clean-room roots are owned by
+`moonlight_date_difference_aider_tasks.py`; local verification remains distinct
+from dataset admission, training, and benchmark claims.
 
 This curriculum teaches Gregorian date-difference arithmetic: validated civil
 dates, leap-aware month lengths, signed ordering, inclusive versus exclusive
@@ -13,7 +13,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -51,6 +51,9 @@ contamination, split, rendering, and release gates.
 | `dated-library-loan` | Library loan reconciliation | Compute overdue days and tiered fees from checkout, due, return, and closure dates; explain the first invalid date relation. | Combines multiple dates, fee tiers, and relationship diagnostics. |
 | `dated-experiment-window` | Experiment observation window | Measure valid observation days within a study window after subtracting declared blackout spans. | Performs interval union/difference over date records with coverage output. |
 | `dated-retention-review` | Records retention review | Determine remaining retention days and review status for archived records under category-specific retention policies. | Joins archive records to policy categories and emits typed action states. |
+| `dated-maintenance-ledger` | Maintenance interval ledger | Maintain independent per-asset service state and report largest consecutive service gaps. | Stateful keyed accumulation with per-asset chronological validation, not a two-date wrapper. |
+| `dated-subscription-proration` | Subscription proration | Sweep a half-open active window across ordered rate change points and allocate days and integer units by band. | Piecewise-rate segmentation with exact allocation output. |
+| `dated-custody-chain` | Evidence custody chain | Validate a transfer chain and emit per-handler holding durations and strict SLA breaches. | Sequential transition validation with stage output and unique-handler policy. |
 
 ## Root-Specific Design Notes
 
@@ -88,6 +91,42 @@ Policies specify a positive retention duration and review lead time. Define
 precedence among expired, review-due, and active states, including equality at
 each threshold and an unknown policy category.
 
+### `dated-maintenance-ledger`
+
+Own last-service state independently per asset while processing an interleaved
+event stream. Reject globally duplicated event IDs and per-asset chronological
+reversals; return lexicographically ordered asset summaries.
+
+### `dated-subscription-proration`
+
+Treat the subscription as `[begin,end)`, require strictly increasing effective
+dates and an initial covering band, then allocate every active date to the
+latest applicable rate without floating-point arithmetic.
+
+### `dated-custody-chain`
+
+Validate all handler/date/limit fields before deriving consecutive stages.
+Equal transfer dates form zero-day stages; only strictly over-limit durations
+breach, and the final handler has no completed stage.
+
+## Binding Family Diversity Rule
+
+This remediation uses the user-authorized hard size range of 8–12 and emits
+exactly eight counted roots. Every one of the 28 unordered pairs must differ
+materially in each of these seven dimensions, evaluated from actual emitted
+artifacts: public API, owned state or algorithm, mutation/selection rules,
+invalid/boundary behavior, reference control flow, deterministic oracle, and
+topic-specific negative fixture. Unique names, labels, and raw source hashes
+are not evidence. The evaluator removes identifiers, literals, the shared date
+helper, and domain nouns, then requires both dimension-specific overlap and
+symmetric-difference materiality gates. Each root owns a different executed
+negative: warranty boundary, weekend inclusion, closure charging, blackout
+omission, expiry equality, cross-asset state aliasing, premature rate-band
+selection, or custody-limit equality. The exact evaluator must reject coherent
+domain/identifier rename, constants-or-policy-only, and opposite-end-selection
+controls; normal and fresh ASan/UBSan Docker builds must compile and execute
+those controls.
+
 ## Materialization Requirements
 
 Every candidate needs a task-specific C++17 public API. Do not expose a bare
@@ -118,10 +157,9 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A candidate found to be
 a close semantic copy of an official benchmark must be rejected and backfilled;
 it cannot be relabelled into this curriculum.
-

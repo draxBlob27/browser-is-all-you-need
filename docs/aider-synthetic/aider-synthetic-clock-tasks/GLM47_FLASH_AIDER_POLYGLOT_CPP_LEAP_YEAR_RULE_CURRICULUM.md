@@ -1,129 +1,101 @@
-# Leap-Year Rule Curriculum: Decontaminated Capability
+# Leap-Year Rule Remediation Curriculum
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: eight-root local-family remediation contract. These roots are local
+candidate artifacts only; this document does not authorize SFT rows, a dataset
+release, training, or benchmark-uplift claims.
 
-This curriculum applies the Gregorian leap-year rule within domain policies:
-divisible-by-4 qualification, century exclusion, divisible-by-400 restoration,
-and resulting February/day-capacity behavior. It intentionally avoids a bare
-boolean leap-year kata and does not perform general future-date arithmetic.
+Selected workflow prompt:
+`docs/aider-tasks-spec/prompts/remediate-family-reverify.md`, with
+`FAMILY_NAME=leap-year-rule`,
+`FAMILY_TYPE=aider-text-grid-reshaping`, and the user-authorized hard count
+range of 8–12 roots.
 
-Use this with:
+## Legacy audit and path resolution
 
-- `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
-- `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+The supplied legacy path,
+`.w8-biayn/data/aider-tasks/aider-text-grid-reshaping/leap-year-rule/`, did not
+exist at audit time. The five discovered legacy roots remain immutable under
+`.w8-biayn/data/aider-tasks/aider-dates-and-clocks/leap-year-rule/` and were
+audited as the actual predecessor family. They share a small Gregorian helper,
+thin one-shot wrapper construction, no complete seven-dimension pair matrix,
+no coherent adversarial controls, no compiled/executed topic negatives, and no
+tree-bound network-disabled Docker receipt. All five dispositions are
+`replace`; none is regenerated or modified.
 
-## Decontamination Boundary
+The pre-remediation tree hashes are bound in the per-root remedy records under
+`.w8-biayn/data/aider-tasks-reverify/aider-text-grid-reshaping/leap-year-rule/.state/remedy/`.
+The owning generator and final manifest record the replacement tree hashes.
 
-The full official Aider Polyglot C++ holdout manifest is permanently excluded.
-In particular, do not reuse `gigasecond` or `clock` wording, API, types,
-examples, tests, references, or model outputs. Do not create a renamed
-`is_leap_year(year)` exercise or a near-copy that adds a fixed large date
-offset.
+## Decontamination boundary
 
-The proposals below are **not yet proven decontaminated**. They embed the rule
-in domain-specific validation, allocation, reporting, or scheduling contracts.
-Before admission, run the shared whole-slug benchmark denylist and semantic
-contamination checks; reject and backfill every near-match. Each surviving root
-must materially differ from benchmark families in at least three dimensions:
-public API/output, data collection or state model, domain policy, result or
-diagnostic type, and invalid-input behavior.
+All 26 official Aider Polyglot C++ roots are permanent holdouts. In particular,
+do not create a bare `is_leap_year` kata or reuse `clock`, `gigasecond`, or
+`meetup` wording, APIs, tests, references, examples, or semantic contracts.
+Every replacement embeds the Gregorian 4/100/400 rule inside a different
+domain mechanism and must pass whole-slug plus normalized emitted-content
+screening against the bound holdout checkout.
 
-Keep roots separate from the `gigasecond` future-date and `meetup`
-weekday-in-month families. Inputs must be caller supplied and deterministic:
-no host clock, calendar/time-zone library dependence, filesystem/network,
-threads, or randomness.
+## Counted replacement roots
 
-## Online Material Status
-
-Leap-year examples are useful only for private concept study or licensed source
-discovery. They are not a drop-in SFT inventory. Each candidate must be newly
-authored in C++17 with independent task text, starter API, reference, examples,
-and tests, then pass provenance, license, oracle, sanitizer, contamination,
-split, rendering, and release gates.
-
-## Proposed Decontaminated Tasks
-
-| ID | Task | Visible contract | Deliberate separation from holdouts |
+| Replacement ID | Legacy disposition | Primary mechanism | Required discriminator |
 |---|---|---|---|
-| `leap-february-inventory` | February inventory planner | Validate daily stock targets for February and return capacity, missing-day, and over-capacity diagnostics. | Uses a month inventory record and validation report, not a date-offset API. |
-| `leap-payroll-accrual` | Payroll accrual ledger | Allocate a February daily benefit across employee records and reconcile the annual leap-day accrual policy. | Aggregates employee policy records with monetary-unit totals. |
-| `leap-weather-archive` | Weather archive completeness | Audit February observation IDs for duplicate, missing, and invalid day slots under the record's year. | Processes a data collection and returns completeness diagnostics. |
-| `leap-facility-booking` | Facility booking validator | Admit or reject February maintenance bookings, including leap-day requests, under capacity and blackout rules. | Combines calendar validation with mutable booking conflict policy. |
-| `leap-publication-cycle` | Publication cycle planner | Produce the eligible February issue slots for a supplied publication cadence and explain a skipped or added leap-day slot. | Applies cadence and exception policy to a schedule result. |
+| `leap-capacity-calendar` | replaces `leap-february-inventory` | fixed day-indexed occupancy and seen arrays | duplicate declarations cannot be collapsed |
+| `leap-benefit-apportionment` | replaces `leap-payroll-accrual` | weighted quotient and stable largest remainder | equal round robin fails conservation-by-weight cases |
+| `leap-archive-gap-index` | replaces `leap-weather-archive` | stateful ID set plus fixed day-count index | every accepted insertion updates complete observable counts |
+| `leap-maintenance-ledger` | replaces `leap-facility-booking` | interval difference sweep and atomic load commit | checking only an interval endpoint fails |
+| `leap-cadence-wheel` | replaces `leap-publication-cycle` | modular stepping and bounded cancellation recovery | filtering cancelled hits without recovery fails |
+| `leap-coverage-segments` | new quota-preserving backfill | sorted interval union and complement | unmerged overlap/adjacency fails |
+| `leap-shift-matching` | new quota-preserving backfill | bipartite augmenting-path rematching | greedy first-fit loses maximum cardinality |
+| `leap-policy-replay` | new quota-preserving backfill | monotonic event replay and terminal FSM | reversible freeze fails complete traces |
 
-## Root-Specific Design Notes
+The count of eight is binding. Adding roots requires a new user-authorized
+count decision and a fresh complete hard-rule and Docker re-verification.
 
-These are authoring constraints, not hidden tests or reference answers. Names,
-types, examples, and algorithms must be independently authored during
-materialization.
+## Family hard rule
 
-### `leap-february-inventory`
+The owner must reread actual emitted documentation, public APIs, references,
+visible/private/property tests, and topic-negative sources. It compares all
+`8 * 7 / 2 = 28` unordered pairs. Every pair must differ separately and
+conjunctively in these seven dimensions:
 
-Inventory slots are day-numbered records, not parsed dates. Define the valid
-year range and whether a missing target is distinct from an explicit zero
-target. Day 29 must be rejected in a common year without mutating the report.
+1. public API;
+2. owned state or algorithm;
+3. mutation or selection rules;
+4. invalid and boundary behavior;
+5. reference control flow;
+6. deterministic oracle; and
+7. topic-specific negative fixture.
 
-### `leap-payroll-accrual`
+Unique names, declared mechanism labels, raw hashes, and an aggregate score are
+not diversity evidence. The production evaluator must reject coherent
+domain/identifier-renamed, constants/policy-only, and opposite-end-selection
+controls in every dimension. Each control must change emitted files, compile,
+and pass its coherent behavior tests in clean normal and fresh ASan/UBSan modes
+before its semantic rejection counts as evidence.
 
-Use integer benefit units and an explicit policy for leap-day allocation across
-employees. Define deterministic remainder distribution and whether inactive
-employees receive any portion of the additional day.
+## Materialization and evidence
 
-### `leap-weather-archive`
+The owner is
+`src/w8_biayn/integrations/moonlight_leap_year_rule_aider_tasks.py`, with cases
+in `moonlight_leap_year_rule_cases.py` and focused tests in
+`tests/test_moonlight_leap_year_rule_aider_tasks.py`. It writes only
+`.w8-biayn/data/aider-tasks-reverify/aider-text-grid-reshaping/leap-year-rule/`.
 
-Observation IDs and day slots are stable. A duplicate must be reported without
-hiding a missing slot, and out-of-range days must be retained as diagnostics
-rather than silently discarded.
+Each root contains task-named editable C++17 header/source files, a coherent
+incomplete starter, an independent reference, visible/private/property tests,
+and one compiling topic-specific false substitute. Prompt construction exposes
+only docs and the declared editable pair.
 
-### `leap-facility-booking`
+Final local verification uses the pinned repository C++ sanity image with
+Docker network `none`. Every reference and coherent control must pass exactly
+three tests in clean normal and fresh ASan/UBSan builds. Every topic negative
+must compile, discover the same three tests, execute them, and be rejected in
+both modes. The receipt binds the deterministic snapshot, mounted tree hashes,
+owner/reference hashes, image/toolchain, commands, counts, and network policy.
+This is `docker_sanity`, not a family-designated locked oracle.
 
-Bookings have stable IDs, a February day, and a resource demand. A failed
-leap-day or capacity validation must not insert the booking; equal capacity
-must have an explicit accept/reject rule.
+## Local-only boundary
 
-### `leap-publication-cycle`
-
-Cadence is a positive day interval anchored within February. Define whether
-the final day is included, how a cadence that would otherwise land on day 29
-behaves in a common year, and the stable ordering of explanations.
-
-## Materialization Requirements
-
-Every candidate needs a task-specific C++17 public API. Do not expose a bare
-`is_leap_year` function as the assignment. The starter must expose domain
-records, policy inputs, structured results, and explicit invalid-input
-behavior.
-
-For every root, author:
-
-1. a provenance record and original task specification;
-2. a starter header/source pair with the domain-specific C++17 API;
-3. an independent reference implementation;
-4. visible examples and hidden Catch tests;
-5. normal build plus a fresh locked sanitizer build; and
-6. shared-denylist and semantic-contamination evidence.
-
-Hidden tests must cover, where applicable:
-
-- years divisible by 4, 100, and 400, plus ordinary common years;
-- February days 1, 28, 29, and out-of-range day numbers;
-- zero, exact-capacity, and over-capacity allocations;
-- empty/singleton collections, duplicates, stable ordering, and atomic failure;
-- leap/common-year transitions in the task-specific policy;
-- randomized year/record inputs checked against a small independent Gregorian
-  rule and domain oracle; and
-- a final contamination screen proving the root remains outside every benchmark
-  family, especially `clock`, `gigasecond`, and `meetup`.
-
-## Admission Boundary
-
-This document is not authorization to bypass the primary Aider SFT pipeline.
-Before any task is added to a dataset, it must pass source licensing,
-provenance, compiler-image, oracle, sanitizer, contamination, split-family,
-rendering, token/mask, and release verification gates. A candidate found to be
-a close semantic copy of an official benchmark must be rejected and backfilled;
-it cannot be relabelled into this curriculum.
-
+The strongest permitted result is `local_family_verified`. Dataset handoff is
+`not_requested`; do not create JSONL, token/mask evidence, splits, exports,
+training runs, or release claims from this workflow.

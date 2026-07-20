@@ -1,8 +1,9 @@
 # Nth And Final Occurrences Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: local remediation specification. The immutable 10-root legacy family
+uses one shared selector template. The v2 owner emits 10 roots under the
+parallel re-verification tree, within the user-authorized hard size of 8–12.
+This is not an SFT release or online dataset.
 
 This curriculum teaches selecting a numbered or final qualifying occurrence
 from validated domain records: ordinal counting, final-element selection,
@@ -13,7 +14,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -43,20 +44,25 @@ must be newly authored in C++17 with independent task text, starter API,
 reference, examples, and tests, then pass provenance, license, oracle,
 sanitizer, contamination, split, rendering, and release gates.
 
-## Proposed Decontaminated Tasks
+## Remediated Root Inventory
 
 | ID | Task | Visible contract | Deliberate separation from `meetup` |
 |---|---|---|---|
 | `occurrence-inspection-route` | Inspection route selector | Choose the nth or final passed inspection from ordered route records, subject to zone and severity filters. | Selects from supplied inspection records with multi-field predicates. |
-| `occurrence-invoice-escalation` | Invoice escalation finder | Return the nth unresolved escalation or final overdue invoice within an account's ordered event history. | Uses account lifecycle records and status filtering, not weekdays. |
-| `occurrence-lab-sample` | Lab sample checkpoint | Locate the nth valid measurement or final calibration-passing result in a sample run. | Filters typed experiment records with validity and threshold policy. |
-| `occurrence-transit-stop` | Transit stop occurrence | Find the nth or final eligible stop in a route plan after accessibility and transfer constraints. | Uses an itinerary sequence and service constraints. |
-| `occurrence-quality-audit` | Quality audit sampler | Select the nth defect matching a class or the final critical defect from batch inspection results. | Operates on production findings and severity rules. |
-| `occurrence-support-breach` | Support breach reporter | Identify the nth SLA breach or final unresolved high-priority ticket in an ordered case ledger. | Uses ticket state, priority, and SLA diagnostics. |
-| `occurrence-sports-qualifier` | Sports qualifier resolver | Select the nth qualifying attempt or final eligible athlete from event results under score and disqualification rules. | Applies competition records and tie/disqualification policy. |
-| `occurrence-library-hold` | Library hold selector | Return the nth ready hold or final expired hold after patron-status and branch filters. | Works on a mutable queue snapshot with entitlement rules. |
-| `occurrence-security-alert` | Security alert sampler | Find the nth alert requiring review or final unacknowledged critical alert in a bounded alert stream. | Uses alert category, acknowledgement, and retention policy. |
-| `occurrence-maintenance-log` | Maintenance recurrence audit | Select the nth completed service or final overdue required service for each asset from its lifecycle log. | Groups per-asset records and returns compliance diagnostics. |
+| `escalation-state-ledger` | Escalation state ledger | Replay lifecycle events, select the nth escalation transition, and find the final overdue open invoice. | Event-sourced per-invoice state plus transition history. |
+| `calibration-run-index` | Calibration run index | Segment maximal calibrated threshold runs, then select the nth or final run. | Gap-sensitive run segmentation rather than record filtering. |
+| `accessible-route-occurrences` | Accessible route occurrences | Traverse a route graph and select reachable stops in stable BFS order. | Graph reachability and cycle control. |
+| `defect-episode-audit` | Defect episode audit | Fold finding events into episodes and query still-open or final critical episodes. | Keyed episode lifecycle state machine. |
+| `sla-window-crossings` | SLA window crossings | Record upward crossings of a rolling-window breach threshold. | Edge-triggered sliding-window state. |
+| `athlete-record-board` | Athlete record board | Record personal-best improvements and query record occurrences. | Per-athlete maxima plus chronological improvement log. |
+| `hold-dispatch-snapshot` | Hold dispatch snapshot | Rank a validated snapshot for nth dispatch and final expiry. | Stable multi-key ordering over immutable state. |
+| `alert-retention-ring` | Alert retention ring | Own bounded retained alerts and query logical ring order. | Circular overwrite state with acknowledgement mutations. |
+| `maintenance-cycle-ledger` | Maintenance cycle ledger | Expand periodic due cycles and match completions once. | Periodic cycle generation and one-to-one matching. |
+
+The legacy-to-v2 dispositions are one `repair-in-place` for
+`occurrence-inspection-route` and nine `replace` dispositions. All 45 unordered
+v2 pairs must differ in every hard-rule dimension; identifiers, constants or
+policy toggles, and opposite-end selection never establish diversity.
 
 ## Root-Specific Design Notes
 
@@ -154,10 +160,9 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A candidate found to be
 a close semantic copy of an official benchmark must be rejected and backfilled;
 it cannot be relabelled into this curriculum.
-

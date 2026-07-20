@@ -1,8 +1,10 @@
 # Elapsed-Time Accumulation Arithmetic Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: remediated local-family curriculum. The immutable legacy family remains
+under `.w8-biayn/data/aider-tasks/aider-dates-and-clocks/elapsed-time-accumulation/`;
+the owner emits fresh artifacts only under
+`.w8-biayn/data/aider-tasks-reverify/aider-text-grid-reshaping/elapsed-time-accumulation/`.
+This does not claim SFT admission, a dataset, training, or benchmark uplift.
 
 This curriculum teaches safe accumulation of elapsed durations: checked addition,
 overlap policy, deduplication, pause exclusion, unit conversion, bounded
@@ -13,7 +15,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -46,16 +48,30 @@ gates.
 
 ## Proposed Decontaminated Tasks
 
+For this remediation the user-authorized hard family count is 8–12. Exactly
+eight roots are counted. `elapsed-battery-test-log` is rejected as a semantic
+duplicate of the retained latest-attempt podcast mechanism, and
+`elapsed-lab-equipment-booking` is rejected as a semantic duplicate of the
+retained capped-allocation invoice mechanism. The remaining eight roots must
+pass the complete 28-pair, seven-dimension conjunctive screen; a difference in
+only six dimensions is insufficient.
+
+The legacy proposals are replaced rather than overwritten. Their counted v2
+IDs are `capped-client-day-ledger`, `machine-state-coverage-audit`,
+`reading-session-correction-ledger`, `freelance-event-reconciler`,
+`weighted-training-load`, `service-outage-interval-union`,
+`podcast-attempt-selector`, and `incident-budget-frontier`.
+
 | ID | Task | Visible contract | Deliberate separation from `clock` |
 |---|---|---|---|
 | `elapsed-consulting-invoice` | Consulting invoice ledger | Aggregate approved work entries by client, exclude breaks, apply a daily cap, and return billable versus capped minutes. | Uses a multi-client ledger and cap policy, not time-of-day mutation. |
 | `elapsed-machine-utilization` | Machine utilization audit | Combine running, idle, setup, and fault intervals into utilization totals while rejecting overlapping state records. | Classifies interval records and validates coverage conflicts. |
 | `elapsed-reading-challenge` | Reading challenge tracker | Add signed corrections to book-session durations, enforce a non-negative total, and report progress toward a goal. | Uses corrections and a goal state with underflow diagnostics. |
-| `elapsed-battery-test-log` | Battery test log | Sum device test phases, omit aborted phases under a declared policy, and report the longest contributing phase. | Aggregates typed phases and contribution status. |
+| `elapsed-battery-test-log` | Battery test log | Rejected during remediation: its retry/contribution selection collapses into the retained podcast attempt-selection mechanism. | Not counted; rejection is terminal for this family revision. |
 | `elapsed-freelance-breaks` | Freelance break reconciler | Reconcile active and break events into paid minutes, identifying unmatched starts/stops and duplicate closes. | Requires event-pair state reconciliation, not a duration formatter. |
 | `elapsed-training-load` | Training-load accumulator | Combine exercise sets with intensity weights and rest exclusions into a bounded training-load score and duration summary. | Adds weighted domain scoring and record filtering. |
 | `elapsed-network-uptime` | Network uptime ledger | Merge adjacent outage reports by service, detect conflicting reports, and calculate covered uptime within an observation budget. | Performs interval union and service-level diagnostics. |
-| `elapsed-lab-equipment-booking` | Lab equipment booking audit | Accumulate approved reservation use, charge overrun minutes, and return the first booking that exceeds an allocation. | Uses resource allocation and first-failure reporting. |
+| `elapsed-lab-equipment-booking` | Lab equipment booking audit | Rejected during remediation: its allocation/overrun policy collapses into the retained consulting cap ledger. | Not counted; rejection is terminal for this family revision. |
 | `elapsed-podcast-production` | Podcast production digest | Total recording, editing, and review passes; deduplicate retried export records by immutable job ID. | Combines categories with idempotent record handling. |
 | `elapsed-incident-response` | Incident response timeline | Accumulate response phases across incidents, separate active mitigation from waiting, and flag a breached response budget. | Produces multi-incident operational aggregates and policy status. |
 
@@ -125,6 +141,14 @@ a documented tie rule.
 
 ## Materialization Requirements
 
+The eight counted roots have distinct public APIs, owned state/algorithm,
+mutation or selection rules, invalid/boundary behavior, reference control flow,
+deterministic oracles, and topic-specific negative fixtures. The production
+screen must reject coherent domain/identifier-renamed, constants/policy-only,
+and opposite-end-selection controls. Runtime verification must build those
+controls and every topic negative in the same strict network-disabled Docker
+environment used for the references.
+
 Every candidate needs a task-specific C++17 public API. Do not expose generic
 `add_minutes`, `subtract_minutes`, `hours`, or `to_string` methods as the
 assignment. The starter must expose domain records, policy inputs, structured
@@ -153,10 +177,9 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A candidate found to be
 a close semantic copy of an official benchmark must be rejected and backfilled;
 it cannot be relabelled into this curriculum.
-

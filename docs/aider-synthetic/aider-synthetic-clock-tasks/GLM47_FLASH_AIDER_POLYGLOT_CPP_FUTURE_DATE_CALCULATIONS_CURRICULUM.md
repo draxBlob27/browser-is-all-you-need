@@ -4,6 +4,17 @@ Status: curriculum-design note. This document proposes original task concepts;
 it does not claim that they are admitted SFT roots or available as an online
 dataset.
 
+Remediation status (2026-07-18): the legacy ten-root template family was
+audited with `remediate-family-reverify.md`. Under the user-authorized 8–12
+hard count, eight independently implemented replacements are generated at
+`.w8-biayn/data/aider-tasks-reverify/aider-text-grid-reshaping/future-date-calculations/`;
+`future-publication-embargo` and `future-lease-notices` are rejected rather
+than retained as policy-only padding. The normative audit and exact
+dispositions are in
+`docs/aider-tasks-spec/aider-text-grid-reshaping/future-date-calculations.md`.
+The immutable legacy family remains under `aider-dates-and-clocks` because the
+user-supplied `FAMILY_TYPE` controls the parallel v2 location, not v1 history.
+
 This curriculum develops checked Gregorian forward-date calculations under
 domain policy: variable day/month offsets, leap-aware transitions, bounded
 horizons, end-of-month clamp rules, exclusions, and multi-record diagnostics.
@@ -13,7 +24,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_DATES_CLOCK_AND_CALENDAR_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -126,6 +137,16 @@ alternate outcome, and define end-of-month clamp behavior for leases.
 
 ## Materialization Requirements
 
+The counted v2 inventory is exactly eight roots. Every unordered pair must
+differ materially and separately in public API, owned state/algorithm,
+mutation or selection rules, invalid and boundary behavior, reference control
+flow, deterministic oracle, and topic-specific negative fixture. The family
+owner must reject domain/identifier-renamed, constants/policy-only, and
+opposite-end-selection controls after proving each is coherent, buildable, and
+rejected by executed tests. Any change to this contract, owner, emitted
+artifacts, focused tests, or evidence invalidates the prior receipt and requires
+complete regeneration and Docker re-verification.
+
 Every candidate needs a task-specific C++17 public API. Do not expose generic
 `add_seconds`, `add_days`, `Date::plus`, or a fixed-offset function as the
 assignment. The starter must expose domain records, policy inputs, structured
@@ -154,10 +175,9 @@ Hidden tests must cover, where applicable:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A candidate found to be
 a close semantic copy of an official benchmark must be rejected and backfilled;
 it cannot be relabelled into this curriculum.
-
