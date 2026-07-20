@@ -11,7 +11,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_VALIDATION_AND_INPUT_PARSING_TOPICS.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -66,6 +66,6 @@ near-valid generators checked against a simple recognizer oracle.
 
 ## Admission Boundary
 
-This document does not bypass the primary Aider SFT pipeline. Every candidate
+This document does not authorize SFT rows, training, or benchmark claims. Every candidate
 must pass licensing, provenance, compiler-image, oracle, sanitizer,
 contamination, split-family, rendering, token/mask, and release verification.
