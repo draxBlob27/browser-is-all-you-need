@@ -13,7 +13,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_ALGORITHM_DATA_STRUCTURE_TOPICS.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Online Material Status
 
@@ -54,6 +54,17 @@ in-repo and pass the normal original-task admission process.
 
 ## Materialization Requirements
 
+The legacy roots under `.w8-biayn/data/aider-tasks/aider-dsa/bounded-blocking-queue/`
+are audit input only. Their v2 replacements materialize under
+`.w8-biayn/data/aider-tasks-reverify/aider-dsa/bounded-blocking-queue/` through
+`prepare_bounded_blocking_queue_aider_tasks.sh`. Every replacement has a distinct
+operational extension as well as the common bounded blocking FIFO lifecycle. The
+extension changes its public declaration, state transition, and deterministic
+negative fixture; it is not a profile label. The
+remedy specifications and strongest available evidence are recorded in
+`docs/aider-tasks-spec/aider-dsa/bounded-blocking-queue.md`; they do not claim
+dataset admission.
+
 Every root needs a task-specific C++17 public API. Do not expose only a
 textbook `push` / `pop` queue assignment. Closure behavior, cancellation,
 batching, error result, statistics, and producer/consumer lifecycle semantics
@@ -83,7 +94,7 @@ Hidden tests must cover:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates.

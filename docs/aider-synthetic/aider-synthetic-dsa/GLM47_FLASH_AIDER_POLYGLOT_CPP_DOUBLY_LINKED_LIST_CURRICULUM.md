@@ -14,7 +14,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_ALGORITHM_DATA_STRUCTURE_TOPICS.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Online Material Status
 
@@ -57,6 +57,36 @@ created in-repo and then pass the normal original-task admission process.
 
 ## Materialization Requirements
 
+## Remediation V2 Inventory
+
+The original table above is the immutable legacy audit inventory. The selected
+remediation workflow found that 19 generated roots shared one implementation
+and test template despite their different nouns. The fresh re-verification
+family therefore retains only `dll-book-shelf` and `dll-tab-strip` in place and
+uses new IDs for the 18 required replacements:
+
+`dll-navigation-journal`, `dll-elimination-circle`,
+`dll-route-segment-reverser`, `dll-scan-elevator`, `dll-timed-agenda`,
+`dll-accessible-gallery-walk`, `dll-fair-playback-queue`,
+`dll-pinned-unread-feed`, `dll-valet-neighbor-line`,
+`dll-selection-carousel`, `dll-crossfade-playlist`, `dll-priority-spool`,
+`dll-revision-squash-ledger`, `dll-budget-round-robin`,
+`dll-escalation-desk`, `dll-line-gap-editor`, `dll-consist-block-coupler`, and
+`dll-precedence-pick-chain`.
+
+These are not vocabulary variants. Their controlling audit/specification at
+`docs/aider-tasks-spec/aider-dsa/doubly-linked-list.md` binds 20 unique logic
+tags covering range splicing, cursor branch pruning, circular elimination,
+pointer reversal, SCAN direction, duration splitting, filtered navigation,
+fair selection, stable partitions, adjacent transposition, modular selection,
+priority aging, author-aware revision squashing, budget consumption, severity transitions,
+payload split/merge, crossfade accounting, block coupling, and
+dependency-constrained relinking.
+
+Materialize only the parallel generated root at
+`.w8-biayn/data/aider-tasks-reverify/aider-dsa/doubly-linked-list/`. Never
+regenerate or hand-edit the legacy family.
+
 Every candidate must have a distinct C++17 public API. For example, expose
 `activate_tab(TabId)` or `relocate_car(CarId, CarId)` rather than generic
 node-manipulation functions. Domain renaming alone is not enough: the set of
@@ -84,7 +114,7 @@ Hidden tests must exercise pointer-invariant failures:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates. A task judged to be a

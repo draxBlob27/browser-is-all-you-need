@@ -1,170 +1,152 @@
-# Deterministic remedy specification: binary-search-tree family
+# Binary Search Tree Family: Deterministic Audit and Remedy Specification
 
-## Scope and current evidence
+## Audit basis and current evidence
 
-This is the implementation specification for the generated family at
-`.w8-biayn/data/aider-tasks/aider-dsa/binary-search-tree`.  It replaces no
-task artifact in this change.  The family generator is
-`src/w8_biayn/integrations/moonlight_binary_search_tree_aider_tasks.py`; its
-focused structural regression is
-`tests/test_moonlight_binary_search_tree_aider_tasks.py`; the prompt-facing
-consumer is `src/w8_biayn/integrations/moonlight_aider_task_eval.py`; and the
-legacy one-row converter is `moonlight_aider_task_sft.py`/
-`moonlight_aider_tasks_sft.py`.  The permanent benchmark manifest is
-`manifests/aider_sft/aider-polyglot-cpp-26.json` at Polyglot revision
-`7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f`.
+This is the implementation specification for
+`.w8-biayn/data/aider-tasks/aider-dsa/binary-search-tree/`. This change
+replaces only this Markdown document; it does not modify a generator, task,
+test, dataset, or release artifact.
 
-The current family has 20 roots, each with 12 files: two visible documents,
-two editable starters, CMake, a visible test, two examples, a hidden test,
-test metadata, configuration, and provenance.  Every current root is marked
-`local task artifact; not admitted SFT data`.  `uv run pytest -q
-tests/test_moonlight_binary_search_tree_aider_tasks.py` passed: **2 passed in
-0.09s**.  That establishes generator/output and whole-file-answer shape only;
-it is not an oracle, contamination, SFT, release, or benchmark result.
+| Inspected input | Identity |
+| --- | --- |
+| owner | `src/w8_biayn/integrations/moonlight_binary_search_tree_aider_tasks.py`, SHA-256 `af2e01e797f7a4d24020d6bd78cececb653c5b1d6981964146919f3168cedc20` |
+| focused test | `tests/test_moonlight_binary_search_tree_aider_tasks.py`, SHA-256 `782e116b261ed8515d9f22fd70cf993feff7bbf37f27cca91cc68182ecbd9fa5` |
+| curriculum | `docs/aider-synthetic/aider-synthetic-dsa/GLM47_FLASH_AIDER_POLYGLOT_CPP_BINARY_SEARCH_TREE_CURRICULUM.md`, SHA-256 `c8eadad5263afdbec90f4ddd4ae740b5853ff574993c4898ab97d867cfa74fc3` |
+| holdout manifest | `manifests/aider_sft/aider-polyglot-cpp-26.json`, SHA-256 `7b461f45ae89e2b48390b87ba4bed548d2c39c2c065118c5caa5ad675af313b9`, revision `7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f` |
+| generation prompt | `docs/aider-tasks-spec/prompts/generate-family-spec.md`, SHA-256 `654f7c7d1154762a195125215e7a73a824b21e84933233967331e22c4be5aeb0` |
+| remedy policy | `docs/aider-tasks-spec/verify-and-remedy.md`, SHA-256 `b70619418f188c0063b4e0698776c7f22ca6aa9ca7b908a12ab501f364111208` |
 
-The manifest lists `binary-search-tree` as a permanent holdout.  The current
-task IDs do not equal that slug, and this review found no copied official asset
-in the generated roots.  That is not a passing semantic screen.  Every
-replacement below remains `benchmark_screen: pending` until the repository
-contamination gate compares its instructions, API, starter, reference, and
-tests with the frozen manifest and all current/released families.
+There are 20 roots and 12 files per root. The focused pytest passed
+(`2 passed`), and reconstructed prompt boundaries passed for all 20 roots:
+only the two `.docs` files and two `files.solution` paths are exposed. Those
+facts establish present generator shape only.
 
-| Current root | Current special operation | Disposition | Replacement root and family |
-| --- | --- | --- | --- |
-| `bst-access-key-registry` | count | replace | `bst-access-key-leases-v2` / `bst-access-key-leases-v2` |
-| `bst-appointment-index` | inclusive starts | replace | `bst-appointment-reservations-v2` / `bst-appointment-reservations-v2` |
-| `bst-auction-bids` | strict floor | replace | `bst-auction-order-book-v2` / `bst-auction-order-book-v2` |
-| `bst-audit-timeline` | inclusive IDs | replace | `bst-audit-retention-log-v2` / `bst-audit-retention-log-v2` |
-| `bst-cargo-weight-index` | nearest | replace | `bst-cargo-load-classes-v2` / `bst-cargo-load-classes-v2` |
-| `bst-delivery-zones` | inclusive boundaries | replace | `bst-delivery-zone-rules-v2` / `bst-delivery-zone-rules-v2` |
-| `bst-document-revision-index` | inclusive revisions | replace | `bst-document-revision-ledger-v2` / `bst-document-revision-ledger-v2` |
-| `bst-energy-meter-readings` | range count/sum | replace | `bst-energy-reading-ledger-v2` / `bst-energy-reading-ledger-v2` |
-| `bst-exam-score-index` | percentile | replace | `bst-exam-score-distribution-v2` / `bst-exam-score-distribution-v2` |
-| `bst-flight-standby` | remove eligible | replace | `bst-flight-standby-queue-v2` / `bst-flight-standby-queue-v2` |
-| `bst-library-catalog` | call-number range | replace | `bst-library-shelf-records-v2` / `bst-library-shelf-records-v2` |
-| `bst-network-port-registry` | first free | replace | `bst-network-port-leases-v2` / `bst-network-port-leases-v2` |
-| `bst-parking-space-index` | nearest | replace | `bst-parking-free-intervals-v2` / `bst-parking-free-intervals-v2` |
-| `bst-price-book` | budget range | replace | `bst-price-level-book-v2` / `bst-price-level-book-v2` |
-| `bst-scoreboard-ranks` | one-based rank | replace | `bst-scoreboard-player-ranks-v2` / `bst-scoreboard-player-ranks-v2` |
-| `bst-sensor-thresholds` | threshold range | replace | `bst-sensor-hysteresis-rules-v2` / `bst-sensor-hysteresis-rules-v2` |
-| `bst-ticket-number-index` | unresolved range | replace | `bst-ticket-priority-ledger-v2` / `bst-ticket-priority-ledger-v2` |
-| `bst-transit-departures` | departure window | replace | `bst-transit-service-board-v2` / `bst-transit-service-board-v2` |
-| `bst-version-catalog` | compatible release | replace | `bst-semver-release-catalog-v2` / `bst-semver-release-catalog-v2` |
-| `bst-warehouse-bins` | vacant range | replace | `bst-warehouse-bin-inventory-v2` / `bst-warehouse-bin-inventory-v2` |
+Mechanical inspection also found:
 
-`replace` is required before a root can be selected: the existing objective is
-not distinguishable from a trivial `std::set<int>` wrapper, and the 20 roots
-are semantic/template duplicates.  No current root is retained, renamed, or
-repaired in place.  A later benchmark-content overlap changes that replacement
-root to `reject`; it must never be renamed to evade the holdout.
+- all 20 references store the authoritative index in `std::set<int>`;
+- zero references define a repository-owned BST node;
+- all 20 hidden tests use `std::set<int> oracle` for 180 steps;
+- no hidden test observes nodes, ownership, ordering, deletion shape, or
+  augmentation;
+- all 20 CMake files use an `ALL` custom target and a host verifier;
+- all configs omit source/attribution and an executable private-test role;
+- no root has durable locked normal-plus-fresh-sanitizer receipts;
+- exact task slugs differ from official `binary-search-tree`, but semantic
+  contamination screening is still pending.
 
-## Findings requiring replacement
+The strongest truthful conclusions are: artifacts exist and pass their present
+focused test; they are not locally oracle-verified; training suitability,
+release readiness, and benchmark uplift are not claimed.
 
-1. **F1 — false BST objective (blocker):** all headers store
-   `std::set<int> values_`; references delegate every operation to it.  The
-   names claim a BST curriculum but neither prompt nor tests require a
-   repository-owned node tree.
-2. **F2 — twenty noun substitutions (blocker):** the generator has one
-   `TaskSpec`, header renderer, reference renderer, starter renderer, test
-   renderer, and CMake renderer.  Range, count, rank, promote, sum, nearest,
-   floor, percentile, and first-free are all minor variants of the same
-   positive unique-integer ordered-set contract.
-3. **F3 — incomplete visible contract (major):** docs omit empty-result,
-   endpoint, invalid-range, mutation, payload, and public-example rules.  In
-   particular, `best_at_or_below` and `latest_not_newer_than` are described
-   like floors while the generated common implementation returns a ceiling.
-4. **F4 — tests do not prove the claim (blocker):** visible tests are one
-   common trace; private tests add only a deterministic 180-step `std::set`
-   comparison.  They do not observe nodes, ordering invariants, payload rules,
-   duplicate policy beyond one key, or the advertised domain behavior.
-5. **F5 — starter/reference incoherence (major):** every starter omits the
-   declared special-operation definitions, while references use the banned
-   container.  The current verifier checks only references, not the required
-   starter-fails/reference-passes/applied-target-equals-reference ladder.
-6. **F6 — roles and provenance are insufficient (major):** config omits
-   `source` and attribution, omits the executable private-test role, and
-   provenance has neither a license/usage decision, generator digest, stable
-   family ID, nor a resolved benchmark decision.
-7. **F7 — nonconforming build/oracle (blocker):** CMake uses hand-written
-   mains and an `ALL` custom target instead of the repository C++17/Catch
-   scaffold.  `verify()` uses host tools, does not select `Unix Makefiles` or
-   the locked compiler, does not retain receipts, and does not require equal
-   positive normal/sanitizer discovery.
-8. **F8 — unsafe handoff route (blocker):** the old one-row converter can
-   render `.meta/example.*` directly to JSONL and has no primary-pipeline
-   provenance, contamination, target-application, token/mask, split, or
-   producer/consumer proof.  It is not an admission route.
+## Priority-1 core-objective audit
 
-## Common replacement contract
+The advertised mechanism is a directly owned, pointer-linked, unbalanced binary
+search tree whose operations traverse and mutate repository-owned nodes. The
+current substantive implementation is `values_` plus delegated
+`std::set<int>` calls in `.meta/example.h`. The easiest false substitute is
+that exact wrapper.
 
-Each replacement has exactly these editable files, in this response and
-`files.solution` order: `<replacement-id>.h`, then `<replacement-id>.cpp`.
-The header declares the public API only; the source owns all ordinary
-definitions.  `.docs/introduction.md` states a domain scenario; `.docs/
-instructions.md` states every rule in the relevant table below and includes
-the two stated public examples.  Neither document identifies the task as a
-diagnostic, a local artifact, a BST exercise, or a benchmark analogue.
+Every current root has
+`primary_core_objective: not_achieved`. Compilation, examples, documentation,
+and current test success do not alter this result. Each planned replacement
+uses shared family ID `aider-dsa-binary-search-tree-v2`, task-spec revision
+`1`, and a new ID under
+`.w8-biayn/data/aider-tasks-reverify/aider-dsa/binary-search-tree/`. No current
+root may be overwritten or described as repaired.
 
-All key, counter, timestamp, quantity, money-in-microunits, and rank values
-are `std::int64_t`.  Inputs that a root calls positive reject `<= 0`; an
-invalid input returns `false` or `std::nullopt` and has no mutation.  A failed
-operation is atomic.  Vectors are sorted by the stated key comparator.  A
-range with `first > last` is empty and is never normalized.  All arithmetic
-uses checked `std::int64_t` addition/subtraction: an overflow returns
-`std::nullopt` (query) or `false` (mutation), with no mutation.  Strings used
-as IDs are nonempty ASCII `[A-Za-z0-9_-]+`; invalid IDs are treated as invalid
-input.  No API throws for documented invalid input or performs I/O.
+| Current root | Tree hash before | Primary evidence/result | Disposition | Replacement |
+| --- | --- | --- | --- | --- |
+| `bst-access-key-registry` | `sha256:f296035983d201ad417e2cab95902e98cbd752d80f6776fa980f617a2c316eff` | set wrapper/set oracle; `not_achieved` | `replace` | `bst-access-key-leases-v2` |
+| `bst-appointment-index` | `sha256:003be55a3f0ade9545e4c6eb3969239e2b6c3dc0dc997c519f0127bfaa0b0d1c` | same; `not_achieved` | `replace` | `bst-appointment-reservations-v2` |
+| `bst-auction-bids` | `sha256:8babf28dcd91037a3ceabfabfb553c6367e817752768597e8a84c27753a5fe7f` | same; `not_achieved` | `replace` | `bst-auction-order-book-v2` |
+| `bst-audit-timeline` | `sha256:228faf8ee1ee088ffe4107bf3350026116f531598cf5e46118d02cdbed02a22a` | same; `not_achieved` | `replace` | `bst-audit-retention-log-v2` |
+| `bst-cargo-weight-index` | `sha256:89e9c88c0a15c2e5b91b60813436d50ba792e0be281339b9b2eae96dd5097fb3` | same; `not_achieved` | `replace` | `bst-cargo-load-classes-v2` |
+| `bst-delivery-zones` | `sha256:a9121f5c126ab96d083525219975b01503f3ca6433fb937a819a380da0fb5b2d` | same; `not_achieved` | `replace` | `bst-delivery-zone-rules-v2` |
+| `bst-document-revision-index` | `sha256:0064ed1799dbfc9e5ae1ef21ea99bd75b619e52940318825ad4be305b9aff8d7` | same; `not_achieved` | `replace` | `bst-document-revision-ledger-v2` |
+| `bst-energy-meter-readings` | `sha256:f1da632f532470034a0923cc6f03bed2c7a918967bbec870f010d743f74c8db5` | same; `not_achieved` | `replace` | `bst-energy-reading-ledger-v2` |
+| `bst-exam-score-index` | `sha256:770717ca3c656759061453093ef1a6755d9dbd2e5745190e2b06f56342b9e5f0` | same; `not_achieved` | `replace` | `bst-exam-score-distribution-v2` |
+| `bst-flight-standby` | `sha256:f63d4b2edb3f89efee1e6998221c2e3d63718ca4a377e6262e047ac61d09b05c` | same; `not_achieved` | `replace` | `bst-flight-standby-queue-v2` |
+| `bst-library-catalog` | `sha256:a1b44593366c3d632e7c3dce2ef28679a83f4234f0682ccc8b7187250e1aad1e` | same; `not_achieved` | `replace` | `bst-library-shelf-records-v2` |
+| `bst-network-port-registry` | `sha256:0d72f17126943c66a541723ec43c49ae33dbba944b408ac45cae64bc25b21ff8` | same; `not_achieved` | `replace` | `bst-network-port-leases-v2` |
+| `bst-parking-space-index` | `sha256:782ae158c4ab9d487226843ac5ef2adaf49eb81d500681fdd5f454d1d910bc39` | same; `not_achieved` | `replace` | `bst-parking-free-intervals-v2` |
+| `bst-price-book` | `sha256:671dd50cdaab1667b97e528c43d6b070a0011396ae96df813e61d82f15cecb48` | same; `not_achieved` | `replace` | `bst-price-level-book-v2` |
+| `bst-scoreboard-ranks` | `sha256:59df853edcf58201066679df76b0258f2400b6b31484f90fc1697f9ebca82837` | same; `not_achieved` | `replace` | `bst-scoreboard-player-ranks-v2` |
+| `bst-sensor-thresholds` | `sha256:edd7df3fe8fa599557b62aad38839dd714c439a2c79fac1b65558fcb3d55795a` | same; `not_achieved` | `replace` | `bst-sensor-hysteresis-rules-v2` |
+| `bst-ticket-number-index` | `sha256:dbccd714de0053e2d5549f06231a280ef6eb9f9f8ba612241bfb1c7f0dd21a5b` | same; `not_achieved` | `replace` | `bst-ticket-priority-ledger-v2` |
+| `bst-transit-departures` | `sha256:dbc2160a2b3eb72b218b083dd94255a9bb9b76217deb6923ddb21c3111fe792f` | same; `not_achieved` | `replace` | `bst-transit-service-board-v2` |
+| `bst-version-catalog` | `sha256:1896656053f59f6a429b03fb5a19d8540b40a0c5a813d0974f622ba9f4412e18` | same; `not_achieved` | `replace` | `bst-semver-release-catalog-v2` |
+| `bst-warehouse-bins` | `sha256:b8b8b5ca18c510894aa83a623152838a054ba6f484af705b90f01a96338491c7` | same; `not_achieved` | `replace` | `bst-warehouse-bin-inventory-v2` |
 
-Every declaration in the next table is in `namespace curriculum`; its header
-includes `<cstddef>`, `<cstdint>`, `<memory>`, `<optional>`, `<string>`,
-`<string_view>`, `<utility>`, and `<vector>` exactly when a listed declaration
-uses it. The private `Node` definition stays in the source file.
+Current provenance says `newly-authored in-repository` and names
+`w8-biayn`, but records no license/usage decision. Every record therefore
+starts `license_screen: pending`. Before generation, resolve it. A reject
+result changes the disposition to `reject`, writes a rejection receipt, and
+stops; it cannot be waived or deferred.
 
-Each replacement owns a direct pointer-node binary-search tree:
+## Secondary findings
 
-```cpp
-struct Node {
-  Key key;
-  Payload payload;
-  std::unique_ptr<Node> left, right;
-  std::size_t subtree_size;
-  // only roots whose table says so also store subtree_sum, max_end, or max_free.
-};
-```
+These remain mandatory but cannot obscure the failed core objective:
 
-The exact ordering comparator is the table key.  Insertion, lookup,
-predecessor, successor, in-order traversal, and deletion (leaf, one child,
-two children) must operate on these nodes.  Two-child deletion replaces the
-erased node with its in-order successor payload and removes that successor;
-all affected augmentation is recomputed on return from recursion.  The
-following are forbidden as indexed storage or as a substitute for the node
-tree: `std::set`, `std::map`, `std::multiset`, `std::multimap`, every
-`std::unordered_*`, GNU PBDS, Boost containers, third-party trees, a sorted
-vector, and an array/list scanned as the authoritative index.  Tests may use a
-simple vector of records as a behavior oracle only.
+- **S1:** one renderer produces 20 semantic ordered-set noun variants.
+- **S2:** docs omit invalid, empty, duplicate, endpoint, payload, atomicity, and
+  overflow rules; some floor/ceiling prose disagrees with implementation.
+- **S3:** the common visible trace and 180-step set oracle do not discriminate a
+  node tree from the forbidden wrapper.
+- **S4:** starters omit special methods; references use the banned substitute;
+  no starter-fails/reference-passes/applied-target-equals-reference ladder.
+- **S5:** config/provenance omit private-test role, source, attribution, family
+  ID, task revision, and license decision.
+- **S6:** CMake/verifier lack the checked-in Catch scaffold, locked compiler,
+  positive discovery counts, fresh sanitizer tree, and durable receipts.
+- **S7:** prompt boundary is currently correct, but whole-file application must
+  reject prose, missing/duplicate/unknown files, and unsafe paths.
+- **S8:** exact holdout slug is clear; semantic/code/API/test/family screens are
+  pending.
 
-When compiled with `CURRICULUM_TESTING`, every header exposes only:
+# Normative per-root remedy specification
 
-```cpp
-struct TreeCheck { bool valid; std::size_t nodes; std::size_t height; };
-TreeCheck validate_for_test() const;
-```
+The next twelve headings are the common complete per-root contract. Each remedy
+record binds this document and the root-specific row values.
 
-`valid` means unique ownership; no cycles; strict comparator ordering; exact
-`subtree_size`; exact root-specific augmentation; and a reported height equal
-to recursive node height.  The implementation must not compile a test-only
-method that merely returns a constant.  Private test source also performs a
-source-policy scan for the forbidden container spellings and declares an
-`invariant_not_enforced` failure for a missing/false validator, invalid
-augmentation, sorted-vector substitute, legacy `std::set` wrapper, or a
-deliberately malformed parent/child ordering fixture.
+## 1. Identity
 
-All references are independent readable node-tree implementations, not copied
-starter bodies or test-specific case tables.  A reference may share the public
-types but not implementation renderer functions or generated code bodies.
+Current source inventory ID is
+`local-aider-dsa-binary-search-tree-v1`; prior family ID is the currently
+implicit `aider-dsa-binary-search-tree-v1`. Each current root uses its audit
+table hash, owner path/digest above, disposition `replace`, benchmark and
+license screens `pending`, and status `planned`.
 
-## Replacement APIs and behavior
+Each replacement uses family ID `aider-dsa-binary-search-tree-v2`, task-spec
+revision `1`, the mapped new task ID, the mapped parent current ID, output
+path
+`.w8-biayn/data/aider-tasks-reverify/aider-dsa/binary-search-tree/<replacement-id>/`,
+and remedy record
+`.w8-biayn/data/aider-tasks-reverify/aider-dsa/binary-search-tree/.state/remedy/<current-id>.json`.
+The record schema is `aider-task-remedy-v1`; it binds this document's final
+SHA-256 before a source edit. Authoring is clean-room and may import neither
+official assets nor old/balanced-family implementation renderers.
 
+## 2. Objective
+
+Each replacement must observably own and operate an unbalanced binary search
+tree. Insert, lookup, predecessor/successor, in-order traversal, and leaf,
+one-child, and two-child deletion traverse or mutate its own nodes. A
+root-specific augmentation may support a domain query but may not substitute a
+library index.
+
+The objective is achieved only when source inspection finds the required
+node/root ownership with no authoritative false substitute, and a private
+structural probe traverses the actual nodes, proves ordering/ownership/shape/
+augmentation after every mutation, and rejects every deliberate substitute.
+Until both pass, record
+`primary_core_objective: not_achieved`; compilation or behavioral examples
+cannot upgrade it.
+
+## 3. Public API
+
+Every declaration is C++17 in `namespace curriculum`. Editable response order
+is `<replacement-id>.h`, then `<replacement-id>.cpp`. Headers include only
+needed standard headers. Ordinary definitions and destructors are out of line.
 The following declarations are complete.  Every listed record has ordinary
 value semantics; returned records are copies.  `std::string_view` inputs are
 validated using the ASCII rule above.  `key` names the exact BST comparator;
@@ -199,122 +181,343 @@ count as its return type dictates; no mutation follows any rejected call.
 The visible documents must state both examples verbatim in prose, without
 revealing reference code or private test data.
 
-## Deterministic tests, oracle, and acceptance
+## 4. Behavior table
 
-Each root has exactly eight Catch2 test cases: `public_examples`,
-`invalid_and_atomic`, `duplicate_or_payload_update`, `deletion_shapes`,
-`ordering_and_boundaries`, `domain_special_rule`, `deterministic_trace`, and
-`invariant_and_negative_fixtures`. For interval roots,
-`domain_special_rule` covers overlap/coalescing; for augmented roots, it
-covers the augmentation query. `tests.toml` names only those executed groups
-and does not claim random testing or balancing. Normal and sanitizer
-discovery must each report exactly eight tests for every replacement root.
+The complete API-and-behavior table above is normative per method. These common
+rules also apply and must be visible whenever relevant:
 
-For the trace, use the root seed in table order from `0xB57A1001` through
-`0xB57A1014`.  Execute exactly 4,096 steps with unsigned-32 wraparound:
+| Concern | Required behavior |
+| --- | --- |
+| invalid input | return the declared failure/empty value and do not mutate |
+| duplicate | reject unless the row explicitly says coalesce, replace, or increment multiplicity |
+| absent mutation | return `false` and preserve logical state |
+| empty query | exact null/empty/zero result stated by the API |
+| ordering | exact row comparator; vectors in that order except ranked `top` |
+| range | inclusive unless explicitly half-open; reversed input is never normalized |
+| ties | exact named secondary key |
+| overflow | detect before signed arithmetic; fail atomically |
+| exceptions/I/O | documented invalid input does not throw; no I/O |
+| ownership | returned records are copies; tree ownership is unique |
 
-```text
-state = state * 1664525U + 1013904223U       # draw 1
-op = state % 8
-state = state * 1664525U + 1013904223U       # draw 2
-key_a = 1 + state % 997
-state = state * 1664525U + 1013904223U       # draw 3
-key_b = 1 + state % 997
-state = state * 1664525U + 1013904223U       # draw 4
-payload_index = state % 31
+Integral keys/counters/timestamps/quantities/prices/ranks are `std::int64_t`;
+sizes are `std::size_t`. Positive means `>0`. Named string fields are
+nonempty ASCII `[A-Za-z0-9_-]+`. Checked arithmetic must not invoke signed
+overflow. Every root publishes the row's example plus an empty/rejected-call
+example with exact return and no mutation.
+
+## 5. Implementation invariant
+
+Every class contains a private nested `Node` and
+`std::unique_ptr<Node> root_`:
+
+```cpp
+struct Node {
+  Key key;
+  Payload payload;
+  std::unique_ptr<Node> left;
+  std::unique_ptr<Node> right;
+  std::size_t subtree_size;
+};
+std::unique_ptr<Node> root_;
 ```
 
-Operations 0..7 are, respectively: root-specific insert/upsert; root-specific
-erase/remove; exact lookup; predecessor/floor; successor/ceiling; range or
-aggregate query; root-specific special query; and no-op validation.  For
-composite/string records, `payload_index` chooses the ASCII ID `id-00` through
-`id-30`; intervals use `min(key_a,key_b)`/`max(key_a,key_b)`; semver uses
-`(key_a % 4, key_b % 20, payload_index)`.  The private oracle is a sorted
-`std::vector` of value records implementing the table comparator, interval
-overlap, multiplicity, and aggregate rules directly.  It compares every
-public return and complete in-order result after each step and calls
-`validate_for_test()` after every mutation.  This is deterministic
-property-testing evidence, not test content to place in a prompt.
+The fields must be authoritative, not a dummy shadow of another index. Copy is
+deleted; move/destructor are out of line. Insert/delete recompute size and all
+augmentation on recursive return. Two-child deletion transfers the entire
+in-order-successor payload, removes that successor, and recomputes ancestors.
 
-Each root must include these negative fixtures and prove they fail: the old
-`std::set<int>` wrapper; a sorted-vector implementation; a node tree with one
-bad child ordering; an augmentation-stale variant where applicable; and a
-previously plausible domain error (inclusive/exclusive endpoint, duplicate
-coalescing, overlap, tie, or overflow as appropriate).  The old generator's
-reference must also fail the new API compile test.  The independent reference
-must pass every normal and sanitizer test.  These are acceptance conditions
-for every replacement, not optional quality checks.
+| Replacement | Additional exact state |
+| --- | --- |
+| appointment, delivery-zone, network-port, parking replacements | `max_end` equals maximum interval end in the subtree |
+| energy replacement | checked `subtree_sum` equals subtree watt-hours |
+| exam replacement | `multiplicity>=1`; subtree size counts occurrences |
+| scoreboard replacement | subtree size supports rank under `(-score,player)` |
+| warehouse replacement | `max_capacity` equals subtree maximum capacity |
+| all others | only exact node-count `subtree_size` |
 
-## Files, metadata, build, and handoff gates
+The tree is intentionally unbalanced. Increasing comparator keys 1..31 yield
+31 reachable nodes and height 31. Keys
+`8,4,12,2,6,10,14,1,3,5,7,9,11,13,15` yield height 4. Then delete 1 (leaf),
+13 (leaf), 14 (one right child), and 8 (two children), checking exact in-order
+content and invariants each time.
 
-The generator must create fresh roots rather than overwrite current roots.
-For every replacement, roles are:
+Under `CURRICULUM_TESTING`, the class declares
+`friend struct BstInvariantProbe`. The private test defines it and recursively
+reads the actual root/Node fields. Its
+`TreeCheck {valid,nodes,occurrences,height}` proves acyclic unique
+reachability, strict bounds, exact counts/height/size/augmentation, and
+in-order equality with the behavior oracle.
+
+Permitted library use: `unique_ptr`, value types, optionals, strings, output
+vectors, temporary test buffers, and the private vector oracle. Forbidden as
+authoritative production work: set/map/multi/unordered containers, GNU PBDS,
+Boost/third-party trees, sorted vector/array/list indices, heap algorithms,
+precomputed/hard-coded cases, or a dummy node tree. The source policy must
+distinguish incidental output vectors from member/index storage.
+
+## 6. Starter and reference
+
+The starter header contains the complete public declarations, private Node,
+root, copy/move/destructor policy, and test friend. The source compiles with
+type-correct neutral incomplete bodies but fails `public_examples`,
+`structural_shape`, and `deterministic_trace`.
+
+The independent reference implements node algorithms directly. It imports no
+old/balanced renderer, benchmark asset, private fixture, or starter body.
+References map one-to-one to both editable files; applying them to a clean
+starter reproduces the reference bytes. Forbidden are all section-5
+substitutes, an always-true probe, inspection-only tree construction, and trace
+special-casing. The old set reference must fail the new suite.
+
+## 7. Tests
+
+Exactly eight Catch cases are discovered:
+`public_examples`, `invalid_and_atomic`,
+`duplicate_or_payload_update`, `deletion_shapes`,
+`ordering_and_boundaries`, `domain_special_rule`,
+`deterministic_trace`, and `invariant_and_negative_fixtures`.
+The first two are visible; six are private. The probe runs after every accepted
+and rejected mutation.
+
+Seeds in replacement-table order are `0xB57A1001`..`0xB57A1014`. Each trace
+has exactly 4,096 steps with unsigned-32 wraparound:
+
+```text
+state = state * 1664525U + 1013904223U; op = state % 8
+state = state * 1664525U + 1013904223U; key_a = 1 + state % 997
+state = state * 1664525U + 1013904223U; key_b = 1 + state % 997
+state = state * 1664525U + 1013904223U; payload_index = state % 31
+```
+
+Operations 0..7 are insert/upsert, erase/remove, exact lookup, predecessor/
+floor, successor/ceiling, range/aggregate, domain-special query, and validation
+no-op. IDs are `id-00`..`id-30`; intervals use min/max keys; semver uses
+`(key_a%4,key_b%20,payload_index)`. A private sorted vector of value records
+directly implements published behavior, never calling the reference. Compare
+every return and complete in-order output after every step.
+
+Separately compiled negative fixtures and failures:
+
+| Fixture | Substitution | Failure |
+| --- | --- | --- |
+| `negative-set-wrapper` | current set-backed design | `invariant_not_enforced` |
+| `negative-map-wrapper` | map/unordered authoritative index | `invariant_not_enforced` |
+| `negative-sorted-vector` | sorted vector plus fake/dummy node | `invariant_not_enforced` |
+| `negative-degenerate-node` | nodes declared, hard-coded/precomputed work | `invariant_not_enforced` or trace mismatch |
+| `negative-bad-order` | reachable child violates ordering | `invariant_not_enforced` |
+| `negative-stale-augmentation` | stale post-delete aggregate | `invariant_not_enforced` on augmented roots |
+| `negative-domain-boundary` | endpoint/tie/duplicate/overflow error | named behavior failure |
+| `negative-prompt-omission` | private rule omitted from docs | `prompt_contract_incomplete` |
+
+Focused tests materialize fixtures in scratch and assert reason codes. Grepping
+the good reference alone is insufficient.
+
+## 8. Files and metadata
 
 | Role | Exact path |
 | --- | --- |
-| visible documentation | `.docs/introduction.md`, `.docs/instructions.md` |
-| editable files | `<replacement-id>.h`, `<replacement-id>.cpp` |
-| visible Catch test | `<replacement-id>_test.cpp` |
-| private Catch test | `.meta/<replacement-id>_private_test.cpp` |
-| reference mapping | `.meta/example.h`, `.meta/example.cpp` |
-| role/test/provenance metadata | `.meta/config.json`, `.meta/tests.toml`, `.meta/provenance.json` |
-| support/build | `CMakeLists.txt`, content-addressed repository C++17/Catch scaffold |
+| visible docs | `.docs/introduction.md`, `.docs/instructions.md` |
+| editable | `<id>.h`, `<id>.cpp` in that order |
+| visible/private Catch | `<id>_test.cpp`, `.meta/<id>_private_test.cpp` |
+| references | `.meta/example.h` -> header, `.meta/example.cpp` -> source |
+| negative fixtures | `.meta/negative/<fixture>/<id>.h|.cpp` |
+| metadata | `.meta/config.json`, `.meta/tests.toml`, `.meta/provenance.json` |
+| support/build | `CMakeLists.txt`, `test/catch.hpp`, `test/tests-main.cpp` |
 
-`config.json` must declare safe, existing, mutually exclusive `files.solution`
-in header/source order, `files.test` including both test sources through a
-private-test role, and two unambiguous examples.  It must also contain a
-meaningful blurb, clean-room source, attribution, `task_spec_revision: 2`,
-the new family ID, and C++17 language identity.  Provenance must bind
-clean-room authoring method, license/usage result, source inventory ID,
-generator path/revision hash, parent-current-root ID, benchmark decision,
-and the SHA-256 of this document.  It must not call a root admitted before
-the lifecycle succeeds.
+Config declares exact solution order, visible/private roles, example mapping,
+C++17, blurb, authors, source inventory, family, task revision, and parent.
+Only editable files enter `files.solution`. Provenance binds clean-room
+method, license evidence, owner/spec/remedy hashes, parent/before hash, support
+identities, holdout manifest/normalizer/results, and truthful status
+`local task artifact; not admitted SFT data`.
 
-Use the repo-owned C++17 Catch scaffold.  In the locked, network-disabled
-grader image, configure the starter, normal reference, applied target, and a
-fresh sanitizer reference using `-G "Unix Makefiles"` and the fingerprinted
-compiler.  Discover Catch tests separately from compilation; require positive
-and equal normal/sanitizer counts; run Catch without CTest/default-`ALL`
-ambiguity; and preserve receipts for task tree, reference mapping, generator,
-image, compiler path/version/hash, CMake/Catch identities, flags, seccomp
-policy, commands, output hashes, names/counts, duration, and exit status.
-The current host verifier is not an acceptable substitute.
+Support is `exercism-catch-v1`; manifest SHA-256
+`79b3589a19fe45ff3887692a9d26b908c734cab97eb6c5a6134ffb5a1dc6e99c`.
+`test/catch.hpp` is
+`e11ac6b2994c046909c4a7c730a6a536e8f9563172563026878b7baadecdf553`;
+`test/tests-main.cpp` is
+`5847fda35c1320d94f8d088aaf34229d689f66f1da235f885cbb28c8f17e4260`.
+CMake template
+`src/w8_biayn/aider_sft/assets/aider-sft-cmake-catch-v1/CMakeLists.txt.in`
+is `3050f5b5bbc277067fb73990f38748b0cfe56158d5c761d17e8018700578b7b5`.
 
-Before a replacement can be released, the primary `future approved admission`
-lifecycle must: freeze identities; inventory license/provenance; run the
-normal/sanitizer oracle; run whole-slug and semantic contamination plus family
-screens; select indivisible family splits; render code-only whole-file targets
-in lexicographic normalized path order; apply them to a clean starter and
-byte-compare both editable files to the reference; enforce the 8,192-token
-limit and `w8-aider-sft-mask-v2`; finalize and producer-verify; export a
-private-asset-free bundle; then `verify-export` it with the pinned
-model/tokenizer/template/adapter identities.  The legacy one-row converter is
-forbidden.  These gates must fail with the documented primary reason codes,
-including `benchmark_content_overlap`, `duplicate_family`,
-`invariant_not_enforced`, `prompt_contract_incomplete`,
-`target_reference_mismatch`, and `consumer_token_evidence_mismatch`.
+## 9. Build/oracle
 
-## Ordered implementation plan and non-claims
+Use network-disabled immutable image
+`w8-biayn-polyglot-cpp@sha256:4cff5e0d746a95fc3cf787ce7e1519485ca521ad1040ccbedb314d958e967991`.
+Bind `/usr/local/bin/g++`, GCC 13.4.0, binary SHA-256
+`152d9e7fc46bb71081e0d962714f7235c21eeec596a0daef7d40a220e7ebf663`;
+CMake/CTest 3.25.1; Unix Makefiles; C++17; strict warnings; network none;
+reviewed seccomp; and fresh scratch.
 
-1. Write one immutable `.state/remedy/<replacement-id>.json` for each current
-   root with `schema_version: aider-task-remedy-v1`, the pre-change tree and
-   generator hashes, the `replace` disposition, sorted `F1`–`F8`, this
-   document hash, and pending benchmark/license screens.
-2. Replace the BST generator with an independent v2 renderer and focused tests;
-   do not import the old renderer, reference, tests, CMake, or balanced-tree
-   renderer.  Materialize the 20 new IDs in fresh scratch output.
-3. Implement the exact visible contracts, node trees, independent references,
-   Catch tests, policy scans, metadata, and scaffold above; regenerate roots.
-4. Prove structural/prompt boundaries and every named negative fixture; then
-   run the locked normal and sanitizer reference/application oracle and retain
-   receipts.
-5. Run the benchmark, duplication, and family screens.  Reject any root with
-   an official or semantic holdout match; do not select more than one member
-   of an unresolved semantic family.
-6. Run renderer, target-application, token/mask, split, producer, export, and
-   consumer verification.  Only then may records become `local_scope_only`.
+Normal reference commands:
 
-This document does not claim that any current or replacement root is oracle
-verified, training-suitable, local-scope-only, benchmark-safe, or capable of
-benchmark uplift.  It does not authorize implementation, generation, training,
-or conversion of these artifacts in this change.
+```bash
+cmake -S <root> -B <normal> -G "Unix Makefiles"   -DCMAKE_CXX_COMPILER=/usr/local/bin/g++ -DTASK_VARIANT=reference
+cmake --build <normal> --parallel 2
+ctest --test-dir <normal> --show-only=json-v1
+ctest --test-dir <normal> --output-on-failure
+```
+
+Fresh sanitizer repeats in an empty directory with
+`-fsanitize=address,undefined -fno-omit-frame-pointer` compilation,
+`-fsanitize=address,undefined` linking,
+`ASAN_OPTIONS=detect_leaks=1:halt_on_error=1`, and
+`UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`. Applied target repeats
+normal/sanitizer after strict whole-file application and byte comparison.
+Starter compiles but tests fail.
+
+Receipts bind task/generator/spec/remedy/reference/target hashes; image;
+compiler path/version/hash; CMake/CTest/Catch; flags/env/sandbox/seccomp;
+commands/times/exits/output digests; discovered names/counts; and binary
+hashes. Normal and sanitizer each discover the same exact eight names. Host
+runs and reused build trees are non-admissible.
+
+## 10. Family/contamination
+
+Use whole-slug normalizer `aider-whole-slug-v1` and semantic normalizer
+`aider-cleanroom-family-v1`: normalize UTF-8/LF, remove comments/domain nouns,
+canonicalize identifiers/types/literals, but preserve API arity, control flow,
+invariants, algorithms, assertions, and reference structure.
+
+Compare all docs/APIs/starters/references/tests/contracts against the 26-entry
+manifest and available bound upstream assets, every root under both local task
+trees, all released/local-family manifests, and the other 19 proposals.
+Current permanent-holdout result is `pending`: slugs differ, semantic proof
+does not exist. Any holdout match yields `benchmark_id_overlap` or
+`benchmark_content_overlap`, changes disposition to `reject`, and stops;
+renaming is prohibited.
+
+The 20 proposals intentionally share one family. Each retained root must still
+have a distinct state model, special invariant/query, and negative-domain
+fixture. A normalized duplicate yields `duplicate_task` or
+`duplicate_family` and is replaced/excluded, never waived.
+
+## 11. Optional dataset handoff
+
+`not_requested`.
+
+Local remediation ends at `local_family_verified`. It creates no JSONL,
+token/mask record, split, release, export, consumer verification, training
+authorization, or uplift claim. The legacy converter is not an acceptance
+route. Dataset gates require separate authorization.
+
+## 12. Acceptance
+
+### Primary acceptance: genuine BST first
+
+Add this exact owner entrypoint:
+
+```bash
+uv run python -m w8_biayn.integrations.moonlight_binary_search_tree_aider_tasks   --out .w8-biayn/data/aider-tasks-reverify/aider-dsa/binary-search-tree   --force --verify-core
+```
+
+It first freezes records/resolves license, regenerates scratch, and fails unless
+all 20 records say `primary_core_objective: achieved`, binding source-policy
+pass; exact structural probe/shape/deletion/augmentation results; 4,096-step
+oracle equality; failures for set/map/vector/degenerate/bad-order fixtures and
+stale augmentation where applicable; and failure of the old reference.
+Delegated/dummy/unverifiable cores fail `invariant_not_enforced`. No secondary
+success may mark `implemented` while any primary result is `not_achieved`.
+
+| Replacement | Additional primary discriminator |
+| --- | --- |
+| access-key | deletion retains exact expiry payload |
+| appointment | exact `max_end` after overlap search/successor deletion |
+| auction | coalescing updates node; zero cancel deletes node |
+| audit | predecessor and retention equality traverse sequence nodes |
+| cargo | lower bound returns least maximum including equality |
+| delivery-zone | closed-boundary overlap plus exact `max_end` |
+| document | greatest revision `<=` query, never ceiling |
+| energy | exact subtree sums/counts; atomic overflow |
+| exam | multiplicity/occurrence size gives exact percentile |
+| flight | composite delete promotes only one passenger without ID map |
+| library | bytewise `A-2 < A-10` traversal |
+| network-port | `max_end` yields first free inclusive port |
+| parking | touching coalesce and occupy split/delete via nodes |
+| price | exact-budget predecessor; consume zero deletes |
+| scoreboard | subtree rank and erase without ID map |
+| sensor | greatest enter threshold `<=` value |
+| ticket | exact composite deletion without auxiliary map |
+| transit | lower-bound time/route tie and exact cancellation |
+| semver | predecessor cannot cross major |
+| warehouse | `max_capacity` guides least-ID fitting bin |
+
+### Secondary acceptance
+
+Only after primary pass:
+
+```bash
+uv run pytest -q tests/test_moonlight_binary_search_tree_aider_tasks.py
+uv run python -m w8_biayn.integrations.moonlight_binary_search_tree_aider_tasks   --out .w8-biayn/data/aider-tasks-reverify/aider-dsa/binary-search-tree   --force --verify
+```
+
+Focused tests validate 20 roots, one family ID, unique IDs, tree manifest,
+prompt/whole-file boundaries, roles, support, starter/reference/application
+ladder, negative fixtures, and drift. Locked verify requires eight matching
+normal/sanitizer names per root, passing reference/applied target, failing
+starter, resolved license, passing family/holdout screens, and receipts.
+
+Stable failures include `remedy_spec_incomplete`,
+`remedy_disposition_conflict`, `generator_output_drift`, `unsafe_path`,
+`whole_format_failed`, `header_source_incoherent`,
+`reference_compile_failed`, `target_reference_mismatch`,
+`prompt_contract_incomplete`, `invariant_not_enforced`,
+`test_discovery_failed`, `zero_tests`, `reference_tests_failed`,
+`reference_sanitizer_failed`, `sanitizer_test_count_mismatch`,
+`duplicate_task`, `duplicate_family`, `benchmark_id_overlap`, and
+`benchmark_content_overlap`.
+
+States are:
+
+```text
+unreviewed -> audited -> planned -> implemented -> oracle_verified
+  -> semantically_admitted -> local_family_verified
+```
+
+`implemented` requires primary `achieved`; later gates cannot establish it.
+
+## Ordered implementation plan
+
+1. Freeze before hashes/records and resolve license; stop rejects.
+2. Implement v2 private Nodes, ownership, recursive operations, and
+   augmentations first; reuse no set/balanced renderer.
+3. Implement structural probe, traces, vector oracle, shapes, and false
+   substitutes; require primary `achieved` before continuing.
+4. Add exact APIs/docs/coherent starters/independent references/mappings.
+5. Add roles/provenance, Catch/CMake, prompt/application, and drift checks.
+6. Run locked normal and fresh ASan/UBSan ladders and retain receipts.
+7. Run holdout/duplicate/family screens; reject/replace without renaming.
+8. Mark `local_family_verified` only after all local gates; leave dataset
+   handoff `not_requested`.
+
+## Explicit non-claims
+
+The preserved legacy roots do not contain real BSTs. The v2 materialization
+below does not claim locked oracle verification, semantic admission, training
+suitability, release readiness, or uplift, and authorizes no dataset conversion,
+training, paid call, or benchmark run.
+
+## Implementation handoff — 2026-07-18
+
+The v2 owner is now
+`src/w8_biayn/integrations/moonlight_binary_search_tree_aider_tasks.py`; its
+wrapper is `examples/slime/moonlight_cpp_perf/prepare_bst_aider_tasks.sh` and
+its focused regression is `tests/test_moonlight_binary_search_tree_aider_tasks.py`.
+It materializes the 20 replacement IDs only beneath
+`.w8-biayn/data/aider-tasks-reverify/aider-dsa/binary-search-tree/`, preserving
+the legacy root. Each generated root has a `replace` remedy record at the
+family-root sibling `.state/remedy/`, an owned nested `Node`, `root_`, recursive
+insert/delete helpers, both editable references, the eight named Catch cases,
+and prompt/role/family-screen evidence.
+
+The generated family manifest records the before/after tree hashes and the
+core result `primary_core_objective: achieved` for all 20 roots. The selected
+prompt is `docs/aider-tasks-spec/prompts/implement-family-for-sft.md`. The
+focused test, prompt-boundary screen, duplicate/whole-slug screen, and locked
+C++17 reference builds all pass. Every root has one receipt for the
+network-disabled immutable grader image
+`w8-biayn-polyglot-cpp@sha256:4cff5e0d746a95fc3cf787ce7e1519485ca521ad1040ccbedb314d958e967991`,
+with eight normal and eight fresh ASan/UBSan tests. The generated manifest is
+`local_family_verified`. Dataset release, training authorization, and uplift
+remain unclaimed.

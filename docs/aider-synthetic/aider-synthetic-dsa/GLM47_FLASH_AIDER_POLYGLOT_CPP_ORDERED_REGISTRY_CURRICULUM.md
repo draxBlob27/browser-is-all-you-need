@@ -1,8 +1,8 @@
 # Ordered Registry Curriculum: Decontaminated Grade-School Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: locally reverified v2 curriculum. The v1 generated family remains
+preserved as audit input. The v2 roots are local task artifacts only; they are
+not admitted SFT roots, an online dataset, or benchmark evidence.
 
 The official Aider Polyglot C++ `grade-school` task is a permanent benchmark
 holdout. This document does **not** propose twenty renamed roster exercises.
@@ -14,7 +14,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_ALGORITHM_DATA_STRUCTURE_TOPICS.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -49,30 +49,30 @@ The following tasks materialize as newly authored C++17 roots. Their
 interfaces, tests, reference implementations, and provenance must be created
 in-repo and pass the normal original-task admission process.
 
-## Proposed Decontaminated Tasks
+## Remediated Decontaminated Tasks
 
-| ID | Task | Visible contract |
+| V2 ID | Task | Distinct primary mechanism |
 |---|---|---|
-| `registry-incident-routing` | Incident routing | Route uniquely identified incidents by service and severity; query the oldest unresolved incident per service. |
-| `registry-library-loans` | Library loans | Assign books to patrons, reject a second active loan of one copy, and query overdue loans by due date. |
-| `registry-warehouse-batches` | Warehouse batches | Place batches in storage zones with capacity limits, move a batch, and list expiring batches. |
-| `registry-clinic-triage` | Clinic triage | Register patients by triage band, update condition, and select the next patient by severity then arrival time. |
-| `registry-conference-seats` | Conference seats | Reserve a session seat, cancel or transfer it, and list waitlisted attendees by request timestamp. |
-| `registry-parking-permits` | Parking permits | Issue permits by zone and expiry, revoke them, and query the next permit to expire. |
-| `registry-feature-enrollment` | Feature enrollment | Assign accounts to rollout cohorts, migrate an account, and compute cohort utilization. |
-| `registry-hotel-rooms` | Hotel rooms | Assign reservations to room classes, check in/out guests, and find the earliest available room. |
-| `registry-cargo-customs` | Cargo customs | Track cargo declarations by risk lane, update clearance status, and enumerate pending inspections by deadline. |
-| `registry-maintenance-crews` | Maintenance crews | Assign work orders to crews, prevent double assignment, and query crew workload totals. |
-| `registry-museum-assets` | Museum assets | Place assets in galleries, transfer assets, and list insurance renewal deadlines. |
-| `registry-vaccine-inventory` | Vaccine inventory | Allocate lot doses to clinics, enforce nonnegative stock, and prioritize soonest-expiring lots. |
-| `registry-subscription-plans` | Subscription plans | Register accounts under plans, upgrade or cancel memberships, and report active counts by billing cycle. |
-| `registry-flight-gates` | Flight gates | Assign flights to compatible gates, resolve gate conflicts, and query the next departure at a gate. |
-| `registry-grant-reviews` | Grant reviews | Assign reviewers subject to conflict rules, withdraw assignments, and find under-reviewed proposals. |
-| `registry-device-fleet` | Device fleet | Group devices by deployment ring, move a device, and list stale check-ins by timestamp. |
-| `registry-support-escalations` | Support escalations | Group cases by escalation policy, alter priority, and select the oldest SLA breach candidate. |
-| `registry-food-allergens` | Food allergens | Register dishes with allergen sets, update a recipe, and query safe dishes for a forbidden set. |
-| `registry-shipping-contracts` | Shipping contracts | Register contracts by region and weight band, retire contracts, and resolve the best applicable contract. |
-| `registry-audit-retention` | Audit retention | Place audit records in retention classes, apply legal holds, and enumerate records eligible for deletion. |
+| `registry-audit-retention` | Audit retention | Expiry/hold ledger with eligibility-gated erasure (`repair-in-place`). |
+| `customs-clearance-workflow` | Cargo customs | Explicit filed→inspected→cleared finite-state machine. |
+| `triage-priority-board` | Clinic triage | Mutable clinical priority with destructive next-patient selection. |
+| `session-seat-waitlist` | Conference seats | Separate seated/waiting states with deterministic promotion. |
+| `device-heartbeat-index` | Device fleet | Monotonic heartbeat index independent of deployment-ring moves. |
+| `rollout-token-ring` | Feature rollout | Clockwise lower-bound routing on a mutable consistent-hash token ring. |
+| `gate-conflict-scheduler` | Flight gates | Compatibility-aware half-open interval calendars. |
+| `dish-allergen-catalog` | Food allergens | Canonical set storage and set-disjointness queries. |
+| `proposal-review-matcher` | Grant reviews | Separate conflict and assignment edge relations. |
+| `room-stay-calendar` | Hotel rooms | Multi-stay room interval calendars and earliest-free search. |
+| `service-incident-queue` | Incident routing | Maintained per-service priority indices under escalation/removal. |
+| `copy-loan-ledger` | Library loans | One-copy loan lifecycle with forward-only renewals. |
+| `crew-workload-ledger` | Maintenance crews | Weighted-capacity conservation and atomic reassignment. |
+| `asset-custody-history` | Museum assets | Append-only event history with predecessor-at-time lookup. |
+| `permit-expiry-wheel` | Parking permits | Extendable modular expiry wheel with stale absolute-due suppression. |
+| `shipping-rate-resolver` | Shipping contracts | Multi-criterion overlapping interval resolution. |
+| `billing-cycle-counter` | Subscription plans | Reconciled two-dimensional plan/cycle aggregates. |
+| `sla-escalation-heap` | Support escalations | Owned indexed binary heap with sift-up/down and removals. |
+| `vaccine-lot-fefo` | Vaccine inventory | Transactional multi-lot first-expiry-first-out allocation. |
+| `warehouse-batch-splitter` | Warehouse batches | Unit conservation across split/merge and weighted zone capacity. |
 
 ## Materialization Requirements
 
@@ -85,7 +85,13 @@ For each task, author a documented provenance record, starter header/source
 pair, independent reference implementation, visible examples, hidden Catch
 tests, normal build, and fresh locked sanitizer build.
 
-Hidden tests must cover:
+The v1 roots failed the independence gate: all twenty rendered the same
+`Entry` vector and register/transition/query implementation. Deterministic
+disposition therefore retained only the lexicographically first salvageable
+root ID (`registry-audit-retention`) and replaced the other nineteen. A v2
+root must fail verification if the legacy generic representation returns.
+
+Hidden tests and the owner-side core screen cover:
 
 - identity collision and duplicate-registration behavior;
 - the task-specific reassignment, cancellation, expiry, capacity, or state
@@ -94,14 +100,36 @@ Hidden tests must cover:
 - invalid cross-group transitions and failed operations with no state mutation;
 - removal of the final member of a group and empty-query behavior;
 - aggregate/count behavior where exposed;
-- randomized mutation sequences checked against a straightforward map/vector
-  oracle;
+- deterministic operation traces checked after every operation against an
+  independent vector/value oracle, including every public operation class;
+- one compiled topic-specific false substitute whose executed tests must reject
+  the incorrect logic; and
 - a final contamination screen proving the candidate remains outside the
   benchmark holdout family.
 
+## Materialization And Evidence
+
+The owner is
+`src/w8_biayn/integrations/moonlight_ordered_registry_aider_tasks.py`, with
+task-specific renderers in `moonlight_ordered_registry_cases.py`. It writes
+only the parallel reverify root:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_ordered_registry_aider_tasks.sh \
+  --force --verify-core --verify
+```
+
+The legacy root is never regenerated. Per-root v1/v2 tree hashes and
+dispositions live under the reverify sibling `.state/remedy/`; the
+materialization manifest records prompt, role/reference, unique-family, core,
+and all-26-holdout semantic screens. Oracle evidence uses the immutable
+`w8-biayn-polyglot-cpp@sha256:4cff5e0d746a95fc3cf787ce7e1519485ca521ad1040ccbedb314d958e967991`
+image with networking disabled. Every v2 reference discovered and passed two
+normal and two fresh ASan/UBSan CTests.
+
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates.

@@ -13,7 +13,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_ALGORITHM_DATA_STRUCTURE_TOPICS.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Online Material Status
 
@@ -27,7 +27,24 @@ interfaces, tests, reference implementations, random-level policy, and
 provenance must be created in-repo and pass the normal original-task admission
 process.
 
-## Proposed Original Tasks
+## Legacy Audit And V2 Direction
+
+The first materialization implemented one generic CRUD/rank/page skip list 20
+times under renamed domain APIs. It remains preserved under
+`.w8-biayn/data/aider-tasks/aider-dsa/skip-list/` as audit input. The v2
+re-verification replaces that template family with the 20 mechanism-specific
+roots defined in `docs/aider-tasks-spec/aider-dsa/skip-list.md` and writes only
+`.w8-biayn/data/aider-tasks-reverify/aider-dsa/skip-list/`.
+
+The v2 inventory covers descending price towers, indexed widths, counted
+multiplicity, interval augmentation, finger search, circular successor,
+deterministic and explicit tower heights, bidirectional links, unrolled
+blocks, tombstones and compaction, version snapshots, lexicographic prefixes,
+coupled indexes, weighted spans, disjoint extents, expiry buckets, first-fit
+gaps, floor thresholds, and tower merging. These are planning roots, not a
+release quota or dataset admission.
+
+## Legacy Proposed Tasks
 
 | ID | Task | Visible contract |
 |---|---|---|
@@ -79,7 +96,25 @@ Hidden tests must cover:
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
-Before any task is added to a dataset, it must pass source licensing,
-provenance, compiler-image, oracle, sanitizer, contamination, split-family,
-rendering, token/mask, and release verification gates.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
+Local remediation ends at `local_family_verified` after owner regeneration,
+prompt/role checks, mandatory network-disabled Docker normal and fresh
+ASan/UBSan reference evidence, negative-fixture execution, and family plus
+benchmark screening. Any future dataset intake requires a separately
+authorized contract.
+
+## Local Re-verification Status
+
+The first v2 completion claim was withdrawn because its synthetic clone
+controls bypassed the production pair evaluator and its marker-only negative
+sources failed at CMake configure without executing tests. V3 reopens all 20
+remedies. It derives seven hard-rule dimensions from emitted artifacts, routes
+all 190 pairs plus the required emitted-artifact adversarial clones through one
+production evaluator, and generates one complete compiling topic-specific
+false source per root. `local_family_verified` may be restored only after the
+pinned, network-disabled Docker run passes 40 normal and 40 fresh ASan/UBSan
+tests and all 20 false sources discover and execute the same tests before being
+rejected. Those v3 gates have now passed and the family is
+`local_family_verified`. Exact dispositions, findings, hashes, and receipt locations are
+recorded in `docs/aider-tasks-spec/aider-dsa/skip-list.md`. This remains local
+task evidence only; it is not dataset release, export, or training readiness.

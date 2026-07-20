@@ -1,8 +1,9 @@
 # XOR Linked List Curriculum: Topic 1, Subtask 7
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: v3 hard-rule remediation curriculum. The legacy generated family is
+preserved under `.w8-biayn/data/aider-tasks/`; this document controls only the
+parallel re-verification materialization. It does not claim dataset admission,
+training authorization, or benchmark uplift.
 
 This is the seventh subtask under **Linked Structure Invariants**. It teaches
 the predecessor-XOR-successor traversal invariant, but it deliberately uses
@@ -28,7 +29,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_ALGORITHM_DATA_STRUCTURE_TOPICS.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Online Material Status
 
@@ -43,37 +44,52 @@ safe index-XOR representation. Their interfaces, tests, reference
 implementations, and provenance must be created in-repo and pass the normal
 original-task admission process.
 
-## Proposed Original Tasks
+## Remediated Task Inventory
 
-| ID | Task | Visible contract |
+The legacy family used one add/remove/move template under 20 domain names. The
+deterministic remedy retains the lexicographically smallest independently
+justified root, replaces 16 roots with new IDs, and rejects three semantic
+twins exposed by the v2 hard-rule re-audit. Shared safe XOR-slot mechanics are
+permitted, but a superset payload/state object or shared policy-switch
+reference is not. Public APIs, necessary state or algorithm,
+selection/mutation rules, invalid behavior, reference control flow,
+per-operation oracle, and compiled negative fixture must remain materially
+different across every counted pair.
+
+| Legacy ID | Disposition | V3 ID | Observable core capability |
 |---|---|---|
-| `xor-embedded-playlist` | Embedded playlist | Add, remove, and move compact track records by stable handle. |
-| `xor-device-event-log` | Device event log | Append, prune, and traverse compact event records in either direction. |
-| `xor-firmware-task-chain` | Firmware task chain | Schedule, cancel, and inspect adjacent low-memory task records. |
-| `xor-sensor-sample-history` | Sensor-sample history | Retain a bounded history, discard old samples, and navigate neighbors. |
-| `xor-train-car-store` | Train-car store | Attach, detach, and relocate compact car records by car ID. |
-| `xor-radio-station-list` | Radio station list | Add, remove, and seek next or previous preset records. |
-| `xor-print-job-store` | Print-job store | Submit, cancel, and rotate through low-memory print jobs. |
-| `xor-packet-reassembly-order` | Packet reassembly order | Insert or discard packet IDs and walk adjacent retained packets. |
-| `xor-recipe-step-chain` | Recipe-step chain | Insert, remove, and reorder compact recipe steps. |
-| `xor-route-waypoint-store` | Route waypoint store | Add, remove, and navigate route waypoints by stable ID. |
-| `xor-chat-message-history` | Chat-message history | Append, delete, and page through retained message IDs in both directions. |
-| `xor-inventory-pick-chain` | Inventory pick chain | Relocate or cancel warehouse picks while preserving handle validity. |
-| `xor-card-game-turns` | Card-game turns | Join, leave, and move through a compact circular turn sequence. |
-| `xor-document-revisions` | Document revisions | Insert or discard revisions and navigate predecessor or successor revisions. |
-| `xor-parking-queue` | Parking queue | Arrive, depart, and inspect neighboring vehicle records. |
-| `xor-notification-history` | Notification history | Add, dismiss, and walk compact notification records. |
-| `xor-support-ticket-order` | Support-ticket order | Open, close, and reposition tickets by priority handle. |
-| `xor-file-block-chain` | File-block chain | Link, unlink, and seek neighboring logical file blocks. |
-| `xor-museum-tour` | Museum tour | Edit a compact waypoint sequence and preserve current-position navigation. |
-| `xor-delivery-stop-chain` | Delivery stop chain | Insert, remove, and reverse a short range of delivery stops. |
+| `xor-card-game-turns` | repair-in-place | `xor-card-game-turns` | quota ring, directional pass, and exhaustion deletion |
+| `xor-chat-message-history` | replace | `xor-branching-chat-journal` | cursor branch pruning and deletion fallback |
+| `xor-delivery-stop-chain` | replace | `xor-delivery-range-ledger` | inclusive reversal, detach, and atomic block insertion |
+| `xor-device-event-log` | replace | `xor-bounded-event-window` | monotonic sequence admission and capacity eviction |
+| `xor-document-revisions` | replace | `xor-revision-checkpoint-chain` | checkpoint rollback and checked tail squash |
+| `xor-embedded-playlist` | replace | `xor-weighted-playback-ring` | smooth weighted selection over physical order |
+| `xor-file-block-chain` | replace | `xor-block-offset-chain` | extent split, merge, and logical offset lookup |
+| `xor-firmware-task-chain` | replace | `xor-dependency-ready-chain` | readiness selection and dependent-cancel guard |
+| `xor-inventory-pick-chain` | replace | `xor-precedence-pick-chain` | precedence-preserving relocation and completion |
+| `xor-museum-tour` | replace | `xor-accessible-tour-cursor` | access-mask filtered bidirectional cursor |
+| `xor-notification-history` | replace | `xor-pinned-notification-feed` | stable pinned partition and unread scan |
+| `xor-packet-reassembly-order` | replace | `xor-packet-gap-index` | interval merge, split, and first-gap query |
+| `xor-parking-queue` | replace | `xor-neighbor-departure-line` | pre-removal neighbor receipt and adjacent swap |
+| `xor-print-job-store` | replace | `xor-priority-print-spool` | stable priority bands and head dispatch |
+| `xor-radio-station-list` | replace | `xor-band-preset-ring` | band-filtered circular seek and tune cursor |
+| `xor-recipe-step-chain` | replace | `xor-recipe-dependency-chain` | multiple-prerequisite topological movement |
+| `xor-route-waypoint-store` | replace | `xor-waypoint-distance-chain` | neighbor-delta Manhattan route aggregate |
+| `xor-sensor-sample-history` | reject | — | policy-only bounded-window sibling of the device-event objective |
+| `xor-support-ticket-order` | reject | — | stable-priority-band sibling of the print-spool objective |
+| `xor-train-car-store` | reject | — | range reverse/detach sibling of the delivery-ledger objective |
 
 ## Materialization Requirements
 
-Every root needs a task-specific C++17 public API. Do not expose a textbook
-XOR-list node API as the visible assignment. The observable operations,
-duplicate/invalid-input policy, handle semantics, and edge cases must
-materially differ between roots.
+Every counted root needs the exact task-specific C++17 API bound by its per-root remedy
+specification. Do not expose a textbook XOR-list node API as the visible
+assignment. The observable operations, owned state, mutation or selection
+algorithm, duplicate/invalid-input policy, handle semantics, reference control
+flow, and edge cases must materially differ between roots. All 136 unordered
+v3 pairs and available related remediated DSA roots are screened dimension by
+dimension from emitted docs, APIs, state, references, boundary tests,
+operation traces, and negative substitutes; renamed, constants/policy-only,
+and opposite-end clones fail closed through production-screen controls.
 
 Use integer slot IDs only. The scaffold and reference must forbid raw pointer
 XOR, `reinterpret_cast`-based link arithmetic, and pointer/integer address
@@ -81,7 +97,7 @@ encoding. For each task, author a documented provenance record, starter
 header/source pair, independent reference implementation, visible examples,
 hidden Catch tests, normal build, and fresh locked sanitizer build.
 
-Hidden tests must cover:
+Private tests and owner checks must cover:
 
 - empty and singleton structures;
 - forward and reverse traversal from the same stored links;
@@ -89,13 +105,24 @@ Hidden tests must cover:
 - recovery of the next slot from `previous XOR current.link`;
 - slot reuse and stale-handle rejection when the public API exposes handles;
 - zero/sentinel slot behavior and invalid slot IDs;
-- repeated relocation, deletion, and circular-navigation behavior where
-  applicable;
-- long seeded mutation sequences checked against a vector/deque oracle.
+- every task-specific selection, pruning, range, dependency, aggregate, or
+  cursor transition named in the inventory;
+- repeated mutation and stale-handle behavior where applicable;
+- deterministic traces checked against independent vector/value behavior
+  oracles after every operation, including return and complete ordering;
+- one task-specific false substitute compiled under the reference warning
+  policy and rejected by the same tests;
+- production-screen rejection of a domain/identifier-renamed clone, a
+  constants-or-policy-only clone, and an opposite-end-selection clone;
+- prompt/role/reference mapping, all-pairs family duplication, related-family
+  duplication, and semantic comparison against all bound official C++
+  holdouts;
+- clean normal and fresh ASan/UBSan reference runs in the pinned
+  network-disabled C++ image with equal positive test discovery.
 
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
-Before any task is added to a dataset, it must pass source licensing,
-provenance, compiler-image, oracle, sanitizer, contamination, split-family,
-rendering, token/mask, and release verification gates.
+This document does not authorize SFT rows, training, or benchmark claims under
+the current local task-authoring scope. Local completion ends at
+`local_family_verified`; any future dataset intake requires a separately
+approved admission contract.

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)"
 PYTHON_BIN="${SLIME_CPP_PYTHON:-python3}"
-OUT_DIR="${SLIME_INTERVAL_SCHEDULING_TASKS_DIR:-${REPO_ROOT}/.w8-biayn/data/aider-tasks/aider-dsa/interval-scheduling}"
+OUT_DIR="${SLIME_INTERVAL_SCHEDULING_TASKS_DIR:-${REPO_ROOT}/.w8-biayn/data/aider-tasks-reverify/aider-dsa/interval-scheduling}"
 
 PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}" \
   "${PYTHON_BIN}" -m w8_biayn.integrations.moonlight_interval_scheduling_aider_tasks \

@@ -1,8 +1,9 @@
 # Sliding-Window Maximum Curriculum: Topic 1, Sliding-Window Maximum
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: v2 local-family remediation. The legacy 20-root monotonic-deque
+template remains preserved under `.w8-biayn/data/aider-tasks/`; its one-to-one
+replacements are owned under `.w8-biayn/data/aider-tasks-reverify/`. This does
+not claim dataset admission, training authorization, or benchmark uplift.
 
 This curriculum teaches monotonic-deque maintenance over a bounded moving
 window: expire out-of-window entries, preserve decreasing candidate values,
@@ -12,7 +13,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_ALGORITHM_DATA_STRUCTURE_TOPICS.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Online Material Status
 
@@ -21,9 +22,9 @@ resources and online judges. They are useful for private concept study or
 source discovery only. They are not a drop-in SFT source inventory: every
 external source needs explicit license and semantic-contamination review.
 
-The tasks below materialize as newly authored C++17 roots. Their interfaces,
-tests, reference implementations, and provenance must be created in-repo and
-pass the normal original-task admission process.
+The legacy tasks below were audited as semantic template duplicates. The v2
+owner replaces every root with the distinct ID and mechanism specified in
+`docs/aider-tasks-spec/aider-dsa/sliding-window-maximum.md`.
 
 ## Proposed Original Tasks
 
@@ -50,17 +51,18 @@ pass the normal original-task admission process.
 | `swmax-rainfall` | Rainfall intensity | Report peak rainfall intensity over a rolling time horizon. |
 | `swmax-delivery-delay` | Delivery delay | Track the worst delay among the most recent delivery scans. |
 
-## Materialization Requirements
+## V2 remediation requirements
 
-Every root needs a task-specific C++17 public API. Do not expose only a
-generic `max_sliding_window(values, k)` assignment. The input model
-(event-count versus timestamp duration), tie policy, invalid/missing-value
-policy, threshold behavior, index reporting, and batch/stream semantics must
-materially differ between roots.
+Every replacement needs a task-specific C++17 API, owned state or offline
+index, algorithm, invalid/boundary behavior, and private discriminator. Count
+and timestamp deques alone do not establish family diversity. The owner must
+derive evidence from emitted docs, APIs, references, and tests; compare all
+190 unordered replacement pairs; and execute renamed-domain,
+constants/policy-only, opposite-end-selection, and missing-mechanism controls.
 
-For each task, author a documented provenance record, starter header/source
-pair, independent reference implementation, visible examples, hidden Catch
-tests, normal build, and fresh locked sanitizer build.
+For each replacement, author a documented provenance record, coherent starter,
+independent reference, visible and private deterministic tests, and per-root
+remedy record/specification. The legacy tree must not be regenerated.
 
 Hidden tests must cover:
 
@@ -76,9 +78,19 @@ Hidden tests must cover:
   from repeated full-window rescans;
 - randomized streams checked against a simple brute-force window oracle.
 
-## Admission Boundary
+## Reverification command
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_sliding_window_maximum_aider_tasks.sh \
+  --force --verify-core --verify-docker
+```
+
+The Docker verifier uses the repository-pinned C++ sanity image with network
+disabled and records the result as `docker_sanity`, not `locked_oracle`.
+
+## Local-only boundary
+
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates.

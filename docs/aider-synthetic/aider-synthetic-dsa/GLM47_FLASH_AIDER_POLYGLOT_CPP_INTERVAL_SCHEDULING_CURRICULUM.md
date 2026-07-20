@@ -1,8 +1,9 @@
 # Interval Scheduling Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: v2 local-family remediation curriculum. The legacy four-template family
+is preserved under `.w8-biayn/data/aider-tasks/`; the owner materializes only
+the parallel v2 re-verification family. This document does not claim dataset
+admission or benchmark uplift.
 
 This curriculum targets interval reasoning: overlap, containment, endpoint
 policy, compatibility, weighted selection, resource allocation, and schedule
@@ -13,7 +14,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_ALGORITHM_DATA_STRUCTURE_TOPICS.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Decontamination Boundary
 
@@ -37,48 +38,58 @@ for private concept study or source discovery. They are not a drop-in SFT
 source inventory: every external source needs explicit license and semantic
 contamination review.
 
-The following tasks materialize as newly authored C++17 roots. Their
-interfaces, tests, reference implementations, and provenance must be created
-in-repo and pass the normal original-task admission process.
+The legacy 20-root materialization advertised many domain rules but implemented
+only four shared references: weighted selection, resource allocation, interval
+union audit, and a mutable reservation ledger. Driver availability, storage
+budgets, deadlines, travel matrices, cyclic endpoints, containment, set cover,
+and other named rules were absent. Renaming those templates is not a remedy.
+
+The v2 family therefore replaces every legacy root one-for-one with a distinct
+C++17 API and a distinct substantive algorithm. No two rows share an algorithm
+kind, public declaration set, state model, reference marker, or adversarial
+negative fixture.
 
 ## Proposed Decontaminated Tasks
 
-| ID | Task | Visible contract |
+| V2 ID | Primary algorithm | Visible contract |
 |---|---|---|
-| `interval-operating-rooms` | Operating-room planner | Select the highest-value compatible surgeries with mandatory cleanup buffers. |
-| `interval-delivery-windows` | Delivery-window planner | Maximize completed deliveries while honoring driver-specific availability intervals. |
-| `interval-broadcast-lineup` | Broadcast lineup | Choose non-overlapping programs maximizing audience value with fixed transition gaps. |
-| `interval-machine-maintenance` | Machine maintenance | Schedule maintenance jobs on one machine and return rejected-conflict diagnostics. |
-| `interval-court-docket` | Court docket | Allocate hearings to courtrooms while minimizing rooms and preserving case priorities. |
-| `interval-charging-stations` | Charging stations | Assign charging sessions to a limited number of plugs with earliest-finish tie rules. |
-| `interval-field-bookings` | Field bookings | Accept, reject, cancel, and query sports-field reservations under half-open intervals. |
-| `interval-freight-platforms` | Freight platforms | Compute minimum loading platforms and identify the conflicting freight intervals. |
-| `interval-ad-campaigns` | Ad campaigns | Choose weighted advertisement slots subject to sponsor cooldown constraints. |
-| `interval-shift-coverage` | Shift coverage | Select shifts that cover required periods with minimum cost and no worker overlap. |
-| `interval-flight-gates` | Flight gates | Assign flight turnaround intervals to gates with compatibility and buffer rules. |
-| `interval-warehouse-docks` | Warehouse docks | Book dock intervals, reschedule orders, and expose the earliest available slot. |
-| `interval-road-closures` | Road closures | Merge overlapping closure windows and report affected route-duration spans. |
-| `interval-sensor-outages` | Sensor outages | Classify overlapping outage intervals and calculate total downtime after union. |
-| `interval-stream-recording` | Stream recording | Select recordings under storage budget, overlap rules, and program priorities. |
-| `interval-conference-tracks` | Conference tracks | Partition talks into the fewest tracks and return deterministic track assignments. |
-| `interval-patrol-routes` | Patrol routes | Choose compatible patrol intervals with travel-time-dependent gaps. |
-| `interval-lease-audits` | Lease audits | Detect containment, improper overlap, and gap violations in lease periods. |
-| `interval-rescue-dispatch` | Rescue dispatch | Allocate emergency teams to incidents while prioritizing deadlines and travel windows. |
-| `interval-data-backups` | Data backups | Schedule non-overlapping backup jobs, allow predeclared maintenance blackouts, and return a conflict explanation. |
+| `surgery-value-plan-v2` | predecessor-indexed weighted interval DP | Maximize surgery value with per-job cleanup. |
+| `delivery-route-cover-v2` | farthest-reach greedy cover | Cover a route with the fewest windows. |
+| `broadcast-break-stab-v2` | right-endpoint minimum stabbing | Place the fewest instants hitting closed program intervals. |
+| `maintenance-throughput-order-v2` | Moore-Hodgson heap | Keep the most jobs meeting individual deadlines. |
+| `docket-lateness-order-v2` | earliest-due-date sequencing | Minimize maximum hearing lateness. |
+| `charging-priority-admission-v2` | capacity sweep with priority eviction | Retain higher-priority sessions under plug capacity. |
+| `field-reservation-ledger-v2` | dual ordered mutable indexes | Book, cancel, and atomically reschedule reservations. |
+| `freight-platform-peak-v2` | event sweep with active witness set | Report earliest peak occupancy and exact active IDs. |
+| `campaign-budget-selection-v2` | budget-by-predecessor 2-D DP | Maximize compatible value under spend. |
+| `shift-cost-cover-v2` | coordinate-DAG minimum-cost cover | Cover a target interval at minimum cost. |
+| `flight-gate-partition-v2` | busy/free heap interval partitioning | Produce the minimum deterministic gate assignment. |
+| `dock-common-free-slot-v2` | multi-calendar cursor intersection | Find the earliest slot free in every calendar. |
+| `road-closure-complement-v2` | clipped union plus complement | Return canonical closed and open route segments. |
+| `sensor-k-outage-duration-v2` | level-delta k-coverage sweep | Measure maximal spans with at least k outages. |
+| `recording-conflict-components-v2` | active sweep plus disjoint-set union | Compute transitive overlap components. |
+| `conference-containment-forest-v2` | strict-containment stack | Build immediate parent relationships and reject crossings. |
+| `patrol-travel-chain-v2` | directed travel-compatibility DAG DP | Maximize a route-dependent patrol chain. |
+| `lease-cyclic-normalization-v2` | split/merge/rejoin cyclic arcs | Canonicalize weekly leases that wrap. |
+| `rescue-team-matching-v2` | augmenting-path bipartite matching | Maximize compatible incident/team assignments. |
+| `backup-checkpoint-cover-v2` | bounded bitmask set-cover DP | Cover checkpoint instants with the fewest windows. |
 
 ## Materialization Requirements
 
-Every root needs a task-specific C++17 public API. Do not expose an unadorned
-list of start/end pairs and ask whether intervals overlap. Include each task's
-typed interval representation, endpoint convention, optimization/resource
-rules, invalid-input behavior, and result/diagnostic type in the starter
-interface.
+Every root needs its row-specific C++17 API, owned state or algorithm, endpoint
+policy, invalid-input behavior, result type, deterministic tie policy, and a
+complete compilable private false substitute that embodies its named easiest
+mistake. The verifier must build that substitute and then observe a positive
+CTest failure count; comments, markers, grep, and source-presence checks are
+not discriminator evidence. Shared use of sorting or vectors is incidental;
+it cannot replace the advertised DP, heap, sweep, ordered-index, DSU, stack,
+cyclic, matching, or set-cover mechanism.
 
 For each task, author a documented provenance record, starter header/source
 pair, independent reference implementation, visible examples, hidden Catch
 tests, normal build, and fresh locked sanitizer build.
 
-Hidden tests must cover:
+Across the family, hidden tests must cover:
 
 - zero-length, touching, nested, identical, and disjoint intervals under the
   explicit open/closed/half-open endpoint policy;
@@ -90,13 +101,33 @@ Hidden tests must cover:
 - optimality or minimum-resource proofs on adversarial small instances;
 - large boundary-heavy inputs that distinguish intended sorting/DP/sweep-line
   algorithms from repeated quadratic rescans where a complexity goal is stated;
-- randomized cases checked against a brute-force or independent interval oracle;
+- independently derived direct-value or bounded exhaustive expectations for
+  every behavior-only root, plus an independent vector model checked after
+  every operation in the mutable-ledger trace;
 - a final contamination screen proving the candidate remains outside all
   benchmark holdout families.
 
+The family screen uses `interval-family-semantic-v3`: it noun-normalizes actual
+documentation, public declarations, reference control flow, and test
+assertions, checks all 190 candidate pairs, and checks all 520 candidate versus
+official-holdout pairs from the pinned 26-root C++ checkout. Only the two
+shared Catch support paths may be excluded, and their exact digests are part of
+the semantic-screen receipt.
+
+Materialize and verify only the parallel root:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_interval_scheduling_aider_tasks.sh \
+  --force --verify-core --verify
+```
+
+The normative per-root remedies and evidence records live under the parallel
+root's `.state/remedy/` directory. The checked-in audit is
+`docs/aider-tasks-spec/aider-dsa/interval-scheduling.md`.
+
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates.

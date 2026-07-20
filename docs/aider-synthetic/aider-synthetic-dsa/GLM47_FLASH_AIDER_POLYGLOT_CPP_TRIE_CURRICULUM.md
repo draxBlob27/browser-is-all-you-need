@@ -1,8 +1,12 @@
 # Trie Curriculum: Topic 1, Subtask 4
 
-Status: curriculum-design note. This document proposes original task concepts;
-it does not claim that they are admitted SFT roots or available as an online
-dataset.
+Status: task-spec-v3 local family verified. The original 20 generated roots are
+immutable audit inputs; 20 one-to-one replacements are generator owned under
+the parallel re-verification root. The first v2 verification claim was
+invalidated, then reverified with artifact-derived five-dimension all-pairs
+evidence and mandatory identifier-renamed, constants/policy-only, and
+opposite-end adversarial controls. This does not claim admitted SFT roots or an
+online dataset.
 
 This is the fourth subtask under **Linked Structure Invariants**. Its purpose
 is to teach child-map consistency, prefix accounting, terminal marking, and
@@ -12,7 +16,7 @@ Use this with:
 
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`
 - `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_ALGORITHM_DATA_STRUCTURE_TOPICS.md`
-- `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+- `docs/AIDER_SFT_SCOPE.md`
 
 ## Online Material Status
 
@@ -26,30 +30,36 @@ The tasks below materialize as newly authored C++17 roots. Their interfaces,
 tests, reference implementations, and provenance must be created in-repo and
 pass the normal original-task admission process.
 
-## Proposed Original Tasks
+## Legacy Audit And V2 Replacement Inventory
 
-| ID | Task | Visible contract |
+The legacy roots all delegated authority to the same flat
+`std::map<std::string, int>` scan/sort template. They are preserved at
+`.w8-biayn/data/aider-tasks/aider-dsa/trie/` and have disposition `replace`.
+The v2 roots materialize only at
+`.w8-biayn/data/aider-tasks-reverify/aider-dsa/trie/`.
+
+| Legacy ID | V2 replacement | Distinguishing mechanism |
 |---|---|---|
-| `trie-command-completion` | Command completion | Register or remove commands and return lexicographically ordered prefix matches. |
-| `trie-product-search` | Product search | Add product codes, count prefix matches, and return a bounded suggestion list. |
-| `trie-contact-directory` | Contact directory | Add, rename, delete, and search contacts by case-normalized prefix. |
-| `trie-library-call-prefixes` | Library call prefixes | Maintain call-number strings and count entries beneath a prefix. |
-| `trie-word-game-dictionary` | Word-game dictionary | Insert words, test membership, and find valid words from a required prefix. |
-| `trie-url-router` | URL router | Register path segments and resolve the longest matching route. |
-| `trie-dns-suffixes` | DNS suffixes | Register domain suffix rules and resolve the most-specific matching suffix. |
-| `trie-dna-motifs` | DNA motifs | Store DNA motifs, reject invalid symbols, and count matching prefixes. |
-| `trie-emoji-shortcodes` | Emoji shortcodes | Add and remove shortcode aliases and expand unique prefixes only. |
-| `trie-spell-checker` | Spell checker | Load words, test exact spelling, and produce nearby prefix suggestions. |
-| `trie-file-path-index` | File-path index | Register slash-separated paths and count descendants under a directory. |
-| `trie-license-plate-index` | License-plate index | Normalize plate strings, reserve or release them, and query a prefix count. |
-| `trie-predictive-text` | Predictive text | Maintain word frequencies and return top completions with deterministic ties. |
-| `trie-snippet-tags` | Snippet tags | Index tagged snippets and return IDs matching a tag prefix. |
-| `trie-log-category-filter` | Log category filter | Register dotted category names and select all categories under a prefix. |
-| `trie-morse-codebook` | Morse codebook | Insert symbol encodings and reject codes that violate a prefix-free policy. |
-| `trie-access-token-prefixes` | Access-token prefixes | Store opaque token strings, revoke them, and reject ambiguous short prefixes. |
-| `trie-sku-allocator` | SKU allocator | Allocate patterned SKU strings and find the first available suffix under a prefix. |
-| `trie-wildcard-dictionary` | Wildcard dictionary | Match words with a single-character wildcard while preserving terminal semantics. |
-| `trie-translation-glossary` | Translation glossary | Maintain language-qualified terms and resolve exact and prefix lookups. |
+| `trie-command-completion` | `radix-command-catalog` | compressed radix edges and merge-on-erase |
+| `trie-product-search` | `tst-product-prefix` | ternary-search-trie traversal |
+| `trie-contact-directory` | `contact-alias-trie` | normalized alias paths with contact ownership |
+| `trie-library-call-prefixes` | `digit-call-range-trie` | digit paths with subtree counts |
+| `trie-word-game-dictionary` | `rack-prefix-word-trie` | rack-budget DFS from a required prefix |
+| `trie-url-router` | `segment-route-dispatch-trie` | segment edges and longest ancestor route |
+| `trie-dns-suffixes` | `reversed-domain-policy-trie` | reversed labels and most-specific suffix policy |
+| `trie-dna-motifs` | `dna-motif-counter-trie` | fixed DNA branches and prefix counts |
+| `trie-emoji-shortcodes` | `unique-shortcode-trie` | terminal-count uniqueness resolution |
+| `trie-spell-checker` | `levenshtein-spell-trie` | row-propagating edit-distance traversal |
+| `trie-file-path-index` | `path-descendant-trie` | segment hierarchy with file/byte aggregates |
+| `trie-license-plate-index` | `normalized-plate-reservation-trie` | normalized alphanumeric paths and prefix uniqueness |
+| `trie-predictive-text` | `cached-topk-text-trie` | per-node ranked completion caches |
+| `trie-snippet-tags` | `tag-posting-trie` | terminal posting sets and prefix union |
+| `trie-log-category-filter` | `hierarchical-log-policy-trie` | inherited dotted-category policy |
+| `trie-morse-codebook` | `prefix-free-morse-trie` | prefix-free code admission |
+| `trie-access-token-prefixes` | `shortest-token-prefix-trie` | terminal cardinality and shortest unique prefix |
+| `trie-sku-allocator` | `numeric-sku-allocation-trie` | occupancy-guided smallest-gap allocation |
+| `trie-wildcard-dictionary` | `single-wildcard-word-trie` | exact-depth wildcard branch traversal |
+| `trie-translation-glossary` | `multilingual-glossary-trie` | language-partitioned owned tries |
 
 ## Materialization Requirements
 
@@ -59,8 +69,10 @@ normalization policy, duplicate policy, query behavior, ordering, and
 invalid-input behavior must materially differ between roots.
 
 For each task, author a documented provenance record, starter header/source
-pair, independent reference implementation, visible examples, hidden Catch
-tests, normal build, and fresh locked sanitizer build.
+pair, independent reference implementation, visible and private tests, normal
+build, and fresh sanitizer build. The family has no separately designated
+locked oracle image, so the pinned network-disabled C++ image is recorded as
+`docker_sanity` with `locked_oracle: false`.
 
 Hidden tests must cover:
 
@@ -74,9 +86,18 @@ Hidden tests must cover:
 - long randomized mutation sequences checked against a normalized
   `std::map` or sorted-vector oracle.
 
+The task-spec-v3 hard-rule test separately invokes every public operation
+class and compares complete observable state with an independent value model
+after every mutation. The owner compares emitted docs, public API/state,
+reference control flow, public oracle, and private value oracle for all 190
+unordered pairs. Its focused suite must reject identifier-renamed,
+constants/policy-only, and opposite-end-selection clones. Each root owns a
+distinct named false substitute; all substitutes compile under the reference's
+strict flags and must be rejected by executed tests.
+
 ## Admission Boundary
 
-This document is not authorization to bypass the primary Aider SFT pipeline.
+This document does not authorize SFT rows, training, or benchmark claims under the current local task-authoring scope.
 Before any task is added to a dataset, it must pass source licensing,
 provenance, compiler-image, oracle, sanitizer, contamination, split-family,
 rendering, token/mask, and release verification gates.
