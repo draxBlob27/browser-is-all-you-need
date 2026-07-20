@@ -1,12 +1,21 @@
 # Primary SFT Dataset Generation Pipeline
 
-Status: **V2 design contract; implementation and release pending**
+Status: **historical design contract; not active for current local task authoring**
 
 Contract version: aider-sft-pipeline-v2.0
 
 Default dataset profile: aider-sft-hybrid-3000-v1
 
-## Authority And Status
+## Historical Status
+
+This document is retained for repository history. It is not the authority for
+the current task-authoring effort. That effort is limited to
+`.w8-biayn/data/aider-tasks/` and `docs/aider-synthetic/` and is governed by
+[`AIDER_SFT_SCOPE.md`](AIDER_SFT_SCOPE.md). Nothing in this document may be
+used to claim an active SFT release, training authorization, or benchmark
+uplift for those local roots.
+
+## Former Authority And Status
 
 This document is the normative contract for generating the repository's
 primary Aider-style C++ supervised fine-tuning dataset. It defines one active

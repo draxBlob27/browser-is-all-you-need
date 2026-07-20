@@ -166,10 +166,13 @@ def parse_whole_file_blocks(content: str) -> dict[str, str]:
     files: dict[str, str] = {}
     index = 0
     while index < len(lines):
-        if not lines[index].strip().startswith("```"):
+        if not lines[index].strip():
             index += 1
             continue
-        filename = _validate_relative_file(lines[index - 1].strip() if index > 0 else "")
+        filename = _validate_relative_file("" if lines[index].strip().startswith("```") else lines[index].strip())
+        index += 1
+        if index >= len(lines) or not lines[index].strip().startswith("```"):
+            raise WholeFormatError(f"missing code fence for {filename}")
         body: list[str] = []
         index += 1
         while index < len(lines) and not lines[index].strip().startswith("```"):

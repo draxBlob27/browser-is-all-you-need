@@ -7,15 +7,58 @@ reviewed for quality, training suitability, or possible use in a benchmark
 uplift experiment. It applies to a single task, a generated curriculum, or a
 candidate dataset inventory.
 
+### Repository-wide primary requirement
+
+This policy applies recursively to every current and future task beneath
+`.w8-biayn/data/aider-tasks/` and to parallel remediation materializations
+beneath `.w8-biayn/data/aider-tasks-reverify/`, regardless of topic, family,
+generator, or directory depth.
+
+The **primary task-content requirement** is that the implementation genuinely
+implements the concept advertised by the task. The core representation,
+algorithm, state transition, or systems mechanism named by the contract must
+exist in the reference and must not be replaced by a standard-library,
+third-party, precomputed, hard-coded, or renamed shortcut that performs the
+substantive work. This is Priority 1 in every audit and remedy. A task has not
+achieved its central goal when its files build and its examples pass but its
+claimed implementation is absent.
+
+This requirement is topic-independent. Examples include, but are not limited
+to: a tree task owning and manipulating the required nodes and links; a graph
+task implementing the required graph state and traversal/optimization; a heap
+task performing its own heap maintenance rather than delegating to
+`std::priority_queue`; a parser task implementing the specified lexical and
+syntactic state rather than forwarding the problem to a general parser or one
+regular expression; and a concurrency task implementing the stated
+synchronization protocol rather than serializing away the claimed behavior.
+
+Incidental standard-library use remains allowed when the task contract permits
+it. Output vectors, temporary buffers/worklists, strings, ownership helpers,
+and metadata lookups do not violate the primary requirement unless they replace
+the claimed core representation or algorithm. For example, a real tree may
+return a `std::vector` traversal; it may not use `std::set` as the tree being
+taught.
+
+All other local-remediation checks are **secondary requirements relative to
+this primary content goal**. They still govern the strongest status that may be
+claimed: correctness/oracle proof, prompt safety, benchmark separation,
+provenance, metadata, documentation, and reproducibility are not waived merely
+because the primary goal is achieved. Audit reports must therefore state two
+facts separately: whether the primary core objective was achieved, and which
+secondary completion gates remain open.
+
 It is a review method for the current local task-authoring scope, not a route
 to dataset release. Passing a local task audit does not create SFT rows,
 authorize training, or establish uplift on an official benchmark. See
 [`../AIDER_SFT_SCOPE.md`](../AIDER_SFT_SCOPE.md).
 
-The method has four separate conclusions that must never be collapsed:
+The method has five separate conclusions that must never be collapsed. The
+first is the major task-content conclusion; the remaining conclusions are
+secondary evidence and lifecycle conclusions:
 
 | Conclusion | Meaning |
 | --- | --- |
+| **Core objective implemented (primary)** | The task genuinely implements the advertised representation, algorithm, state transition, or systems mechanism without delegating the substantive work to a forbidden substitute. |
 | **Structurally valid** | Files, metadata, roles, and prompt-facing starter state are internally consistent. |
 | **Oracle verified** | The reference answer passes the exact normal and sanitizer grader with positive test discovery. |
 | **Training-suitable** | The task has meaningful, independent learning value and is not a template/contamination risk. |
@@ -25,10 +68,14 @@ None of these conclusions authorizes SFT rows, training, or a benchmark-uplift c
 
 ## Review principles
 
-1. **Verify the artifact, not its label.** A task called AVL, parser, graph, or
-   concurrency may still be a wrapper around a library container or a trivial
-   template. Judge its visible API, starter, reference, tests, and build
-   behavior.
+1. **Verify the core implementation before secondary polish.** A task called
+   AVL, parser, graph, heap, dynamic program, scheduler, or concurrency system
+   may still be a wrapper around a library facility or a trivial template.
+   Inspect the owned state and substantive operations and record an explicit
+   `primary_core_objective: achieved|not_achieved` result. Judge incidental
+   containers by their role, not by token presence alone: an output/work buffer
+   is acceptable, while a container or library call that replaces the claimed
+   concept is not.
 2. **Keep evidence levels explicit.** Static inspection, source-level tests,
    local builds, locked-image builds, and finalized-release evidence have
    different strengths. Never report a stronger result than the evidence.
@@ -147,10 +194,23 @@ Record per-root outcomes. A single root that cannot build, has zero tests,
 fails tests, or fails sanitizer is not oracle-verified. Do not infer that the
 starter should build—the reference target is what this phase validates.
 
-### Phase 4 — Semantic-quality and independence review
+### Phase 4 — Primary core-objective, semantic-quality, and independence review
 
 Read the instructions, public API, starter, reference, visible tests, and
-hidden tests together. Ask the following questions.
+hidden tests together. Evaluate the primary core objective first:
+
+1. Name the exact representation, algorithm, state transition, or systems
+   mechanism the task claims to teach.
+2. Locate the owned implementation state and the operations that maintain or
+   execute it in the reference.
+3. Identify the forbidden shortcut that would make the claim false for this
+   topic. Do not use a balanced-tree-only banned list for unrelated topics.
+4. Distinguish incidental library use from delegation of the substantive work.
+5. Record `primary_core_objective: achieved` only when source inspection and a
+   deterministic discriminating check both support the claim. Otherwise record
+   `not_achieved`; successful compilation or public examples cannot upgrade it.
+
+Then ask the secondary semantic and independence questions.
 
 | Question | Evidence of a quality problem | Appropriate remedy |
 | --- | --- | --- |
@@ -161,11 +221,14 @@ hidden tests together. Ask the following questions.
 | Is the task solvable from its prompt? | Required behavior is absent from docs/starter, or only hidden tests reveal selection/error rules. | Specify the contract in visible docs and API; retain hidden tests only for undisclosed cases, not undisclosed rules. |
 | Is the solution target robust? | Reference hard-codes visible cases, has undefined behavior, relies on non-determinism, or violates its own API. | Rewrite the reference independently; add tests that rule out the shortcut; rerun oracle proof. |
 
-For data-structure claims, tests must establish the property actually claimed.
-For example, a balanced-tree task needs deterministic evidence of balancing or
-invariants that distinguishes it from a sorted vector, `std::set`, or a
-degenerate BST. If such evidence is intentionally outside the contract, it is
-an ordered-index API task—not a balanced-tree implementation task.
+For every topic, tests must establish the property actually claimed. A
+balanced-tree task needs deterministic evidence of balancing or invariants that
+distinguishes it from a sorted vector, `std::set`, or a degenerate BST. A heap,
+graph, parser, dynamic-programming, concurrency, storage, or networking task
+needs an equivalent topic-specific discriminator against its easiest false
+substitute. If that implementation property is intentionally outside the
+contract, rename and scope the task to the behavior it actually teaches rather
+than claiming the stronger concept.
 
 ### Phase 5 — Local task and benchmark suitability
 
@@ -214,9 +277,12 @@ Severity meanings:
 - **Blocker:** the task must not enter training/evaluation; examples include
   benchmark contamination, hidden-oracle exposure, failing reference, or no
   trustworthy behavior contract.
-- **Major:** the task may build but cannot support its advertised learning or
-  evidence claim; examples include template duplication or testing a different
-  concept from the label.
+- **Major:** the task may build but does not genuinely implement or test its
+  advertised core concept, or otherwise cannot support its advertised learning
+  claim. Absence/delegation of the claimed representation, algorithm, state
+  transition, or systems mechanism is always at least major and is the first
+  remediation priority. Template duplication and testing a different concept
+  from the label are also major.
 - **Moderate:** an important test, boundary rule, provenance datum, or prompt
   detail is missing, but the task can be repaired without changing its central
   objective.
@@ -229,9 +295,13 @@ Severity meanings:
 For every issue, select the smallest remedy that genuinely resolves the root
 cause. Apply the following sequence.
 
-1. **Choose the truthful objective.** Decide what the task should teach and
-   evaluate. If the desired objective cannot be distinguished by a valid test,
-   revise or reject it.
+1. **Implement the truthful core objective first.** Decide what representation,
+   algorithm, state transition, or systems mechanism the task should teach and
+   evaluate. Implement that substantive mechanism without a forbidden shortcut
+   and add a deterministic discriminator. If the desired objective cannot be
+   distinguished by a valid test, revise or reject it. Do not spend a remedy
+   claiming completion from documentation, metadata, or receipt improvements
+   while the advertised core implementation is still absent.
 2. **Change contract before implementation.** Update the visible instructions,
    public API, error behavior, and examples so that a model can solve the task
    without secret requirements.
@@ -427,7 +497,7 @@ this table.
 | Omit an editable file, add an unknown file, or put prose outside whole-file blocks | Whole-file parser or target-application failure. |
 | Put test/reference/docs/CMake in `files.solution` | Unsafe-path or role-conflict failure. |
 | Reference fails to reproduce every declared solution file | Reference-map or target-reference mismatch. |
-| Replace a claimed structure with a banned container, sorted vector, or degenerate implementation | Private invariant/complexity failure. |
+| Replace the claimed core representation, algorithm, state transition, or systems mechanism with a library shortcut, generic container, precomputed answer, hard-coded cases, degenerate implementation, or other topic-specific false substitute | Topic-specific private invariant, property, complexity, or adversarial failure. |
 | Remove a public rule from docs while retaining it in private tests | Prompt-contract completeness failure. |
 | Duplicate a root under new noun/API spelling | Duplicate-family failure. |
 | Introduce benchmark slug/content/semantic contract | Benchmark-overlap failure and `reject` disposition. |
@@ -461,12 +531,22 @@ or contamination policy forces the root back to `planned`. A rejected root has
 no outgoing transition. `local_family_verified` requires no dataset-release
 artifact.
 
+The transition from `planned` to `implemented` is forbidden unless the audit
+records `primary_core_objective: achieved`. In other words, `implemented` means
+the major advertised mechanism is present; it must not mean only that files
+were generated, documentation was written, or a wrapper compiled. Oracle,
+prompt-boundary, provenance, family, contamination, and reproducibility checks
+remain secondary gates on later states and on `local_family_verified`.
+
 ## 7. Strict audit-report update requirement
 
-The implementation change must update its audit report with the before/after
-tree hashes, remedy-spec hash, disposition, every changed source/generator/test
-path, normal and sanitizer receipt IDs plus discovered counts, family/benchmark
-screen result, prompt-boundary result, and the strongest truthful conclusion from the four conclusion levels.
+The implementation change must update its audit report with
+`primary_core_objective: achieved|not_achieved` and the exact source/test
+evidence for that conclusion, followed separately by the before/after tree
+hashes, remedy-spec hash, disposition, every changed source/generator/test path,
+normal and sanitizer receipt IDs plus discovered counts, family/benchmark
+screen result, prompt-boundary result, and the strongest truthful conclusion
+from the five conclusion levels.
 
 An open finding changes to “resolved and reverified” only after its named
 negative fixture, locked oracle proof, semantic screen, and every required

@@ -22,8 +22,8 @@ preserved, then measure speed.
 - SGLang: the rollout/inference backend used by the SLIME lanes.
 - Moonlight: the active Moonlight-16B-A3B model lane.
 - GLM: the active GLM-4.7-Flash model lane.
-- Primary SFT dataset pipeline: the implemented, mechanically-gated multi-task
-  Aider-style C++ curation path in `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`.
+- Local Aider task-authoring scope: `docs/AIDER_SFT_SCOPE.md`; generated roots
+  and clean-room curricula are the current focus.
 - Polyglot: optional Aider Polyglot C++ base-eval benchmark, separate from the PIE training proof.
 - Multi-SWE: optional C++ issue-resolution base-eval benchmark, separate from the PIE training proof.
 - Docker sandbox: the compile/test/runtime harness for C++ reward execution.
@@ -228,15 +228,15 @@ SLIME JSONL and task copies while reusing the same prompt and reward contract.
 
 Decision gate: inspect the generated manifest and sample rows before training.
 
-## Primary SFT Dataset Generation Pipeline (Pilot Not Released)
+## Historical Aider SFT Pipeline
 
-The primary multi-task Aider-style SFT implementation is specified by
-`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` and lives under
-`src/w8_biayn/aider_sft/`. It is separate from PIE `v0 -> v1` construction
-and from the optional benchmark lanes. The full
-`w8-biayn data aider-sft ...` operator loop exists, including no-spend
-planning/inventory, reviewed build/finalize, producer verification, sanitized
-export, and consumer verification.
+The repository-wide Aider SFT implementation and its operator commands are
+historical surfaces, not the current task-authoring direction. Current work is
+limited to generated local artifacts under `.w8-biayn/data/aider-tasks/` and
+their clean-room source documents under `docs/aider-synthetic/`; see
+[`docs/AIDER_SFT_SCOPE.md`](docs/AIDER_SFT_SCOPE.md). Do not treat the
+historical pipeline text below as a release requirement or use it to claim
+dataset readiness for those local roots.
 
 The checked-in pilot remains deliberately draft. The source-only profile is an
 operator-bound frozen preflight with a promoted reviewed inventory and has
@@ -608,7 +608,7 @@ Optional Moonlight compact Aider-like single-sample smoke:
 
 This is a seed/plumbing fixture for the primary pipeline design, not the
 multi-task pipeline itself. Read
-`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` before extending it.
+`docs/AIDER_SFT_SCOPE.md` before extending it.
 
 ```bash
 uv run python -m w8_biayn.integrations.moonlight_single_sample_sft \
@@ -625,6 +625,15 @@ bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_sft_data.sh --force
 ```
 
 The Leap SFT dataset is written to `.w8-biayn/data/aider-leap-sft`.
+
+The separately user-authorized all-task local projection uses
+`w8-biayn data aider-tasks-sft build|verify` to convert
+`.w8-biayn/data/aider-tasks-reverify` into
+`.w8-biayn/data/aider-tasks-reverify-sft/sft/train.jsonl`. It matches the
+existing `.w8-biayn/data/aider-tasks-sft/sft/train.jsonl` row schema, excludes
+all `.state` controls, qualifies only colliding task IDs, and binds a complete
+source inventory in its manifest. This projection is not primary-pipeline
+readiness, token/mask evidence, a frozen split, or training/benchmark proof.
 
 Then, inside the SLIME container, run the existing non-LoRA SFT wrapper with:
 

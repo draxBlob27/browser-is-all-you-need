@@ -24,14 +24,6 @@ a task beneath either generated-artifact root.
 
 ## Local-family completion
 
-A local family is complete when its owning generator has regenerated it, its
-prompt/role boundary is valid, its reference has the strongest available normal
-and fresh ASan/UBSan evidence, and its benchmark-contamination and
-duplicate-family screens pass. Record an unavailable locked runtime as
-`not_completed`; do not infer a pass from a host build.
-
-## Local-family completion
-
 A local family is complete at `local_family_verified` when its owning generator
 has regenerated it, its prompt/role boundary is valid, its reference has the
 strongest available normal and fresh ASan/UBSan evidence, and its
@@ -46,6 +38,26 @@ metadata must continue to state the strongest evidence actually available.
 They are not SFT rows, a finalized dataset, a training authorization, or
 benchmark-uplift evidence. References, hidden tests, provenance, CMake files,
 and receipts remain private to each task root.
+
+## User-authorized local SFT projection
+
+The explicitly requested projection from
+`.w8-biayn/data/aider-tasks-reverify/` is the narrow exception to the default
+no-row authoring boundary. Its owner is
+`w8-biayn data aider-tasks-sft build|verify`, implemented in
+`src/w8_biayn/integrations/moonlight_aider_tasks_sft.py`. It must match the row
+shape of `.w8-biayn/data/aider-tasks-sft/sft/train.jsonl`, exclude every
+`.state` path, include each real discovered task once, qualify colliding leaf
+IDs deterministically, and write only beneath the sibling
+`.w8-biayn/data/aider-tasks-reverify-sft/` output. User prompts must reject
+private path markers. The sole current sanitation is the named, manifest-bound
+balanced-tree owner-spec appendix; no general task-contract rewriting is
+allowed.
+
+This exception authorizes the local `sft/train.jsonl` projection and its
+manifest only. It does not establish dataset-release readiness, token/mask
+evidence, split approval, training authorization, or benchmark uplift. Any of
+those stages requires a separate request and its applicable verification.
 
 ## Out of scope
 

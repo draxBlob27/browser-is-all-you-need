@@ -345,6 +345,14 @@ bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_sft_data.sh --force
 This writes `.w8-biayn/data/aider-leap-sft`; point `SLIME_CPP_DATA_DIR` there
 for the SFT stage when training on the task-folder version.
 
+For an explicitly requested all-task local SFT projection, use the dedicated
+`aider-tasks-sft-dataset` skill and the repo-owned
+`w8-biayn data aider-tasks-sft build|verify` CLI. The converter matches the
+existing `.w8-biayn/data/aider-tasks-sft/sft/train.jsonl` shape, excludes all
+`.state` controls, qualifies colliding task IDs, and writes
+`.w8-biayn/data/aider-tasks-reverify-sft`. Do not describe that projection as
+primary-pipeline readiness, token/mask evidence, a release, or training proof.
+
 Then run the existing non-LoRA `examples/slime/moonlight_cpp_perf/sft.sh` with
 `SLIME_CPP_DATA_DIR` pointed at that directory and
 `SLIME_CPP_AUTO_PREPARE_DATA=0`. Do not run `prepare_data.sh`, GRPO, GLM, or

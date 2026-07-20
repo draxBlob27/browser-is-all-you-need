@@ -133,6 +133,11 @@ def test_parse_whole_file_blocks_rejects_missing_filename() -> None:
         task_eval.parse_whole_file_blocks("```cpp\nint main() {}\n```")
 
 
+def test_parse_whole_file_blocks_rejects_prose_and_unknown_file_shape() -> None:
+    with pytest.raises(task_eval.WholeFormatError, match="missing code fence"):
+        task_eval.parse_whole_file_blocks("explanation\nfile.cpp\n```cpp\nint main() {}\n```")
+
+
 def test_grade_response_runs_task_tests_and_persists_pass(tmp_path: Path) -> None:
     if shutil.which("cmake") is None or shutil.which("c++") is None:
         pytest.skip("cmake/c++ is not available")

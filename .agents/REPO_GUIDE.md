@@ -33,8 +33,9 @@ Before changing behavior, read:
 1. `README.md`
 2. `ROADMAP.md`
 3. `.agents/skills/w8-biayn-framework/SKILL.md`
-4. `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` when implementing or
-   changing Aider-style SFT task generation
+4. `docs/AIDER_SFT_SCOPE.md` when implementing or changing a local generated
+   Aider task family; read `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`
+   only for an explicitly authorized dataset release
 5. Relevant implementation files under `src/w8_biayn/`
 
 The previous `/tmp/ENGINEERING_SPEC_v2_cpp_only.md` may not exist on every
@@ -85,12 +86,25 @@ change.
 Do not rely on globally installed tools unless bootstrap installs them or
 `doctor` reports a clear missing prerequisite with the exact next action.
 
+## Local Aider Task-Family Remediation
+
+Local family remediation covers only clean-room task design and materialization
+under `docs/aider-synthetic/` and `.w8-biayn/data/aider-tasks/`. Its completion
+gates are: generator-owned regeneration, prompt-boundary/role validation, the
+strongest available clean normal and fresh ASan/UBSan reference oracle evidence,
+and benchmark-contamination plus duplicate-family screening. It ends at
+`local_family_verified`; it does not require JSONL rows, token/mask evidence,
+split selection, dataset finalization, producer verification, export, or
+consumer verification. Those are dataset-release gates and apply only when a
+user explicitly authorizes a release.
+
 ## Data Discipline
 
 Dataset conversion is a deliverable. No one-off PIE or SuperCoder munging is
 allowed.
 
-The authoritative contract for the primary SFT dataset generation pipeline is
+For a separately authorized dataset release, the authoritative contract for the
+primary SFT dataset generation pipeline is
 `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. Its implementation lives in
 `src/w8_biayn/aider_sft/` and is exposed through the repo-owned
 `w8-biayn data aider-sft ...` CLI. The pilot profile remains draft. The
@@ -274,7 +288,8 @@ bash examples/slime/moonlight_cpp_perf/eval_grpo.sh
 bash examples/slime/moonlight_cpp_perf/compare.sh
 ```
 
-Primary Aider-style SFT dataset generation is specified in
+For a separately authorized dataset release, primary Aider-style SFT dataset
+generation is specified in
 `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`. The multi-task implementation
 is in `src/w8_biayn/aider_sft/` and the repo-owned
 `w8-biayn data aider-sft ...` CLI. It includes canonical tasks, image-bound
@@ -305,6 +320,15 @@ bash examples/slime/moonlight_cpp_perf/prepare_leap_aider_sft_data.sh --force
 
 This writes `.w8-biayn/data/aider-leap-sft`; point `SLIME_CPP_DATA_DIR` there
 for the SFT stage when training on the task-folder version.
+
+For an explicitly requested all-task projection from the reverify tree, use
+the repo-owned `w8-biayn data aider-tasks-sft build|verify` commands. They match
+`.w8-biayn/data/aider-tasks-sft/sft/train.jsonl`, exclude every `.state` path,
+resolve leaf-ID collisions deterministically, and write the sibling output at
+`.w8-biayn/data/aider-tasks-reverify-sft`. Use the
+`aider-tasks-sft-dataset` skill for this workflow. Treat the result as a local
+projection, not a finalized release, tokenizer/mask proof, or training
+authorization.
 
 Then run the existing non-LoRA `examples/slime/moonlight_cpp_perf/sft.sh` with
 `SLIME_CPP_DATA_DIR` pointed at that directory and
