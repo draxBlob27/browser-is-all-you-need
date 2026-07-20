@@ -83,6 +83,9 @@ data_slime_app = typer.Typer(help="Build SLIME dataset files from validated C++ 
 data_cache_app = typer.Typer(help="Upload and restore versioned dataset bundles from GCS.")
 cpp_app = typer.Typer(help="Build, run, and score C++ performance-RL tasks.")
 data_aider_sft_app = typer.Typer(help="Build the primary reviewed Aider-style C++ SFT dataset.")
+data_aider_tasks_sft_app = typer.Typer(
+    help="Project local Aider task roots into reference-shaped SFT JSONL."
+)
 task_app = typer.Typer(help="Build PIE-derived C++ task JSON.")
 harness_app = typer.Typer(help="Run C++ candidates in the sandbox harness.")
 reward_app = typer.Typer(help="Score model outputs with the C++ reward function.")
@@ -102,6 +105,7 @@ data_app.add_typer(data_slime_app, name="slime")
 data_app.add_typer(data_cache_app, name="cache")
 app.add_typer(cpp_app, name="cpp")
 data_app.add_typer(data_aider_sft_app, name="aider-sft")
+data_app.add_typer(data_aider_tasks_sft_app, name="aider-tasks-sft")
 cpp_app.add_typer(task_app, name="task")
 cpp_app.add_typer(harness_app, name="harness")
 cpp_app.add_typer(reward_app, name="reward")
@@ -677,6 +681,76 @@ def _aider_sft_call(operation: Any) -> dict[str, Any]:
         raise typer.Exit(2) from exc
     console.print_json(data=result)
     return result
+
+
+def _aider_tasks_sft_call(operation: Any) -> dict[str, Any]:
+    from .integrations.moonlight_aider_task_eval import TaskEvalError
+
+    try:
+        result = operation()
+    except (FileNotFoundError, FileExistsError, TaskEvalError, ValueError) as exc:
+        console.print_json(data={"status": "error", "detail": str(exc)})
+        raise typer.Exit(2) from exc
+    console.print_json(data=result)
+    return result
+
+
+@data_aider_tasks_sft_app.command("build")
+def data_aider_tasks_sft_build(
+    tasks_root: Path = typer.Option(
+        Path(".w8-biayn/data/aider-tasks-reverify"), "--tasks-root"
+    ),
+    out: Path = typer.Option(
+        Path(".w8-biayn/data/aider-tasks-reverify-sft"), "--out"
+    ),
+    reference: Path = typer.Option(
+        Path(".w8-biayn/data/aider-tasks-sft/sft/train.jsonl"), "--reference"
+    ),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Build all real task rows, excluding private .state controls."""
+
+    from .integrations.moonlight_aider_tasks_sft import build_dataset, verify_dataset
+
+    def operation() -> dict[str, Any]:
+        build_dataset(
+            tasks_root=tasks_root.resolve(),
+            out=out.resolve(),
+            reference=reference.resolve(),
+            force=force,
+        )
+        return verify_dataset(
+            tasks_root=tasks_root.resolve(),
+            out=out.resolve(),
+            reference=reference.resolve(),
+        )
+
+    _aider_tasks_sft_call(operation)
+
+
+@data_aider_tasks_sft_app.command("verify")
+def data_aider_tasks_sft_verify(
+    tasks_root: Path = typer.Option(
+        Path(".w8-biayn/data/aider-tasks-reverify"), "--tasks-root"
+    ),
+    root: Path = typer.Option(
+        Path(".w8-biayn/data/aider-tasks-reverify-sft"), "--root"
+    ),
+    reference: Path = typer.Option(
+        Path(".w8-biayn/data/aider-tasks-sft/sft/train.jsonl"), "--reference"
+    ),
+) -> None:
+    """Recompute every row, source digest, and reference-shape check."""
+
+    from .integrations.moonlight_aider_tasks_sft import verify_dataset
+
+    _aider_tasks_sft_call(
+        lambda: verify_dataset(
+            tasks_root=tasks_root.resolve(),
+            out=root.resolve(),
+            reference=reference.resolve(),
+        )
+    )
 
 
 @data_aider_sft_app.command("plan")

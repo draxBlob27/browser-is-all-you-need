@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aider Tasks SFT Dataset"
+  short_description: "Build verified Aider task SFT projections"
+  default_prompt: "Use $aider-tasks-sft-dataset to build and verify a reference-shaped SFT train.jsonl from local Aider task roots."
