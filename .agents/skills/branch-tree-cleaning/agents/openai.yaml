@@ -1,0 +1,4 @@
+interface:
+  display_name: "Branch Tree Cleaning"
+  short_description: "Safely clean and organize Git worktrees"
+  default_prompt: "Use $branch-tree-cleaning to audit and safely organize this dirty Git branch without losing user work."
