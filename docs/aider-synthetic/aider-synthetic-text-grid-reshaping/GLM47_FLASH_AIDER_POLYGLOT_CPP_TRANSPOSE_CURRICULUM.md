@@ -1,15 +1,18 @@
 # Transpose Curriculum: Decontaminated Capability
 
-Status: curriculum-design note. These original task concepts are not admitted
-SFT roots or an online dataset.
+Status: remediated local family. The legacy roots remain immutable audit input;
+the 20 v2 roots are locally verified candidate artifacts, not SFT rows or an
+online dataset.
 
-This curriculum develops rectangular row/column reshaping, dimension checks,
-ragged-input policies, and coordinate-preserving transformations. It does not
-propose a renamed generic transpose exercise.
+The legacy family used one generic nested row/column loop with renamed domains,
+ragged policies, and metrics. V2 retains one independently justified dense
+representative and replaces 19 semantic duplicates with materially distinct
+storage, traversal, encoding, graph, relation, tensor, query, and permutation
+mechanisms.
 
 Use this with `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_TEXT_AND_GRID_RESHAPING_TOPICS.md`,
 `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_STRUGGLE_CONTEXT.md`, and
-`docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`.
+`docs/AIDER_SFT_SCOPE.md`.
 
 ## Decontamination Boundary
 
@@ -20,39 +23,51 @@ in input model, output shape, validation policy, and required query. Run the
 whole-slug denylist and semantic contamination checks; reject and backfill
 near-matches.
 
-## Proposed Decontaminated Tasks
+## Remediated task inventory
 
-| ID | Task | Visible contract |
-|---|---|---|
-| `transpose-lab-readings` | Lab readings ledger | Convert day-major measurements into sensor histories and flag gaps. |
-| `transpose-class-register` | Class register | Turn lesson rows into student summaries with absences. |
-| `transpose-market-quotes` | Market quote board | Reorient vendor prices and return each item's cheapest vendor. |
-| `transpose-survey-answers` | Survey answers | Convert respondent answers into question cohorts with invalid counts. |
-| `transpose-freight-manifest` | Freight manifest | Reorient truck sheets into package locations with duplicate detection. |
-| `transpose-weather-log` | Weather log | Convert station-day cells into daily regional observations. |
-| `transpose-choir-rehearsal` | Choir rehearsal | Turn rehearsal rows into singer histories and attendance streaks. |
-| `transpose-exam-markbook` | Exam markbook | Reorient marks and calculate per-assignment score bands. |
-| `transpose-library-loans` | Library loans | Convert branch-day totals into branch timelines with missing days. |
-| `transpose-factory-shifts` | Factory shifts | Turn shift rows into machine records and report stalled machines. |
-| `transpose-garden-plots` | Garden plots | Reorient plot observations into weekly crop summaries. |
-| `transpose-seat-audit` | Seat audit | Turn flight snapshots into seat histories with cabin labels. |
-| `transpose-diet-diary` | Diet diary | Convert meal rows into nutrient timelines with unit validation. |
-| `transpose-call-center` | Call-center board | Reorient agent-hour counts and find the busiest valid hour. |
-| `transpose-museum-visits` | Museum visits | Turn room-day counts into day itineraries and validate rooms. |
-| `transpose-network-probes` | Network probes | Convert probe outcomes into target reliability records. |
-| `transpose-training-load` | Training load | Reorient athlete metrics and report incomplete programs. |
-| `transpose-river-samples` | River samples | Convert site-month samples into monthly comparisons with sentinels. |
-| `transpose-inventory-cycle` | Inventory cycle | Turn warehouse counts into item histories and reconcile mismatches. |
-| `transpose-energy-meters` | Energy meters | Reorient meter intervals into totals with checked arithmetic. |
+| Legacy root | V2 root | Disposition | Required mechanism |
+|---|---|---|---|
+| `transpose-call-center` | `transpose-call-center` | repair-in-place | dense rectangular bijection and checksum |
+| `transpose-choir-rehearsal` | `transpose-square-in-place` | replace | upper-triangle in-place swaps |
+| `transpose-class-register` | `transpose-ragged-pad-mask` | replace | zip-longest plus occupancy mask |
+| `transpose-diet-diary` | `transpose-csr-to-csc` | replace | CSR count-prefix-scatter to CSC |
+| `transpose-energy-meters` | `transpose-coordinate-coalesce` | replace | sparse coordinate coalescing |
+| `transpose-exam-markbook` | `transpose-packed-bitboard` | replace | direct packed-bit permutation |
+| `transpose-factory-shifts` | `transpose-tiled-grid` | replace | cache-tiled clipped traversal |
+| `transpose-freight-manifest` | `transpose-stream-batches` | replace | bounded column batches |
+| `transpose-garden-plots` | `transpose-tensor-axes` | replace | rank-three axis permutation |
+| `transpose-inventory-cycle` | `transpose-directed-graph` | replace | directed-edge reversal |
+| `transpose-lab-readings` | `transpose-relation-index` | replace | relation inversion and grouping |
+| `transpose-library-loans` | `transpose-run-encoded-image` | replace | run decode and recompression |
+| `transpose-market-quotes` | `transpose-channel-planes` | replace | interleaved-to-planar channels |
+| `transpose-museum-visits` | `transpose-symmetric-triangle` | replace | triangular storage expansion |
+| `transpose-network-probes` | `transpose-lazy-view` | replace | checked inverse queries |
+| `transpose-river-samples` | `transpose-anti-diagonal` | replace | anti-diagonal reflection |
+| `transpose-seat-audit` | `transpose-banded-matrix` | replace | diagonal-band reindexing |
+| `transpose-survey-answers` | `transpose-common-rectangle` | replace | shortest-row rectangle/tail audit |
+| `transpose-training-load` | `transpose-block-sparse` | replace | block and in-block transpose |
+| `transpose-weather-log` | `transpose-permutation-ledger` | replace | inverse permutation and cycles |
 
 ## Materialization Requirements
 
-Every root needs a typed task-specific C++17 API; never expose only
-`transpose(vector<vector<T>>)`. Hidden tests must cover empty/singleton input,
-one-row/one-column rectangles, unequal rows under the stated policy, identity
-ordering, and a coordinate-oracle or round-trip property.
+Materialize only the parallel re-verification family through the owner:
+
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_transpose_aider_tasks.sh \
+  --force --verify-core --verify --docker-sanity
+```
+
+The owner must preserve the legacy root, emit task-named editable files, keep
+references/tests/build metadata private, compare all 190 family pairs in seven
+dimensions, screen all 26 bound official C++ holdouts, reject the three
+required coherent clone classes, and execute a strict false substitute per
+root. Final normal and fresh ASan/UBSan evidence uses the pinned
+network-disabled repository C++ sanity image.
 
 ## Admission Boundary
 
-This document does not bypass provenance, oracle, sanitizer, contamination,
-family-split, rendering, token/mask, or release verification gates.
+All 20 v2 roots reached `local_family_verified` with `docker_sanity` evidence
+and `locked_oracle: false`. This document does not authorize dataset intake,
+rows, rendering/token evidence, training, release, or benchmark uplift. See
+`docs/aider-tasks-spec/aider-text-grid-reshaping/transpose.md` for exact
+findings, receipts, and dispositions.

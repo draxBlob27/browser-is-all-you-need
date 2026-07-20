@@ -1,51 +1,95 @@
-# Table Pivot Curriculum: Decontaminated Capability
+# Table Pivot Remediation Curriculum
 
-Status: curriculum-design note. These original concepts are not admitted SFT roots.
+Status: derived from the current generated materialization manifest and Docker
+receipt for the twenty v2 roots below. The withdrawn receipt
+`sha256:c415a87b2050a7a0bbf2c1776420fd098d592ca1eff2ce6141bb654e5997cc66`
+is preserved only as invalidated history, not evidence. This curriculum
+follows `docs/aider-tasks-spec/prompts/remediate-family-reverify.md` with
+`FAMILY_NAME=table-pivot` and
+`FAMILY_TYPE=aider-text-grid-reshaping`. The immutable v1 template family stays
+at `.w8-biayn/data/aider-tasks/aider-text-grid-reshaping/table-pivot/`; the
+owner writes only the parallel v2 tree at
+`.w8-biayn/data/aider-tasks-reverify/aider-text-grid-reshaping/table-pivot/`.
 
-This curriculum develops header realignment, row/column reshaping, missing-cell
-policy, stable ordering, and typed aggregation for tabular records.
+Use this with `docs/AIDER_SFT_SCOPE.md` and the normative audit at
+`docs/aider-tasks-spec/aider-text-grid-reshaping/table-pivot.md`. These are
+local clean-room task candidates. Dataset handoff is `not_requested`.
 
-Use this with `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_TEXT_AND_GRID_RESHAPING_TOPICS.md` and `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`.
+## Legacy finding and disposition rule
 
-## Decontamination Boundary
+The twenty legacy roots share one `PivotBatch`/`PivotRow` map template and only
+vary nouns, typed-unit literals, and reject/sum/last/max duplicate policies.
+That is a semantic/template duplicate family, not twenty implementations.
+Following the deterministic rule, the lexicographically first independently
+salvageable root, `pivot-call-center`, is repaired in place. The other nineteen
+legacy roots are replaced rather than retained through renaming.
 
-All official holdouts are excluded. Do not make a bare CSV transpose task;
-each root needs a domain schema, identity keys, missing/duplicate policy, and
-a query or diagnostic that separates it from generic table reshaping.
+## V2 capability inventory
 
-## Proposed Decontaminated Tasks
+| V2 task ID | Legacy root | Disposition | Observable capability and primary mechanism |
+| --- | --- | --- | --- |
+| `pivot-call-center` | `pivot-call-center` | repair-in-place | Agent/shift cross-tabulation with additive duplicates and earliest stable argmax. |
+| `clinic-state-transition-grid` | `pivot-clinic-visits` | replace | Per-patient chronological state replay into a square transition matrix. |
+| `venue-capacity-grid` | `pivot-community-events` | replace | Capacity-key join, additive allocation, and exact overflow rejection. |
+| `depot-shortfall-table` | `pivot-emergency-supplies` | replace | Latest stock-check arbitration, target reconciliation, and deficit ordering. |
+| `tiered-billing-pivot` | `pivot-energy-bills` | replace | Cumulative-read differencing followed by two-tier price projection. |
+| `defect-pareto-matrix` | `pivot-factory-defects` | replace | Line/type cross-tabulation and stable cumulative Pareto ranking. |
+| `seasonal-yield-delta` | `pivot-farm-harvests` | replace | Season alignment, adjacent signed deltas, and largest-decline selection. |
+| `airport-delay-percentiles` | `pivot-flight-delays` | replace | Cell sample collection and nearest-rank percentile selection. |
+| `room-occupancy-interval-grid` | `pivot-hotel-bookings` | replace | Half-open stay expansion with per-room collision detection. |
+| `assay-weighted-mean-table` | `pivot-lab-results` | replace | Weighted numerator/denominator aggregation with explicit missing cells. |
+| `branch-category-distinct-table` | `pivot-library-circulation` | replace | Cell-level distinct-title sets paired with additive loan totals. |
+| `vendor-product-leader-table` | `pivot-market-sales` | replace | Revenue matrix construction and stable product-column argmax. |
+| `exhibit-running-attendance` | `pivot-museum-tickets` | replace | Signed daily delta folding into nonnegative prefix attendance. |
+| `orchard-score-band-table` | `pivot-orchard-inspections` | replace | Ordered threshold classification into block/band histograms. |
+| `cohort-visit-retention` | `pivot-research-cohorts` | replace | Enrollment join, unique attendance bitmap, and baseline retention ratios. |
+| `river-unit-normalized-table` | `pivot-river-quality` | replace | Base-to-milli conversion and per-cell minimum/maximum/spread reduction. |
+| `student-letter-grade-table` | `pivot-school-grades` | replace | Latest-attempt arbitration and descending letter-band classification. |
+| `solar-gap-interpolation-table` | `pivot-solar-output` | replace | Unique sparse pivot with bounded one-cell interpolation only. |
+| `route-stop-cross-tab` | `pivot-transit-ridership` | replace | Route-path membership join with separate missing and off-route sentinels. |
+| `warehouse-backlog-aging` | `pivot-warehouse-orders` | replace | FIFO demand-lot replay into day-end backlog age buckets. |
 
-| ID | Task | Visible contract |
-|---|---|---|
-| `pivot-clinic-visits` | Clinic visits | Pivot patient observations into date columns with missing flags. |
-| `pivot-market-sales` | Market sales | Pivot vendor receipts into product totals and duplicate diagnostics. |
-| `pivot-school-grades` | School grades | Turn grade records into subject columns with absent assessments. |
-| `pivot-river-quality` | River quality | Pivot site samples into month columns and validate units. |
-| `pivot-warehouse-orders` | Warehouse orders | Turn order lines into item-day demand tables. |
-| `pivot-flight-delays` | Flight delays | Pivot delay records by airport and hour. |
-| `pivot-energy-bills` | Energy bills | Turn meter records into account-period billing rows. |
-| `pivot-farm-harvests` | Farm harvests | Pivot crop lots into field-season totals. |
-| `pivot-museum-tickets` | Museum tickets | Turn visit records into exhibit-day attendance columns. |
-| `pivot-lab-results` | Lab results | Pivot assays into sample analyte columns. |
-| `pivot-call-center` | Call center | Turn calls into agent-shift performance rows. |
-| `pivot-transit-ridership` | Transit ridership | Pivot stop counts into route-date tables. |
-| `pivot-library-circulation` | Library circulation | Turn loans into branch-category summary tables. |
-| `pivot-solar-output` | Solar output | Pivot inverter readings into panel-hour output. |
-| `pivot-hotel-bookings` | Hotel bookings | Turn stays into room-date occupancy columns. |
-| `pivot-orchard-inspections` | Orchard inspections | Pivot tree checks into block-metric tables. |
-| `pivot-factory-defects` | Factory defects | Turn defect events into line-shift counts. |
-| `pivot-emergency-supplies` | Emergency supplies | Pivot stock checks into depot-item tables. |
-| `pivot-research-cohorts` | Research cohorts | Turn measurements into participant-visit columns. |
-| `pivot-community-events` | Community events | Pivot registrations into venue-session counts. |
+Every root fixes its own public C++17 API, owned state/algorithm, mutation or
+selection rules, invalid/duplicate/absent/empty behavior, ordering and tie
+rules, independent reference control flow, deterministic oracle, and executed
+topic-specific false substitute. Remedy records and their complete
+specifications live under the generated sibling `.state/remedy/` directory.
 
-## Materialization Requirements
+## Decontamination and diversity boundary
 
-Specify schema, header order, identity keys, missing-cell representation,
-duplicate merge/reject behavior, and numeric aggregation. Hidden tests cover
-empty input, one key, missing combinations, duplicate records, stable order,
-ragged source rows, invalid headers, and pivot/unpivot or map-based oracles.
+All official Aider Polyglot C++ roots remain permanent holdouts. The owner
+normalizes emitted docs, public APIs, references, visible/private tests, and
+false substitutes while neutralizing identifiers, literals, clean-room domain
+nouns, and endpoint direction. It compares all 190 unordered v2 pairs and all
+520 v2-to-holdout pairs. The production comparator also rejects a complete
+domain/identifier-renamed clone, a constants/policy-only clone, and an
+opposite-end-selection clone. Each is a complete coherent clone derived from
+the emitted `pivot-call-center` root and screened through the exact same
+seven-dimension extractor and production comparator; each control first passes
+the same two normal and two sanitizer behavior tests.
 
-## Admission Boundary
+## Materialization and evidence
 
-Original C++17 APIs, provenance, reference and hidden Catch tests, normal and
-sanitizer proof, contamination/family review, and every release gate are required.
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_table_pivot_aider_tasks.sh \
+  --force --verify-core --docker-sanity
+```
+
+The current receipt is admissible only when the mandatory pinned image ran with
+`--network none`. All twenty references
+passed two clean normal and two fresh ASan/UBSan CTests, all twenty false
+substitutes compiled and failed executed tests, and all three clone controls
+passed runtime tests before semantic rejection. Exact family, mounted-tree,
+owner, case, reference, negative, control, toolchain, and receipt hashes are
+read from the current machine-readable receipt and are never inherited from a
+prior forced generation.
+Host verification is separately `not_completed` because host `cmake` is
+unavailable; it is not substituted for Docker evidence.
+
+## Completion boundary
+
+All twenty roots reach `local_family_verified` only when the current
+`docker_sanity` evidence reports it. The family has no separately designated locked grader, so
+`locked_oracle` is false. This status creates no JSONL, token/mask evidence,
+split, export, training authorization, dataset release, or benchmark-uplift
+claim.

@@ -1,51 +1,65 @@
-# Run-Length Image Encoding Curriculum: Decontaminated Capability
+# Run-Length Image Encoding Curriculum: Remediated Capability
 
-Status: curriculum-design note. These original concepts are not admitted SFT roots.
+Status: `local_family_verified`. This is local clean-room task material, not an
+SFT dataset, release, training authorization, or benchmark result.
 
-This curriculum develops row-bounded image runs, canonical encoding/decoding,
-count validation, and image-specific aggregates without a generic string codec.
-
-Use this with `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_TEXT_AND_GRID_RESHAPING_TOPICS.md` and `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`.
+The immutable legacy family used one shared row encoder/decoder plus selected
+aggregate policies. Its twenty v2 replacements instead require materially
+different image-RLE algorithms and deterministic false-substitute rejection.
 
 ## Decontamination Boundary
 
-All official holdouts and existing excluded run-length source families are
-permanent exclusions. Do not reuse their artifacts. Candidates must differ in
-2D row boundaries, pixel model, record format, query, and validation policy.
+All 26 official Aider C++ roots and excluded generic RLE source families are
+permanent holdouts. The owner screens emitted docs, APIs, references, visible
+and private tests, and negative fixtures. Runs remain row-local, positive, and
+canonical; every root adds its own pixel model, validation, selection, and
+algorithmic invariant.
 
-## Proposed Decontaminated Tasks
+## Verified Replacement Inventory
 
-| ID | Task | Visible contract |
-|---|---|---|
-| `image-rle-farm-map` | Farm map | Encode crop rows and calculate planted area by crop. |
-| `image-rle-weather-radar` | Weather radar | Decode reflectivity runs and find storm columns. |
-| `image-rle-security-mask` | Security mask | Encode motion masks and validate frame dimensions. |
-| `image-rle-warehouse-plan` | Warehouse plan | Decode aisle maps and count accessible cells. |
-| `image-rle-medical-scan` | Medical scan | Encode tissue classes and report lesion bounding boxes. |
-| `image-rle-satellite-clouds` | Satellite clouds | Decode cloud masks and compute clear-pixel ratio. |
-| `image-rle-quilt-pattern` | Quilt pattern | Canonicalize color runs and count seam transitions. |
-| `image-rle-floor-mosaic` | Floor mosaic | Encode tile colors and reject inconsistent row widths. |
-| `image-rle-orchard-drone` | Orchard drone | Store canopy masks and total healthy-tree pixels. |
-| `image-rle-fire-map` | Fire map | Decode hazard bands and report border hotspots. |
-| `image-rle-seat-chart` | Seat chart | Encode vacant/occupied rows and find largest vacancy run. |
-| `image-rle-coral-survey` | Coral survey | Compress coral classes and return class histograms. |
-| `image-rle-paint-inspection` | Paint inspection | Decode defect pixels and find affected panels. |
-| `image-rle-snow-cover` | Snow cover | Encode coverage cells and compare two map areas. |
-| `image-rle-traffic-camera` | Traffic camera | Compress lane masks and count blocked lanes. |
-| `image-rle-library-shelves` | Library shelves | Encode shelf occupancy and find empty stretches. |
-| `image-rle-circuit-layout` | Circuit layout | Decode conductive rows and validate pad positions. |
-| `image-rle-garden-irrigation` | Garden irrigation | Encode wet cells and calculate dry-bed spans. |
-| `image-rle-game-sprite` | Game sprite | Decode a palette sprite and verify transparent borders. |
-| `image-rle-harbor-depth` | Harbor depth | Compress depth bands and calculate safe-channel pixels. |
+| Replacement root | Core mechanism |
+| --- | --- |
+| `crop-row-histogram-codec` | canonical row encoding with stable first-seen histogram |
+| `radar-column-threshold-decoder` | decoded per-column threshold maxima |
+| `mask-component-bounds-codec` | four-connected BFS component boxes |
+| `aisle-reachability-decoder` | stack-based orthogonal reachability |
+| `lesion-component-boxes-codec` | scanline interval component merging |
+| `cloud-clear-window-decoder` | rolling largest-clear-square dynamic program |
+| `quilt-seam-transition-canonicalizer` | horizontal/vertical seam accounting |
+| `mosaic-palette-row-encoder` | stable palette-index run encoding |
+| `canopy-block-density-index` | integral-image block density |
+| `wildfire-border-perimeter-decoder` | border-connected perimeter traversal |
+| `vacancy-rectangle-run-index` | row-vacancy audit plus monotone-stack largest rectangle |
+| `coral-component-histogram-codec` | union-find component histogram |
+| `panel-defect-interval-decoder` | panel projection and interval merging |
+| `snow-map-delta-codec` | row-wise XOR delta runs |
+| `lane-blockage-run-auditor` | lane-specific consecutive blockage limits |
+| `shelf-empty-span-index` | ordered maximal empty-span selection |
+| `conductor-pad-connectivity-decoder` | conductive-pad union connectivity |
+| `dry-bed-span-merger` | cross-bed dry interval intersection |
+| `transparent-border-crop-decoder` | transparent-border validation and crop bounds |
+| `safe-channel-widest-path-codec` | maximum-bottleneck west/east channel search |
 
-## Materialization Requirements
+## Verification Contract and Result
 
-Define row boundaries, palette/default rules, count type, and malformed-record
-policy. Hidden tests cover empty/singleton rows, counts at limits, adjacent
-mergeable runs, truncated/zero/overflow counts, exact width, encode/decode
-round trips, canonical form, and a dense-image oracle.
+Materialize only under the parallel reverify root:
 
-## Admission Boundary
+```bash
+bash examples/slime/moonlight_cpp_perf/prepare_run_length_image_encoding_aider_tasks.sh --force --verify-core
+```
 
-Every candidate requires original C++17 assets, provenance, oracle/sanitizer,
-contamination and family isolation, renderer/token evidence, and release proof.
+The owner compares all 190 unordered pairs conjunctively across the seven hard
+rule dimensions after removing family-common boilerplate. Focused tests prove
+that identifier/domain renames, constants-or-policy-only clones, and
+opposite-end-selection clones make nonempty changes across the required emitted
+roles. The same controls remain coherent, compile in normal and sanitizer
+modes, pass their transformed reference contract, and are rejected by the
+production semantic evaluator.
+
+The final network-disabled Docker sanity receipt binds generator
+`sha256:0cc49d2b4ed6bce8d57dcda9d9489c535fc9285a3808fce5654832a2bd093d8a`,
+GCC 13.4.0, CMake 3.25.1, and the pinned image digest. All twenty roots passed
+four normal and four fresh ASan/UBSan tests: visible, hidden, dedicated
+discriminator on the reference, and the executed `WILL_FAIL` false algorithm.
+All false algorithms and clone-control false algorithms exited `1` without
+sanitizer diagnostics. Dataset handoff remains `not_requested`.

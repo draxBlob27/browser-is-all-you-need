@@ -1,51 +1,89 @@
-# Sparse Matrix Encoding Curriculum: Decontaminated Capability
+# Sparse Matrix Encoding Curriculum: Remediated Capability Family
 
-Status: curriculum-design note. These original concepts are not admitted SFT roots.
+Status: `local_family_verified` with `docker_sanity` evidence. Dataset handoff
+is `not_requested`.
 
-This curriculum develops dense/coordinate-list conversion, default-value
-policy, canonical ordering, duplicate handling, and round-trip validation.
+This curriculum follows
+`docs/aider-tasks-spec/prompts/remediate-family-reverify.md` for
+`FAMILY_NAME=sparse-matrix-encoding` and
+`FAMILY_TYPE=aider-text-grid-reshaping`. The 20-root legacy family remains
+immutable under `.w8-biayn/data/aider-tasks/`; the owner writes v2 roots only
+under `.w8-biayn/data/aider-tasks-reverify/`.
 
-Use this with `docs/GLM47_FLASH_AIDER_POLYGLOT_CPP_TEXT_AND_GRID_RESHAPING_TOPICS.md` and `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md`.
+## Legacy finding and disposition
 
-## Decontamination Boundary
+The legacy owner rendered one dense reconstruction/row-total algorithm with
+domain nouns and four duplicate policies. It did not implement published
+objectives such as free-run selection, nearest vacancy, constellation bounds,
+shoreline contact, or maximum row heat. The family therefore failed the
+primary core-objective and semantic-diversity requirements.
 
-All official holdouts are excluded. Do not supply a bare generic sparse codec;
-each candidate needs a domain model, metadata policy, validation result, and
-query distinct from any benchmark or source family.
+The deterministic duplicate rule preserves the lexicographically smallest
+independently salvageable root, `sparse-constellation`, as
+`repair-in-place`. The other 19 legacy roots are `replace`; every replacement
+has a new ID, materially different API and algorithm, independent reference,
+deterministic private oracle, and compiled topic-negative fixture. Complete
+legacy hashes and findings are recorded in
+`docs/aider-tasks-spec/aider-text-grid-reshaping/sparse-matrix-encoding.md`.
 
-## Proposed Decontaminated Tasks
+## V2 inventory
 
-| ID | Task | Visible contract |
-|---|---|---|
-| `sparse-power-outages` | Power outages | Encode outage cells and query affected feeders. |
-| `sparse-farm-irrigation` | Farm irrigation | Store watered plots and calculate dry regions. |
-| `sparse-library-shelves` | Library shelves | Encode occupied slots and find free shelf runs. |
-| `sparse-transit-delays` | Transit delays | Store delayed stops and aggregate route disruption. |
-| `sparse-radar-contacts` | Radar contacts | Encode contact cells with confidence values. |
-| `sparse-paint-defects` | Paint defects | Convert defect maps and count defects by panel. |
-| `sparse-hospital-beds` | Hospital beds | Encode occupied beds and validate ward dimensions. |
-| `sparse-solar-shade` | Solar shade | Store shaded panels and compute exposure totals. |
-| `sparse-orchard-pests` | Orchard pests | Encode infected trees and list affected rows. |
-| `sparse-parking-sensors` | Parking sensors | Store occupied bays and query nearest free bay. |
-| `sparse-warehouse-stock` | Warehouse stock | Encode nonempty bins and reconcile duplicate scans. |
-| `sparse-flood-markers` | Flood markers | Store inundated cells and calculate shore contact. |
-| `sparse-constellation` | Constellation | Encode stars and report bounding boxes. |
-| `sparse-game-terrain` | Game terrain | Store nondefault tiles and validate coordinates. |
-| `sparse-crop-yields` | Crop yields | Encode nonzero yields and aggregate by field. |
-| `sparse-network-failures` | Network failures | Store failed links in a grid and query severity. |
-| `sparse-seat-reservations` | Seat reservations | Encode reserved seats and group by cabin. |
-| `sparse-lab-assays` | Lab assays | Store positive wells and detect duplicate entries. |
-| `sparse-fire-hotspots` | Fire hotspots | Encode heat cells and calculate maximum row load. |
-| `sparse-museum-sensors` | Museum sensors | Store triggered cells and reconstruct floor state. |
+| V2 root | Legacy root | Disposition | Primary mechanism |
+| --- | --- | --- | --- |
+| `sparse-constellation` | same | repair-in-place | sparse coordinate validation and bounding box |
+| `outage-component-index` | `sparse-power-outages` | replace | sparse four-neighbor DSU components |
+| `irrigation-gap-ledger` | `sparse-farm-irrigation` | replace | interval union and uncovered complement |
+| `shelf-free-run-index` | `sparse-library-shelves` | replace | ordered occupied-sentinel scan |
+| `transit-csr-delays` | `sparse-transit-delays` | replace | duplicate-summing CSR construction |
+| `radar-quadrant-topk` | `sparse-radar-contacts` | replace | geometric quadrant top-K selection |
+| `defect-column-compressor` | `sparse-paint-defects` | replace | canonical CSC construction |
+| `ward-occupancy-runs` | `sparse-hospital-beds` | replace | target-row run-length compression |
+| `solar-rectangle-sums` | `sparse-solar-shade` | replace | two-dimensional prefix query table |
+| `orchard-row-groups` | `sparse-orchard-pests` | replace | ordered coordinate grouping and stable argmax |
+| `parking-nearest-vacancy` | `sparse-parking-sensors` | replace | bidirectional sparse vacancy search |
+| `warehouse-delta-coalescer` | `sparse-warehouse-stock` | replace | additive coordinate-log fold |
+| `flood-shoreline-perimeter` | `sparse-flood-markers` | replace | sparse edge exposure and BFS components |
+| `terrain-morton-catalog` | `sparse-game-terrain` | replace | Morton bit interleaving |
+| `yield-row-dot-product` | `sparse-crop-yields` | replace | duplicate-coalesced sparse row dot products |
+| `failure-bipartite-index` | `sparse-network-failures` | replace | augmenting-path bipartite matching |
+| `cabin-reservation-runs` | `sparse-seat-reservations` | replace | two-level grouped run encoding |
+| `assay-coordinate-transpose` | `sparse-lab-assays` | replace | max-coalesced coordinate transpose |
+| `hotspot-row-sweep` | `sparse-fire-hotspots` | replace | sparse difference-event sweep |
+| `museum-latest-snapshot` | `sparse-museum-sensors` | replace | timestamp arbitration and canonical snapshot |
 
-## Materialization Requirements
+## Binding quality gates
 
-Define dimensions, default value, coordinate order, duplicate policy, and
-out-of-range errors. Hidden tests cover empty/all-default grids, duplicates,
-boundary coordinates, decode(encode) equality, canonical order, and an
-independent dense-grid oracle.
+The owner derives evidence from emitted docs, public headers, references,
+visible tests, private tests, and topic-negative sources. It compares all 190
+unordered v2 pairs separately across public API, owned state or algorithm,
+mutation or selection rules, invalid and boundary behavior, reference control
+flow, deterministic oracle, and topic-specific negative fixture after
+neutralizing identifiers, literals, and endpoint direction. Focused tests
+inject pure domain/identifier-renamed, constants-or-policy-only, and
+opposite-end-selection copies through the production comparator. Each clone
+must compile and pass both behavior tests before the semantic screen rejects it;
+each topic negative must compile and fail the executed tests.
 
-## Admission Boundary
+Prompt construction must expose only documentation and the exact task-named
+header/source pair. References, tests, negative fixtures, provenance, CMake,
+manifests, and receipts remain private. The bound semantic screen covers all
+20 roots against all 26 official C++ holdouts.
 
-All original-task provenance, C++17 reference/tests, sanitizer, contamination,
-family isolation, renderer/token, and release gates remain mandatory.
+Final local verification used the repository-pinned C++ sanity image with
+Docker network disabled. Each reference must discover and pass two tests in a
+clean normal C++17 build and a separate fresh ASan/UBSan build. The deterministic
+archive hash seen inside Docker must match the owner hash. This is
+`docker_sanity`, not a family-designated locked oracle.
+
+The completed receipt records 20/20 roots with two normal and two sanitizer
+tests each, 20/20 compiled and rejected topic negatives, all three pure clones
+compiled with passing behavior tests and semantic rejection, 190/190
+seven-axis family comparisons, and 520/520 holdout comparisons. Host
+verification was `not_completed` because host CMake is absent; the mandatory
+Docker result supplies the completion evidence.
+
+## Local-only boundary
+
+These roots are local candidate material only. They are not JSONL rows, a
+dataset release, training authorization, benchmark evidence, or an uplift
+claim. Future intake requires a separately authorized admission contract.
