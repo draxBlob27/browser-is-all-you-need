@@ -1,0 +1,5 @@
+{
+  "compiler_fingerprint": "1bb76500518c504a5f8d98a1bcada89d378a4fe3fb044f86da5bca9f8523261c",
+  "grader_image_digest": "sha256:d853ff40edbbf4dfa8dd584bf4b1cab86a22d54ac921f41e6fce3dc461b1c182",
+  "image": "glm47-aider-cpp-grader:1"
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implement Aider Polyglot RL"
+  short_description: "Build failure-derived Aider C++ RL"
+  default_prompt: "Use $implement-aider-polyglot-rl to build or validate the failure-derived Aider C++ rubric lane while preserving the established training infrastructure."

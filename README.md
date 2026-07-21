@@ -302,6 +302,114 @@ For SGLang evaluation, prepare the existing training checkpoint with
 `scripts/prepare_grpo_adapter.py`; this preserves the source adapter and omits
 the auxiliary next-token-prediction layer from the serving copy.
 
+#### Aider clean-room RL lane
+
+The Aider RL code path is implemented as a separate sibling of the PIE lane in
+`src/glm47_posttraining/aider_rl/`. It does not turn the public 401-row SFT
+JSONL into reward tasks. The clean-room RL dataset is not checked in yet, so no
+training run is authorized until the readiness checks below pass. The
+failure-derived catalog, rubric-test authoring contract, mutant admission, and
+no-update canary gate are documented in
+`docs/AIDER_RL_FAILURE_DERIVED_CURRICULUM.md`. A private admitted root must contain, for each
+task, an immutable `task.json` and sibling `tree/` with starter files, private
+visible and hidden tests, build files, `.reference/` files, provenance and
+contamination evidence, measured tokenizer evidence, and a successful normal
+plus ASan/UBSan oracle receipt. Families and semantic lineages may occur in
+only one split.
+
+Build the pinned grader once and record the image/compiler identities printed
+by the command. Inspect the exact task schema before materializing data:
+
+```bash
+bash scripts/build_aider_grader.sh
+python -m glm47_posttraining.aider_rl.dataset draft-schema > aider-task-draft.schema.json
+python -m glm47_posttraining.aider_rl.dataset schema > admitted-aider-task.schema.json
+```
+
+Each source task is a `task.draft.json` plus sibling `tree/`. The draft contains
+human-authored task/family/split metadata, editable and private-test paths,
+trusted argv build commands, catalog rubric partitions, diagnostic mutants,
+expected positive test counts, and passed provenance/contamination receipts.
+Admission computes all starter, test, mutant, reference, tree, prompt,
+tokenizer, split, image, compiler, oracle, and task
+identities:
+
+```bash
+python -m glm47_posttraining.aider_rl.dataset admit \
+  --source <draft-task-roots> \
+  --out <admitted-task-roots> \
+  --tokenizer <exact-sft-checkpoint-or-tokenizer> \
+  --grader-lock docker/aider_cpp_grader.lock.json \
+  --curriculum configs/aider_rl/failure_rubric_catalog.v1.json
+```
+
+Project those admitted roots into a self-contained bundle and re-verify all
+token evidence with the exact SFT/checkpoint tokenizer before any GPU work:
+
+```bash
+python -m glm47_posttraining.aider_rl.dataset build \
+  --source <admitted-task-roots> \
+  --out <private-aider-rl-bundle> \
+  --tokenizer <exact-sft-checkpoint-or-tokenizer>
+python -m glm47_posttraining.aider_rl.dataset verify \
+  --root <private-aider-rl-bundle> \
+  --tokenizer <exact-sft-checkpoint-or-tokenizer>
+python -m glm47_posttraining.aider_rl.dataset oracle \
+  --root <private-aider-rl-bundle> \
+  --tokenizer <exact-sft-checkpoint-or-tokenizer>
+python -m glm47_posttraining.aider_rl.dataset summarize \
+  --root <private-aider-rl-bundle> \
+  --tokenizer <exact-sft-checkpoint-or-tokenizer>
+python -m glm47_posttraining.aider_rl.dataset ready \
+  --root <private-aider-rl-bundle> \
+  --tokenizer <exact-sft-checkpoint-or-tokenizer>
+```
+
+The public rollout rows contain only the rendered prompt and safe immutable
+identity metadata. Tests, references, build files, receipts, and provenance
+remain under the grader-side task tree. Candidate responses must contain
+exactly one complete named C++ block for every editable file in admitted order.
+Grading is Docker-only, network-disabled, capability-dropped, and uses separate
+fresh normal and sanitizer task/build roots. Infrastructure failures receive
+two bounded retries by default; exhaustion aborts the rollout instead of
+creating a policy penalty. Override only with
+`GLM47_AIDER_INFRASTRUCTURE_RETRIES`.
+
+Before an update run, analyze a capability-balanced 16-to-32-task,
+eight-sample no-update rollout. Training remains blocked unless the report says
+`ready`:
+
+```bash
+python -m glm47_posttraining.aider_rl.curriculum analyze-canary \
+  --catalog configs/aider_rl/failure_rubric_catalog.v1.json \
+  --records <no-update.records.jsonl> \
+  --group-size 8
+```
+
+Launch the one-shot lane from the SFT adapter with a verified private bundle:
+
+```bash
+MILES_AIDER_DATA_DIR=<private-aider-rl-bundle> \
+MILES_LORA_ADAPTER_PATH=<sft-native-adapter> \
+bash examples/aider_grpo.sh
+```
+
+The launcher uses eight samples per prompt by default, derives response limits
+from admitted token evidence, runs bundle and oracle preflight, selects
+`glm47_posttraining.integrations.miles_aider_rl.reward_func`, and evaluates
+under the `aider_cpp` name. `scripts/evaluate_aider.py` scores saved sample
+JSONL or aggregates records with Aider correctness, compliance, sanitizer,
+reward-variance, and infrastructure metrics. The official 26 Aider Polyglot
+C++ tasks remain an external milestone holdout and must never be placed in this
+bundle.
+
+The launcher deliberately repeats bundle, tokenizer, grader-image, compiler,
+reference-oracle, positive-test, and sequence-budget checks. Once the dataset
+exists, the intended handoff is therefore: build the bundle once, set
+`MILES_AIDER_DATA_DIR` and `MILES_LORA_ADAPTER_PATH`, then run the wrapper. Run
+a no-update rollout canary and inspect reward variance before allowing policy
+updates.
+
 ## Repository
 
 ```text

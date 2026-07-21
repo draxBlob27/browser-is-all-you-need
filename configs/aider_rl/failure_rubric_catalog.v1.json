@@ -1,0 +1,280 @@
+{
+  "catalog_version": "aider-failure-rubrics-v1",
+  "derivation_policy": "Aggregate SFT and frozen-evaluation failures may define abstract behavior classes only. Official prompts, tests, references, model responses, retries, and semantic copies are forbidden from curriculum tasks.",
+  "capabilities": [
+    {
+      "capability": "time_date",
+      "target_weight": 0.25,
+      "rationale": "Evaluation showed the weakest correctness around temporal normalization and boundaries."
+    },
+    {
+      "capability": "validation_parsing",
+      "target_weight": 0.20,
+      "rationale": "Malformed-input handling and structured parsing were frequent semantic failures."
+    },
+    {
+      "capability": "state_concurrency",
+      "target_weight": 0.20,
+      "rationale": "State invariants, rollback, ordering, and concurrency were weak."
+    },
+    {
+      "capability": "algorithms_data_structures",
+      "target_weight": 0.15,
+      "rationale": "Algorithms are retained as composed correctness work rather than the dominant lane."
+    },
+    {
+      "capability": "text_grid_logic",
+      "target_weight": 0.10,
+      "rationale": "Grid dimensions, coordinates, and exact text logic exposed brittle assumptions."
+    },
+    {
+      "capability": "numerical",
+      "target_weight": 0.10,
+      "rationale": "Numerical anchors detect overflow, signedness, and exactness regressions."
+    }
+  ],
+  "failure_modes": [
+    {
+      "failure_mode_id": "time.boundary_off_by_one",
+      "capability": "time_date",
+      "observed_pattern": "Ordinary values work while rollover boundaries fail.",
+      "abstract_defect": "Normalization uses an incorrect inclusive or exclusive boundary.",
+      "clean_room_rule": "Use unrelated fictional clocks or calendars and test both sides of every boundary."
+    },
+    {
+      "failure_mode_id": "time.negative_normalization",
+      "capability": "time_date",
+      "observed_pattern": "Negative offsets produce invalid components or the wrong day.",
+      "abstract_defect": "Language remainder semantics are mistaken for mathematical modulo.",
+      "clean_room_rule": "Generate signed offsets around zero and multiple complete periods."
+    },
+    {
+      "failure_mode_id": "time.calendar_rules",
+      "capability": "time_date",
+      "observed_pattern": "Common dates work while leap or variable-length periods fail.",
+      "abstract_defect": "The implementation hardcodes a typical period length.",
+      "clean_room_rule": "Use a synthetic calendar with independently documented variable periods."
+    },
+    {
+      "failure_mode_id": "parse.naive_delimiter",
+      "capability": "validation_parsing",
+      "observed_pattern": "Simple fields parse but quoting, escaping, or embedded separators fail.",
+      "abstract_defect": "The parser splits text without tracking grammar state.",
+      "clean_room_rule": "Define a new compact grammar and test escaped and nested separators."
+    },
+    {
+      "failure_mode_id": "validation.accepts_malformed",
+      "capability": "validation_parsing",
+      "observed_pattern": "Structurally invalid inputs are partially accepted.",
+      "abstract_defect": "Validation checks only a prefix or a subset of constraints.",
+      "clean_room_rule": "Pair each valid production with independently malformed variants."
+    },
+    {
+      "failure_mode_id": "validation.partial_mutation",
+      "capability": "validation_parsing",
+      "observed_pattern": "A rejected operation leaves observable state changed.",
+      "abstract_defect": "Mutation occurs before all validation succeeds.",
+      "clean_room_rule": "Snapshot state before invalid operations and require exact rollback."
+    },
+    {
+      "failure_mode_id": "state.invariant_sequence",
+      "capability": "state_concurrency",
+      "observed_pattern": "Individual operations pass but a sequence violates capacity or uniqueness.",
+      "abstract_defect": "Local updates do not preserve the global invariant.",
+      "clean_room_rule": "Exercise generated operation sequences with an independent state model."
+    },
+    {
+      "failure_mode_id": "state.ordering_nondeterminism",
+      "capability": "state_concurrency",
+      "observed_pattern": "Results vary across runs or violate documented ordering.",
+      "abstract_defect": "Observable order depends on unstable traversal or scheduling.",
+      "clean_room_rule": "Repeat identical schedules and compare against an explicit ordering contract."
+    },
+    {
+      "failure_mode_id": "state.data_race",
+      "capability": "state_concurrency",
+      "observed_pattern": "Concurrent operations lose updates or expose invalid intermediate state.",
+      "abstract_defect": "Shared state lacks sufficient synchronization or atomicity.",
+      "clean_room_rule": "Use bounded deterministic stress plus sanitizer-backed safety evidence."
+    },
+    {
+      "failure_mode_id": "algorithm.edge_structure",
+      "capability": "algorithms_data_structures",
+      "observed_pattern": "Typical inputs work while empty, duplicate, cyclic, or degenerate structures fail.",
+      "abstract_defect": "The algorithm assumes a regular non-empty structure.",
+      "clean_room_rule": "Cover structural identities and degeneracies with independent oracles."
+    },
+    {
+      "failure_mode_id": "algorithm.complexity_collapse",
+      "capability": "algorithms_data_structures",
+      "observed_pattern": "Correct small cases time out at the documented bound.",
+      "abstract_defect": "The selected algorithm has the wrong asymptotic behavior.",
+      "clean_room_rule": "Include deterministic large cases with generous but discriminating limits."
+    },
+    {
+      "failure_mode_id": "grid.axis_assumption",
+      "capability": "text_grid_logic",
+      "observed_pattern": "Square examples pass while rectangular layouts fail.",
+      "abstract_defect": "Rows and columns are swapped or assumed equal.",
+      "clean_room_rule": "Use asymmetric dimensions and orientation-sensitive expected results."
+    },
+    {
+      "failure_mode_id": "grid.boundary_access",
+      "capability": "text_grid_logic",
+      "observed_pattern": "Edges are skipped, double-counted, or accessed out of bounds.",
+      "abstract_defect": "Neighbor and boundary predicates are incomplete.",
+      "clean_room_rule": "Place independent features at corners, edges, and one-cell dimensions."
+    },
+    {
+      "failure_mode_id": "numeric.overflow_signedness",
+      "capability": "numerical",
+      "observed_pattern": "Small positive values work while large or signed values fail.",
+      "abstract_defect": "Intermediate type width or signedness does not cover the domain.",
+      "clean_room_rule": "Test extrema and intermediate overflow with an exact wide oracle."
+    },
+    {
+      "failure_mode_id": "numeric.invalid_domain",
+      "capability": "numerical",
+      "observed_pattern": "Out-of-domain digits or parameters are silently incorporated.",
+      "abstract_defect": "Domain validation is missing before arithmetic.",
+      "clean_room_rule": "Generate valid and invalid symbols at every position and require exact rejection."
+    }
+  ],
+  "rubrics": [
+    {
+      "rubric_id": "time.rollover_boundaries",
+      "capability": "time_date",
+      "failure_mode_ids": ["time.boundary_off_by_one"],
+      "desired_behavior": "Normalize exactly at and around every documented period boundary.",
+      "undesirable_behaviors": ["off-by-one rollover", "special-casing only common values"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "time.signed_offsets",
+      "capability": "time_date",
+      "failure_mode_ids": ["time.negative_normalization"],
+      "desired_behavior": "Produce canonical components for positive and negative multi-period offsets.",
+      "undesirable_behaviors": ["negative components", "incorrect preceding-period selection"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "time.variable_periods",
+      "capability": "time_date",
+      "failure_mode_ids": ["time.calendar_rules"],
+      "desired_behavior": "Apply all documented variable-period and exceptional-period rules.",
+      "undesirable_behaviors": ["fixed typical period", "incomplete exceptional rule"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "parse.grammar_state",
+      "capability": "validation_parsing",
+      "failure_mode_ids": ["parse.naive_delimiter"],
+      "desired_behavior": "Respect quoting, escaping, and complete grammar state.",
+      "undesirable_behaviors": ["unconditional delimiter split", "discarded escape state"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "validation.complete_rejection",
+      "capability": "validation_parsing",
+      "failure_mode_ids": ["validation.accepts_malformed"],
+      "desired_behavior": "Reject every structurally or semantically invalid input using the documented API.",
+      "undesirable_behaviors": ["prefix acceptance", "ignored trailing input", "partial constraint checking"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "validation.atomic_rejection",
+      "capability": "validation_parsing",
+      "failure_mode_ids": ["validation.partial_mutation"],
+      "desired_behavior": "Leave all observable state unchanged after a rejected operation.",
+      "undesirable_behaviors": ["partial mutation", "stale output after rejection"],
+      "critical": true,
+      "weight": 2.0
+    },
+    {
+      "rubric_id": "state.sequence_invariants",
+      "capability": "state_concurrency",
+      "failure_mode_ids": ["state.invariant_sequence"],
+      "desired_behavior": "Preserve capacity, uniqueness, and consistency across operation sequences.",
+      "undesirable_behaviors": ["lost invariant after sequence", "duplicate or over-capacity state"],
+      "critical": true,
+      "weight": 2.0
+    },
+    {
+      "rubric_id": "state.deterministic_order",
+      "capability": "state_concurrency",
+      "failure_mode_ids": ["state.ordering_nondeterminism"],
+      "desired_behavior": "Return the documented order reproducibly across equivalent runs.",
+      "undesirable_behaviors": ["hash-order leakage", "schedule-dependent result"],
+      "critical": false,
+      "weight": 1.0
+    },
+    {
+      "rubric_id": "state.concurrent_atomicity",
+      "capability": "state_concurrency",
+      "failure_mode_ids": ["state.data_race"],
+      "desired_behavior": "Concurrent operations preserve state and remain sanitizer-clean.",
+      "undesirable_behaviors": ["lost update", "data race", "observable intermediate state"],
+      "critical": true,
+      "weight": 2.0
+    },
+    {
+      "rubric_id": "algorithm.degenerate_cases",
+      "capability": "algorithms_data_structures",
+      "failure_mode_ids": ["algorithm.edge_structure"],
+      "desired_behavior": "Handle empty, duplicate, cyclic, and degenerate structures as documented.",
+      "undesirable_behaviors": ["non-empty assumption", "duplicate collapse", "cycle nontermination"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "algorithm.resource_bound",
+      "capability": "algorithms_data_structures",
+      "failure_mode_ids": ["algorithm.complexity_collapse"],
+      "desired_behavior": "Complete deterministic upper-bound cases within the declared resource envelope.",
+      "undesirable_behaviors": ["quadratic collapse", "unbounded recursion or allocation"],
+      "critical": false,
+      "weight": 1.0
+    },
+    {
+      "rubric_id": "grid.rectangular_orientation",
+      "capability": "text_grid_logic",
+      "failure_mode_ids": ["grid.axis_assumption"],
+      "desired_behavior": "Preserve row and column semantics on asymmetric rectangular inputs.",
+      "undesirable_behaviors": ["row-column swap", "square-only assumption"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "grid.boundary_safety",
+      "capability": "text_grid_logic",
+      "failure_mode_ids": ["grid.boundary_access"],
+      "desired_behavior": "Process corners, edges, and one-cell dimensions exactly and safely.",
+      "undesirable_behaviors": ["missed edge", "double-counted corner", "out-of-bounds access"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "numeric.wide_exact_arithmetic",
+      "capability": "numerical",
+      "failure_mode_ids": ["numeric.overflow_signedness"],
+      "desired_behavior": "Use exact intermediate arithmetic across the full signed input domain.",
+      "undesirable_behaviors": ["intermediate overflow", "signedness wrap", "precision loss"],
+      "critical": true,
+      "weight": 1.5
+    },
+    {
+      "rubric_id": "numeric.domain_validation",
+      "capability": "numerical",
+      "failure_mode_ids": ["numeric.invalid_domain"],
+      "desired_behavior": "Reject invalid numerical symbols and parameters before arithmetic.",
+      "undesirable_behaviors": ["silent invalid digit", "partial result from invalid input"],
+      "critical": true,
+      "weight": 1.5
+    }
+  ]
+}
