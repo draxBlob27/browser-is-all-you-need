@@ -136,6 +136,22 @@ Reject arbitrary absolute paths, traversal, stale digests, and current working
 directory fallbacks. Never expose private tests, references, build files, or
 grader receipts in prompts or repair feedback.
 
+## Publish Across Repositories
+
+Before opening a cross-repository PR, verify that the proposed head and base
+repositories belong to the same GitHub fork network and that the authenticated
+account can read the head ref. If they do not share a network and direct push
+access to the base repository is unavailable, create a uniquely named fork of
+the target repository, push the head branch there, and open the PR from that
+target-network fork. Verify the remote branch SHA and check for an existing PR
+before creating one.
+
+In a linked worktree, a relative credential-store path under `.git/` may be
+invalid because `.git` is a file. Treat the resulting credential-lock warning
+as non-fatal only when `git push` exits successfully and the remote branch SHA
+is independently verified. Do not rewrite shared credential configuration as
+part of an Aider lane change.
+
 ## Definition of Done
 
 Complete a lane change only when:

@@ -160,3 +160,40 @@ Keep entries concise, reusable, and free of private task or grader material.
 - **Reusable rule:** After inserting a top-level helper, inspect both adjacent
   function boundaries before relying on tests to reveal control-flow damage.
 - **Scope:** Patch-based Python function insertion.
+
+### Use a target-network fork for cross-repository PRs
+
+- **Symptom:** GitHub rejected PR creation with blank head/base SHA, unreadable
+  head repository, and “no commits” even though the local branch was exactly
+  one commit ahead of the requested base.
+- **Root cause:** The initial head repository was a fork of `wootzapp`, while
+  the requested `tokenbender` repository is a standalone root. GitHub cannot
+  create a cross-repository PR between different fork networks, and the
+  authenticated account had read-only access to the target repository.
+- **Fix:** Create a uniquely named fork of the `tokenbender` repository, push
+  the head branch to that fork, and use it as the PR head.
+- **Verification:** GitHub created pull request 35 against
+  `client/glm47-h100-posttraining` with the expected head commit.
+- **Reusable rule:** Check fork-network identity and target push permission
+  before a cross-repository PR; use a uniquely named target-network fork when
+  direct push is unavailable.
+- **Scope:** GitHub cross-repository PRs where the authenticated user already
+  owns a same-named fork in another network.
+
+### Verify a successful push after linked-worktree credential warnings
+
+- **Symptom:** `git push` printed “unable to get credential storage lock: Not a
+  directory” but returned exit code zero and created the remote branch.
+- **Root cause:** Repository configuration points the credential store at a
+  relative `.git/github-credentials` path, while a linked worktree represents
+  `.git` as a file. A later GitHub CLI credential helper still authenticated
+  the push.
+- **Fix:** Preserve shared credential configuration, require a successful push
+  exit status, and verify the remote branch independently.
+- **Verification:** Both remote head branches resolve to the committed Aider RL
+  SHA and GitHub accepted the target-network head for pull request 35.
+- **Reusable rule:** Do not report a push failure solely from this warning;
+  require exit status and remote-ref evidence, and do not edit shared credential
+  helpers from a feature worktree.
+- **Scope:** Linked Git worktrees using chained store and GitHub CLI credential
+  helpers.
