@@ -1,1 +1,1 @@
-"""w8-biayn Aider benchmark SFT task utilities."""
+"""Repository metadata for Aider benchmark-aligned task authoring."""

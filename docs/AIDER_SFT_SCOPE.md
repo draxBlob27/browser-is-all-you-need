@@ -22,11 +22,6 @@ Current work is limited to these four local surfaces:
 - `docs/aider-synthetic/` — their clean-room curriculum and task-design
   documents.
 
-Agno may be used as a user-authorized, non-authoritative authoring and advisory
-layer for these surfaces. Its private candidate runs live beneath
-`.w8-biayn/data/agno-aider-runs/` and are inputs to the repository workflow,
-not generated task roots or SFT rows.
-
 The owner of a generated artifact is its repository generator or materializer.
 Change that owner and regenerate the appropriate output tree; never hand-edit
 a task beneath any generated-artifact root.
@@ -56,44 +51,16 @@ They are not SFT rows, a finalized dataset, a training authorization, or
 benchmark-uplift evidence. References, hidden tests, provenance, CMake files,
 and receipts remain private to each task root.
 
-## Agno-assisted local authoring
-
-The active Agno entrypoint is `w8-biayn data aider-agno ...`. It may generate
-new clean-room candidate specifications, starter/reference/test proposals, and
-advisory quality labels from public topic constraints. It must use
-`GEMINI_API_KEY` for Gemini, disable Agno telemetry, require explicit paid-call
-acknowledgement, persist request/response hashes and usage rather than secrets,
-and fail closed on ambiguous calls.
-
-Agno output has no admission effect. An agent must use the
-`aider-task-family-remediation` workflow to convert an accepted candidate into
-the owning curriculum and generator/materializer, regenerate the local family,
-and prove `local_family_verified`. Do not copy provider output directly into a
-generated root, expose existing private tests/references to the provider, or
-treat an Agno recommendation as mechanical correctness evidence.
-
 ## User-authorized local SFT projection
 
-The explicitly requested projection from
-`.w8-biayn/data/aider-tasks-reverify/` is the narrow exception to the default
-no-row authoring boundary. Its owner is
-`w8-biayn data aider-tasks-sft build|verify`. It must match the row
-shape of `.w8-biayn/data/aider-tasks-sft/sft/train.jsonl`, exclude every
-`.state` path, include each real discovered task once, qualify colliding leaf
-IDs deterministically, and write only beneath the sibling
-`.w8-biayn/data/aider-tasks-reverify-sft/` output. A later user-requested
-local merge of `.w8-biayn/data/aider-tasks-expansion-v1/` plus
-`.w8-biayn/data/aider-tasks-reverify/` is owned by
-`w8-biayn data aider-tasks-sft build-merged|verify-merged`; it writes only
-beneath `.w8-biayn/data/aider-tasks-merged-sft/`, records both source roots in
-the manifest, and excludes the invalidated historical
-`reverify:aider-dsa/circular-buffer` duplicate subtree by default. User prompts
-must reject private path markers. The sole current sanitation is the named,
-manifest-bound balanced-tree owner-spec appendix; no general task-contract
-rewriting is allowed.
+No projection command is currently shipped. A future user-authorized projection
+must be implemented as a narrow, owner-controlled tool and must exclude `.state`
+paths, private markers, duplicate task identities, and task-contract rewrites.
+It must write only beneath an ignored sibling output root and record its exact
+source roots in a manifest.
 
-This exception authorizes the local `sft/train.jsonl` projection and its
-manifest only. It does not establish dataset-release readiness, token/mask
+A separately scoped future projection may create only a local `sft/train.jsonl`
+and its manifest. It does not establish dataset-release readiness, token/mask
 evidence, split approval, training authorization, or benchmark uplift. Any of
 those stages requires a separate request and its applicable verification.
 
@@ -102,9 +69,8 @@ those stages requires a separate request and its applicable verification.
 Repository-wide Aider release profiles, fixed root quotas, source inventories,
 release-bound provider overlays, readiness bundles, release exports,
 specialized consumer adapters, and their `data aider-sft` CLI instructions are
-retired. The scope-bound `data aider-agno` authoring layer is active, but it is
-not a replacement release pipeline and must not be used to claim release
-status for the in-scope directories above.
+retired. No cloud-backed or provider-backed authoring command is active on this
+branch.
 
 If a future change needs dataset admission, its owner must first publish a new
 approved admission contract that explicitly names these local task roots and
@@ -125,12 +91,6 @@ specifications.
 - [ ] New task families used `aider-sft-task-creator` and preserve an
       append-only creation/audit/remediation cycle record.
 - [ ] The owning generator/materializer, not generated output, was changed.
-- [ ] Any Agno candidate stayed under `.w8-biayn/data/agno-aider-runs/` until
-      its accepted design was implemented through the owning curriculum and
-      generator.
-- [ ] Every provider call used explicit acknowledgement, bounded budgets,
-      telemetry disabled, a credential environment variable, and a proactive
-      error ledger without secret or private-artifact content.
 - [ ] The family was regenerated beneath the appropriate generated-artifact
       root; re-verification preserves its legacy family under
       `.w8-biayn/data/aider-tasks/`.

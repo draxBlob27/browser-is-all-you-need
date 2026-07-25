@@ -71,3 +71,13 @@ def test_aider_creator_owns_the_new_task_quality_loop() -> None:
     assert ".w8-biayn/data/aider-tasks-expansion-v1/" in creator
     assert "Aider benchmark weakness-driven expansion" in creator
     assert "may not overwrite, copy, or rename tasks" in scope
+
+
+def test_retired_release_and_cloud_lanes_have_no_live_entrypoint() -> None:
+    pyproject = _read("pyproject.toml")
+    scope = _read("docs/AIDER_SFT_SCOPE.md")
+
+    assert "w8-biayn.cli:app" not in pyproject
+    assert "google-auth" not in pyproject
+    assert "data aider-sft" in scope
+    assert "retired" in scope
