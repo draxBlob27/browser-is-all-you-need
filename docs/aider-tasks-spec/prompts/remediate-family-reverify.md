@@ -15,6 +15,26 @@ these inputs. Use the `aider-task-family-remediation` skill and follow
 gated remediation workflow; it is not permission to hand-edit generated task
 output or create a dataset release.
 
+## Request Batching
+
+Do not remediate or replace an entire large campaign in one request. For
+report-driven expansion or improvement work, each request may remediate,
+replace, or add only one coherent batch of 40-100 new or improved task roots.
+If the family/campaign has more than 100 affected roots, select the next
+coherent 40-100 root slice, give it a stable batch ID, and record every
+remaining root as deferred backlog. If fewer than 40 roots are available, or
+the user explicitly requested a smaller remediation, record why the batch is
+below the normal request size.
+
+The handoff must distinguish the current batch from the campaign:
+
+- included roots and deferred roots;
+- batch-local prompt-boundary, oracle, negative-fixture, duplicate, and
+  benchmark-contamination results;
+- current batch status;
+- explicit non-claims for full-family completion, SFT release, training
+  authorization, and benchmark uplift.
+
 1. Audit every legacy root for its primary core objective, prompt and file-role
    boundaries, reference mapping, oracle status, semantic duplicates, and
    benchmark contamination.

@@ -8,6 +8,8 @@ def _read(path: str) -> str:
 def test_local_scope_is_explicit_and_count_free() -> None:
     scope = _read("docs/AIDER_SFT_SCOPE.md")
     assert ".w8-biayn/data/aider-tasks/" in scope
+    assert ".w8-biayn/data/aider-tasks-reverify/" in scope
+    assert ".w8-biayn/data/aider-tasks-expansion-v1/" in scope
     assert "docs/aider-synthetic/" in scope
     assert "never hand-edit" in scope
     assert "local_family_verified" in scope
@@ -56,3 +58,16 @@ def test_task_remediation_skill_is_the_local_workflow_owner() -> None:
     assert "Never hand-edit that output." in skill
     assert "aider-task-family-remediation/SKILL.md" in framework
     assert "Historical Aider dataset-release" in framework
+
+
+def test_aider_creator_owns_the_new_task_quality_loop() -> None:
+    creator = _read(".agents/skills/aider-sft-task-creator/SKILL.md")
+    scope = _read("docs/AIDER_SFT_SCOPE.md")
+
+    assert "creator preflight -> independent audit" in creator
+    assert "$audit-sft-data-quality" in creator
+    assert "$aider-task-family-remediation" in creator
+    assert "only a fresh audit" in creator
+    assert ".w8-biayn/data/aider-tasks-expansion-v1/" in creator
+    assert "Aider benchmark weakness-driven expansion" in creator
+    assert "may not overwrite, copy, or rename tasks" in scope

@@ -11,6 +11,26 @@ Implement the family described by `SPEC_DOCUMENT_PATH`; use
 `TASK_FAMILY_ROOT` as its generated/local artifact location. Discover all other
 paths from the repository.
 
+## Request Batching
+
+Do not implement a complete 1,500-2,500 task campaign in one request. A single
+implementation request may materialize and verify only one coherent batch of
+40-100 new or improved task roots. If `SPEC_DOCUMENT_PATH` names more than 100
+roots, implement only the next explicitly selected 40-100 root batch or stop
+with `not_completed` and require a batch-specific specification. If the
+available scope has fewer than 40 roots, or the user explicitly requested a
+smaller ablation, record why the batch is below the normal request size.
+
+Each implemented batch must persist a batch ledger with:
+
+- `batch_id`, selected prompt path, source spec hash, and generated-tree hash;
+- included root IDs, deferred root/family counts, and prior-batch overlap
+  checks;
+- per-root improvement reason, disposition, and evidence status;
+- compile/test/sanitizer receipt status for every included root;
+- explicit non-claims for full campaign completion, SFT release, training
+  authorization, and benchmark uplift.
+
 This prompt applies to every topic and every directory depth beneath
 `.w8-biayn/data/aider-tasks/` and parallel
 `.w8-biayn/data/aider-tasks-reverify/` materializations. Priority 1 is the

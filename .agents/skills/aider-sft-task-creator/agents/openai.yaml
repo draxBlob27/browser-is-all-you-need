@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aider SFT Task Creator"
+  short_description: "Create, audit, and remediate Aider SFT tasks"
+  default_prompt: "Use $aider-sft-task-creator to create an Aider C++ SFT task family and iterate through audit and remediation until every required gate passes."

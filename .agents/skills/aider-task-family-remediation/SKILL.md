@@ -20,6 +20,9 @@ or claim benchmark uplift.
 7. `docs/aider-tasks-spec/verify-and-remedy.md`
 8. The relevant curriculum, family specification, generator, focused tests, and
    generated family root.
+9. `.agents/skills/audit-sft-data-quality/references/aider-fixed26-sft-improvement.md`
+   when the requested remediation or new batch is intended to improve Aider
+   Polyglot C++ fixed-26 or a derivative benchmark with the same skill shape
 
 Read `docs/PRIMARY_SFT_DATASET_GENERATION_PIPELINE.md` only when the user
 explicitly requests a dataset release. It is not a local-family completion gate.
@@ -50,6 +53,18 @@ observed limitation, benchmark-holdout boundary, and a clean-room learning
 objective. Do not copy an official Aider Polyglot task's wording, API, tests,
 reference, or semantic contract.
 
+When the weakness evidence is the Aider fixed-26 SFT improvement report, treat
+target mismatch as the default diagnosis until disproven: the next roots should
+add answer-blind analogs for failed fixed-26 skill families, first-try and
+repair-support variants for second-try-only families, Exercism-like API/file
+layout surfaces, and concise prompts. The default next batch target is about
+2,000 new verified rows/tasks inside a 1,500-2,500 band, with 1,000 new
+benchmark-shaped rows/tasks as the minimum useful run. Author or remediate this
+campaign through request batches of 40-100 new or improved roots, not a
+single-shot all-task request. Do not remediate by adding more single-turn
+header-only synthetic variants unless the user explicitly requested that
+ablation and the output is labeled as narrow.
+
 Use `docs/aider-synthetic/` for the curriculum source document. A topic is not
 a task until it has an observable, independently testable capability.
 
@@ -59,6 +74,14 @@ Split the topic into materially different subtopics. For each proposed root,
 define a domain-specific API, state model, invalid/duplicate/absent behavior,
 ordering/tie rules, examples, and a private property that distinguishes the
 claimed implementation from a trivial substitute.
+
+For fixed-26 improvement roots, record the analog family and at least one
+non-cosmetic shape dimension: `.h` plus `.cpp` separation, multi-file or
+project context, stateful lifecycle, exact exception behavior, operator/free
+function API, deterministic reset/retry semantics, exact string/matrix output,
+parallel aggregation, or search/constraint behavior. A plain header-only
+algorithm contract is insufficient unless it is deliberately retained as an
+anchor and capped in the batch inventory.
 
 State the number of roots in the curriculum document as a planning inventory,
 not a release quota. Do not retain roots that are renamed copies of one
@@ -154,7 +177,63 @@ For each root, generate:
 
 Regenerate beneath `.w8-biayn/data/aider-tasks/`, or beneath the parallel
 `.w8-biayn/data/aider-tasks-reverify/` root when preserving an existing family.
-Never hand-edit that output. Never hand-edit either generated output.
+Never hand-edit that output.
+New Aider benchmark expansion families may regenerate only beneath the sibling
+`.w8-biayn/data/aider-tasks-expansion-v1/` root. Never hand-edit the expansion
+output, move a legacy/reverify task into the expansion root, or use remediation
+to turn an existing contract into a renamed “new” task.
+
+### Pre-admission integrity gate
+
+Apply this gate when a root is first proposed, before it can be counted as a
+candidate, merged with any other corpus, or described as ready for a later SFT
+intake. Retrospective review is not a substitute for this gate.
+
+1. **Executable contract first.** Write the public contract before authoring a
+   reference: normal behavior, invalid and boundary behavior, invariants,
+   ordering, and resource limits. Give every material requirement at least one
+   deterministic visible or private assertion.
+2. **Adversarial discriminators.** For each root, construct at least one
+   plausible implementation that satisfies a generic reading of the task while
+   violating its specific contract. The designated tests must execute it and
+   reject it. A rotation, transpose, traversal, or container task must not
+   accept a generic implementation that misses domain-specific state,
+   orientation, ordering, or representation semantics.
+3. **Reference before admission.** Run the independent reference through the
+   exact strict C++17 build, normal tests, fresh ASan/UBSan tests, and the
+   family-designated locked image when available. A parseable task, host-only
+   build, or compiler-only pass is not candidate evidence.
+4. **Immutable task lineage.** Reserve each task ID before materialization and
+   bind its prompt, editable-file manifest, reference, test suite, generator,
+   compiler/image, and oracle results by digest. A changed prompt, target,
+   reference, tests, or generator invalidates the old receipt. A same-ID
+   revision is quarantined until independently verified; it may not coexist
+   with a trusted ancestor as a second active training target.
+5. **Fail-closed candidate state.** Record each root as `draft`, `verified`,
+   `review`, `replace-ancestor`, or `reject`. Only a digest-bound `verified`
+   root may proceed to a separately authorized dataset-admission workflow.
+   Missing evidence stays `review`; do not promote it because a family needs
+   more rows or because another row in the family passed.
+6. **Corpus gate before any merge.** Recompute unique IDs, prompt hashes,
+   answer/reference hashes, parent lineage, semantic/benchmark overlap, and
+   family/template duplication on the exact candidate manifests. Refuse the
+   merge on a conflict; retain raw, selected, rewritten, and rejected records
+   as separate immutable artifacts.
+7. **Aider fixed-26 shape gate.** For report-driven batches, recompute family
+   coverage, file-layout mix, single-turn versus repair-support inventory,
+   prompt-header duplication, boilerplate/copy-risk summaries, and the bucket
+   counts from `aider-fixed26-sft-improvement.md`. Missing failed-family analog
+   coverage, fewer than 1,000 new benchmark-shaped rows/tasks without an
+   explicit narrower experiment, 100% header-only output, duplicated
+   instruction headers, absent compile/test receipts, or a request batch above
+   100 roots keeps the batch at `review`, `repair-and-reverify`, or
+   `not_completed`.
+
+The resulting receipt must name the task ID, parent or replacement relation,
+all content and environment digests, contract/discriminator test outcomes,
+normal and sanitizer outcomes, and the terminal disposition. Confidence or a
+model/judge score may prioritize review, but cannot override a failed or
+missing deterministic gate.
 
 ### 4. Audit and write remedies
 
@@ -350,6 +429,8 @@ without documenting the invalidated evidence is not remediation.
   bundles in this workflow.
 - Never claim SFT admission, training authorization, or benchmark uplift.
 - Keep references, tests, metadata, CMake files, and receipts out of prompts.
+- For Aider fixed-26 improvement work, reject duplicated `# Instructions`
+  headers and record why any retained header-only root is needed.
 - Update the curriculum/specification and focused regression test in the same
   logical change as the owning generator.
 - Record the selected prompt path and any user-supplied inputs in the audit or
@@ -367,6 +448,12 @@ benchmark/family-screen result, prompt-boundary result, and the strongest
 truthful local status. Future dataset construction must use a separate,
 explicitly authorized intake process and may consume only
 `local_family_verified` roots.
+
+When remediation was requested by `$aider-sft-task-creator`, return the
+regenerated exact tree, remedy records, invalidated evidence, and current
+receipts to a fresh `$audit-sft-data-quality` pass. Do not mark the creator loop
+complete from remediation verification; only that later audit may close the
+findings.
 
 ## Validation
 

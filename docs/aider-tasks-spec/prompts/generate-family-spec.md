@@ -10,6 +10,25 @@ SPEC_DOCUMENT_PATH=<absolute-or-repo-relative Markdown output path>
 Create or replace only `SPEC_DOCUMENT_PATH`. Do not modify generated tasks,
 generators, tests, datasets, or release artifacts.
 
+## Request Batching
+
+Do not generate or specify an entire 1,500-2,500 task campaign in one request.
+Each prompt invocation/request may define only one coherent batch of 40-100 new
+or improved task roots. If the requested campaign needs more than 100 roots,
+select the next coherent 40-100 root slice, give it a stable batch ID, and
+record the remaining families/counts as deferred backlog. If the available
+scope has fewer than 40 roots, or the user explicitly requested a smaller
+ablation, record why the batch is below the normal request size.
+
+Every batch specification must include:
+
+- `batch_id`, source evidence, target skill families, and planned root count;
+- a list of included root IDs and deferred root/family counts;
+- the improvement reason for every included root;
+- duplicate/lineage checks against previous batches and existing roots;
+- a statement that the batch is local candidate material, not a complete SFT
+  dataset or benchmark-uplift claim.
+
 This prompt applies to every topic and every directory depth beneath
 `.w8-biayn/data/aider-tasks/` and parallel
 `.w8-biayn/data/aider-tasks-reverify/` materializations. The Priority-1 goal is
