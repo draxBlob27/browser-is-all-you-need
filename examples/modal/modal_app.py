@@ -56,6 +56,11 @@ source_ignore = [
     "artifacts",
     "rubrics",
     "wandb",
+    "polyglot-benchmark",
+    "modal_run_logs",
+    "aider-tasks-expansion-v1-sft-header-only-20260724",
+    "*.pdf",
+    "*.png",
 ]
 
 prepare_image = (
@@ -256,6 +261,7 @@ def _stage_env(
     lora_rank: str = "",
     lora_alpha: str = "",
     num_rollout: str = "",
+    wandb_project: str = "",
 ) -> dict[str, str]:
     env = {
         "MILES_RUN_ID": run_id,
@@ -270,7 +276,7 @@ def _stage_env(
         "GLM47_MODEL_REVISION": MODEL_REVISION,
         "GLM47_TRAINING_IMAGE": MILES_IMAGE,
         "GLM47_EXPERIMENT_ID": run_id,
-        "MILES_WANDB_PROJECT": "glm47-pie-cpp-posttraining",
+        "MILES_WANDB_PROJECT": wandb_project or "glm47-pie-cpp-posttraining",
         "MILES_WANDB_GROUP": run_id,
         "MILES_WANDB_RUN_ID": run_id,
         "MILES_WANDB_JOB_TYPE": stage,
@@ -390,6 +396,7 @@ def run_stage(
     lora_rank: str = "",
     lora_alpha: str = "",
     num_rollout: str = "",
+    wandb_project: str = "",
 ) -> str:
     """Run conversion, SFT, or GRPO on one Modal 8x H100 container."""
     if stage not in {"convert", "sft", "grpo", "aider_profile", "aider_grpo"}:
@@ -409,6 +416,7 @@ def run_stage(
         lora_rank=lora_rank,
         lora_alpha=lora_alpha,
         num_rollout=num_rollout,
+        wandb_project=wandb_project,
     )
     if stage in {"aider_profile", "aider_grpo"} and Path(RUNS_DIR, resolved_run_id).exists():
         raise FileExistsError(f"refusing to reuse Aider run ID: {resolved_run_id}")
@@ -469,6 +477,7 @@ def sft(
     num_epoch: str = "",
     save_interval: str = "",
     data_dir: str = "",
+    wandb_project: str = "",
 ) -> None:
     print(
         run_stage.remote(
@@ -477,6 +486,7 @@ def sft(
             sft_num_epoch=num_epoch,
             sft_save_interval=save_interval,
             sft_data_dir=data_dir,
+            wandb_project=wandb_project,
         )
     )
 
