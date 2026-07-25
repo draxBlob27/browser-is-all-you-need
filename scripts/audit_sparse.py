@@ -1,7 +1,6 @@
 import json
 import hashlib
 from pathlib import Path
-from datetime import datetime, timezone
 
 out_dir = Path(".w8-biayn/data/aider-tasks-expansion-v1/text-grid-logic/sparse-compressed-tabular")
 state_dir = out_dir / ".state"
@@ -99,10 +98,10 @@ cycle["status"] = "local_family_verified"
 cycle["audit_report_hash"] = sha(audit_path.read_bytes())
 last_cycle_path.write_text(json.dumps(cycle, indent=2))
 
-print(f"Handoff Report:")
+print("Handoff Report:")
 print(f"Final tree: {out_dir.as_posix()}")
 print(f"Cycle count: {len(cycle_files)}")
 print(f"Audit subject hash: {audit_subject_hash}")
-print(f"Closed finding IDs: ['AUDIT-03-F004', 'AUDIT-03-F005', 'AUDIT-03-F006', 'AUDIT-03-F007']")
+print("Closed finding IDs: ['AUDIT-03-F004', 'AUDIT-03-F005', 'AUDIT-03-F006', 'AUDIT-03-F007']")
 print(f"Exact passing root count: {audit_json['retained_count']}")
-print(f"Strongest truthful status: local_family_verified")
+print("Strongest truthful status: local_family_verified")
