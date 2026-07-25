@@ -21,10 +21,8 @@ def upstream_path(upstream: Upstream, repo_root: str | Path = ".") -> Path:
 def clone_or_update(name: str, repo_root: str | Path = ".", dry_run: bool = False) -> Path:
     """Clone or update one pinned upstream into `.cache/upstreams`.
 
-    The pin is a fixed commit: when the local clone already contains it, no
-    network is touched at all -- a transient GitHub outage on a cloud node once
-    killed an entire paid run at `git fetch` even though the pinned commit was
-    already present locally. When a fetch IS needed, it retries.
+    The pin is a fixed commit. When the local clone already contains it, no
+    network is touched. When a fetch is needed, it retries.
     """
 
     upstream = UPSTREAMS[name]

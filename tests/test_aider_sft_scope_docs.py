@@ -44,7 +44,7 @@ def test_balanced_tree_spec_has_unambiguous_local_completion_and_apis() -> None:
 
 def test_task_remediation_skill_is_the_local_workflow_owner() -> None:
     skill = _read(".agents/skills/aider-task-family-remediation/SKILL.md")
-    framework = _read(".agents/skills/w8-biayn-framework/SKILL.md")
+    guidance = _read("AGENTS.md")
 
     assert "name: aider-task-family-remediation" in skill
     assert "### 1. Find the weakness topic" in skill
@@ -56,8 +56,8 @@ def test_task_remediation_skill_is_the_local_workflow_owner() -> None:
     assert "### Toolchain and execution evidence" in skill
     assert "host-only result" in skill
     assert "Never hand-edit that output." in skill
-    assert "aider-task-family-remediation/SKILL.md" in framework
-    assert "Historical Aider dataset-release" in framework
+    assert "aider-task-family-remediation/SKILL.md" in guidance
+    assert ".agents/skills/w8-biayn-framework/SKILL.md" not in guidance
 
 
 def test_aider_creator_owns_the_new_task_quality_loop() -> None:
